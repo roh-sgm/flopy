@@ -63,6 +63,33 @@ def test_mfusgcln():
     assert cln is not None
 
 
+def test_mfusgcln_none_unit_number():
+    """CLN must tolerate None in unitnumber slots.
+
+    Regression: GMS/GV8 exports frequently declare CLN output units (e.g.
+    iclnhd=871) that are not in the NAM ext_unit_dict, in which case the load
+    path leaves unitnumber[idx+1] as None. The old __init__ crashed with
+    `TypeError: int() argument must be ... not 'NoneType'`.
+    """
+    ml = MfUsg()
+    node_prop = [[1, 1, 0, 10.0, -110.0, 1.57, 0, 0]]
+    cln_gwc = [[1, 1, 50, 50, 0, 0, 10.0, 1.0, 0]]
+    cln_circ = [[1, 0.5, 3.23e10]]
+    cln = MfUsgCln(
+        ml,
+        ncln=1,
+        iclnnds=-1,
+        nndcln=1,
+        nclngwc=1,
+        node_prop=node_prop,
+        cln_gwc=cln_gwc,
+        cln_circ=cln_circ,
+        unitnumber=[71, 0, None, 0, 0, 0, 0],
+    )
+    assert cln is not None
+    assert cln.iclnhd == 0
+
+
 @pytest.fixture
 def mfusg_transport_Ex1_1D_model_path(example_data_path: Path):
     return example_data_path / "mfusg_transport" / "Ex1_1D"

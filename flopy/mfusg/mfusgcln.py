@@ -222,7 +222,10 @@ class MfUsgCln(Package):
         self.printiaja = printiaja
 
         for idx, attr in enumerate(extension[1:]):
-            setattr(self, f"i{attr}", int(unitnumber[idx + 1]))
+            # unit may be None when a CLN-declared output unit is missing from the
+            # NAM file's ext_unit_dict (common with GMS/GV8 exports). Treat as 0.
+            unit = unitnumber[idx + 1]
+            setattr(self, f"i{attr}", int(unit) if unit is not None else 0)
             if getattr(self, f"i{attr}") > 0:
                 model.add_output_file(
                     getattr(self, f"i{attr}"),
