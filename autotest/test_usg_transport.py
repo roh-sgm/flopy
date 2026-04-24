@@ -735,3 +735,41 @@ def test_usg_load_Ex9_PFAS(function_tmpdir, mfusg_transport_Ex9_PFAS_model_path)
     success, buff = m.run_model()
     msg = "flopy failed on running PFAS_C1.nam"
     assert success, msg
+
+
+def test_usgt_rch_transport_sp_headers_roundtrip(
+    function_tmpdir, mfusg_transport_Ex9_PFAS_model_path
+):
+    """Verify MfUsgRch.write_file produces well-formed per-SP headers.
+
+    Regression for two write-path bugs:
+    - literal "{kper + 1}" string instead of f-string substitution
+    - unconditional emission of inirch (= -1 when NRCHOP != 2) next to inrech
+    """
+    fname = mfusg_transport_Ex9_PFAS_model_path / "C1/PFAS_C1.nam"
+    m = MfUsg.load(fname, verbose=False, model_ws=function_tmpdir, check=False)
+    m.write_input()
+
+    rch_text = (function_tmpdir / "PFAS_C1.rch").read_text()
+    nper = m.nper
+
+    # no unsubstituted f-string placeholder
+    assert "{kper" not in rch_text, (
+        "RCH write path emitted a literal '{kper + 1}' — missing f-string prefix"
+    )
+
+    # every SP number appears in its own comment
+    for kper in range(nper):
+        assert f"# Stress period {kper + 1}" in rch_text, (
+            f"SP {kper + 1} comment missing from RCH output"
+        )
+
+    # NRCHOP=3 SP header should not contain a spurious '-1' between INRECH and INCONC
+    assert m.rch.nrchop == 3
+    for line in rch_text.splitlines():
+        if "INCONC" in line:
+            # header line: only one integer (inrech) before the INCONC flag
+            pre = line.split("INCONC", 1)[0].split()
+            assert len(pre) == 1, (
+                f"NRCHOP=3 SP header has unexpected tokens before INCONC: {line!r}"
+            )
