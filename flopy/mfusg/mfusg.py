@@ -130,6 +130,7 @@ class MfUsg(Modflow):
             "oc": flopy.mfusg.MfUsgOc,
             "lak": flopy.mfusg.MfUsgLak,
             "evt": flopy.mfusg.MfUsgEvt,
+            "tib": flopy.mfusg.MfUsgTib,
         }
 
     def __repr__(self):
