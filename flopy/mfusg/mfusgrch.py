@@ -211,7 +211,10 @@ class MfUsgRch(ModflowRch):
             else:
                 inirch = -1
 
-            f_rch.write(f"{inrech:10d}{inirch:10d} ")
+            if self.nrchop == 2:
+                f_rch.write(f"{inrech:10d}{inirch:10d} ")
+            else:
+                f_rch.write(f"{inrech:10d} ")
 
             if self.iznrch is not None:
                 f_rch.write(" INRCHZONES 1")
@@ -219,7 +222,7 @@ class MfUsgRch(ModflowRch):
                 f_rch.write(" INSELEV 1")
             if self.rchconc is not None:
                 f_rch.write(" INCONC 1")
-            f_rch.write("# Stress period {kper + 1}\n")
+            f_rch.write(f"# Stress period {kper + 1}\n")
 
             if inrech >= 0:
                 f_rch.write(file_entry_rech)
