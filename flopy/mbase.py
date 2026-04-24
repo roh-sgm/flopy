@@ -1356,7 +1356,11 @@ class BaseModel(ModelInterface):
         for ext_file, output in zip(self.external_fnames, self.external_output):
             # this is a wicked mess
             if output:
-                new_ext_file = ext_file
+                # output files: write next to the new NAM as a bare basename.
+                # Preserving the absolute path from the old workspace caused
+                # overwrites of source-folder binaries (and made USG-T write
+                # 100s of MB to the original model dir) on change_model_ws.
+                new_ext_file = os.path.basename(ext_file)
             else:
                 fdir = os.path.dirname(ext_file)
                 if fdir == "":
