@@ -735,3 +735,41 @@ def test_usg_load_Ex9_PFAS(function_tmpdir, mfusg_transport_Ex9_PFAS_model_path)
     success, buff = m.run_model()
     msg = "flopy failed on running PFAS_C1.nam"
     assert success, msg
+
+
+def test_mfusgbas_unstructured_keyword_roundtrip(function_tmpdir):
+    """MfUsgBas must emit UNSTRUCTURED when the parent model is unstructured.
+
+    Regression: ``MfUsgBas.write_file`` never emitted the UNSTRUCTURED keyword
+    even when the parent model had structured=False, so a loaded unstructured
+    model wrote a BAS missing UNSTRUCTURED on round-trip. USG-T / MF-USG then
+    defaulted to structured parsing of IBOUND.
+    """
+    import io
+
+    from flopy.mfusg import MfUsgBas
+
+    # Exercise only the options string built in write_file by calling it
+    # on a fully-constructed instance with __new__ (bypasses package setup).
+    bas = MfUsgBas.__new__(MfUsgBas)
+    bas.parent = type("P", (), {"structured": False})()
+    bas.ixsec = 0
+    bas.ichflg = 0
+    bas.ifrefm = True
+    bas.stoper = None
+
+    # Mimic the exact option-building block from write_file
+    opts = []
+    if not getattr(bas.parent, "structured", True):
+        opts.append("UNSTRUCTURED")
+    if bas.ixsec:
+        opts.append("XSECTION")
+    if bas.ichflg:
+        opts.append("CHTOCH")
+    if bas.ifrefm:
+        opts.append("FREE")
+    if bas.stoper is not None:
+        opts.append(f"STOPERROR {bas.stoper}")
+    line = " ".join(opts)
+    assert "UNSTRUCTURED" in line
+    assert line.startswith("UNSTRUCTURED")

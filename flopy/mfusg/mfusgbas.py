@@ -254,6 +254,10 @@ class MfUsgBas(Package):
         f_bas.write(f"{self.heading}\n")
         # Second line: format specifier
         opts = []
+        # Emit UNSTRUCTURED when the parent model uses an unstructured grid so
+        # the written BAS file round-trips (MfUsgBas.load keys on this token).
+        if not getattr(self.parent, "structured", True):
+            opts.append("UNSTRUCTURED")
         if self.ixsec:
             opts.append("XSECTION")
         if self.ichflg:
