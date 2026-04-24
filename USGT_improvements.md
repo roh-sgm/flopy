@@ -48,12 +48,11 @@ text that `MfUsg.load(...).write_input()` produces for USG-T models.
 ## Validation
 
 Exercised end-to-end against an unstructured USG-T model with
-BCT + CLN + TIB transport (112 k nodes, 493 SPs). Running the flopy-rewritten
-model through the same USG-T binary as the reference produces a listing file
-that matches bit-for-bit on every budget column — flow and transport —
-(max|diff| = 0 on all SPs for all 20 flow + 16 mass components). Runtime is
-equivalent (11 min 21 s vs 11 min 16 s). Full writeup and plots in the
-[WD_R539_usgt](https://github.com/roh-sgm/WD_R539_usgt) companion repo.
+BCT + CLN + TIB transport (≈ 112 k nodes, 493 stress periods). Running the
+flopy-rewritten model through the same USG-T binary as the reference run
+produces a listing file that matches bit-for-bit on every budget column —
+flow and transport — (`max|diff| = 0` on all stress periods, across 20 flow
+and 16 mass components). Wall-clock runtime is equivalent to the reference.
 
 Tested binaries:
 - USG-T 2.7.0 (ARM) — round-trip sanity on a small reference model
