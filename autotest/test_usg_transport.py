@@ -800,3 +800,49 @@ def test_usgt_rch_transport_sp_headers_roundtrip(
             assert len(pre) == 1, (
                 f"NRCHOP=3 SP header has unexpected tokens before INCONC: {line!r}"
             )
+
+
+def test_mfusgtib_roundtrip(function_tmpdir):
+    """Round-trip a real TIB file via MfUsgTib.load + write_file.
+
+    Exercises per-SP block parsing. The test writes a synthetic minimal TIB
+    file with three SPs (inactive/activated/prescribed-head nodes) and asserts
+    body content is preserved.
+    """
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    tib_src = function_tmpdir / "in.tib"
+    tib_src.write_text(
+        "# my TIB\n"
+        " 2 1 0 0 0 0\n"
+        "INTERNAL 1 (FREE) 1 INACTIVE THEN ACTIVE\n"
+        " 101\n"
+        " 102\n"
+        " 201 AVHEAD\n"
+        " 1 0 0 0 0 0\n"
+        "INTERNAL 1 (FREE) 1 INACTIVE\n"
+        " 301\n"
+        " 0 0 1 0 0 0\n"
+        " 401\n"
+    )
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+    tib = MfUsgTib.load(str(tib_src), ml)
+    assert len(tib.blocks) == 3
+
+    tib.fn_path = str(function_tmpdir / "out.tib")
+    tib.write_file()
+
+    orig_body = [
+        line
+        for line in tib_src.read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    new_body = [
+        line
+        for line in Path(tib.fn_path).read_text().splitlines()
+        if not line.lstrip().startswith("#")
+    ]
+    assert orig_body == new_body, "TIB body not preserved through load/write"
