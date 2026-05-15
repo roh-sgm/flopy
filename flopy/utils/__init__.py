@@ -34,6 +34,7 @@ from .mflistfile import (
     Mf6ListBudget,
     MfListBudget,
     MfusgListBudget,
+    MfusgTransportListBudget,
     SwrListBudget,
     SwtListBudget,
 )

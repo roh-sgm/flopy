@@ -1,0 +1,240 @@
+"""
+mfusgchd module. Contains the MfUsgChd class.
+"""
+
+import numpy as np
+
+from ..modflow.mfchd import ModflowChd
+from ..pakbase import Package
+from ..utils import MfList
+from ..utils.recarray_utils import create_empty_recarray
+
+
+class MfUsgChd(ModflowChd):
+    """MODFLOW-USG Constant-Head Boundary Package (CHD) with transport support.
+
+    Supports unstructured grids (node-based) and AUX concentration variables.
+
+    Parameters
+    ----------
+    model : MfUsg
+        The model object to which this package will be added.
+    stress_period_data : dict, optional
+        Dictionary keyed by zero-based stress period index. Each value is a
+        recarray with fields matching ``dtype``. For unstructured grids the
+        required base fields are ``node``, ``shead``, and ``ehead``.
+    dtype : np.dtype, optional
+        Custom dtype. If None, defaults to the unstructured base dtype plus
+        any AUX fields declared in ``options``.
+    options : list of str, optional
+        Package options (e.g. ``["AUX C01"]``).
+    extension : str
+        Filename extension (default ``"chd"``).
+    unitnumber : int, optional
+        File unit number.
+    filenames : str or list of str, optional
+        Package filename(s).
+    add_package : bool
+        Add package to model on construction (default True).
+
+    Examples
+    --------
+    >>> import flopy
+    >>> m = flopy.mfusg.MfUsg()
+    >>> chd = flopy.mfusg.MfUsgChd.load("MDV.chd", m, nper=12)
+    """
+
+    def __init__(
+        self,
+        model,
+        stress_period_data=None,
+        dtype=None,
+        options=None,
+        extension="chd",
+        unitnumber=None,
+        filenames=None,
+        add_package=True,
+    ):
+        if unitnumber is None:
+            unitnumber = ModflowChd._defaultunit()
+        if options is None:
+            options = []
+
+        # Call Package base directly so we control when add_package fires.
+        # ModflowChd.__init__ unconditionally calls add_package, so we bypass it.
+        Package.__init__(
+            self,
+            model,
+            extension=extension,
+            name=self._ftype(),
+            unit_number=unitnumber,
+            filenames=self._prepare_filenames(filenames),
+        )
+        self._generate_heading()
+        self.url = "chd.html"
+        self.np = 0
+        self.options = options
+
+        if dtype is not None:
+            self.dtype = dtype
+        else:
+            self.dtype = self.get_default_dtype(structured=self.parent.structured)
+
+        self._update_aux_options()
+        self.stress_period_data = MfList(self, stress_period_data)
+
+        if add_package:
+            self.parent.add_package(self)
+
+    # ------------------------------------------------------------------
+    # Static helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def get_default_dtype(structured=True):
+        if structured:
+            return ModflowChd.get_default_dtype(structured=True)
+        return np.dtype([
+            ("node", int),
+            ("shead", np.float32),
+            ("ehead", np.float32),
+        ])
+
+    @staticmethod
+    def get_empty(ncells=0, aux_names=None, structured=True):
+        dtype = MfUsgChd.get_default_dtype(structured=structured)
+        if aux_names is not None:
+            dtype = Package.add_to_dtype(dtype, aux_names, np.float32)
+        return create_empty_recarray(ncells, dtype, default_value=-1.0e10)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _update_aux_options(self):
+        """Append AUX entries to options for dtype fields beyond the base fields."""
+        n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
+        for name in self.dtype.names[n_base:]:
+            token = f"AUX {name.upper()}"
+            if not any(name.lower() in o.lower() for o in self.options):
+                self.options.append(token)
+
+    # ------------------------------------------------------------------
+    # write_file
+    # ------------------------------------------------------------------
+
+    def write_file(self):
+        """Write the package file in MODFLOW-USG-T CHD format."""
+        nper = self.parent.nper
+        n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
+
+        with open(self.fn_path, "w") as f:
+            f.write(f"{self.heading}\n")
+
+            # Header: MXACTC [AUX ...]
+            line = f" {self.stress_period_data.mxact:9d}"
+            for opt in self.options:
+                line += f" {opt}"
+            f.write(line + "\n")
+
+            for kper in range(nper):
+                if kper in self.stress_period_data.data:
+                    kdata = self.stress_period_data[kper]
+                    f.write(f" {len(kdata)}    Stress Period {kper + 1}\n")
+                    for rec in kdata:
+                        row = (f" {int(rec['node'])}"
+                               f"   {float(rec['shead']):.6f}"
+                               f"  {float(rec['ehead']):.6f}")
+                        for name in self.dtype.names[n_base:]:
+                            row += f" {float(rec[name]):.6e}"
+                        f.write(row + "\n")
+                else:
+                    f.write(f" -1    Stress Period {kper + 1}\n")
+
+    # ------------------------------------------------------------------
+    # load
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def load(cls, f, model, nper=None, ext_unit_dict=None, check=True):
+        """Load a MODFLOW-USG-T CHD package from file.
+
+        Parameters
+        ----------
+        f : str or file-like
+            Path to the .chd file, or an open file handle.
+        model : MfUsg
+            Model to attach the package to.
+        nper : int, optional
+            Number of stress periods. Defaults to ``model.nper``.
+
+        Returns
+        -------
+        MfUsgChd
+        """
+        if model.verbose:
+            print("loading mfusg chd package file...")
+        if nper is None:
+            nper = model.nper
+
+        openfile = not hasattr(f, "read")
+        if openfile:
+            f = open(f, "r")
+
+        # Skip comment lines, find the header line
+        line = f.readline()
+        while line.startswith("#"):
+            line = f.readline()
+
+        # Parse header: MXACTC [AUX varname ...]
+        tokens = line.split()
+        options = []
+        aux_names = []
+        i = 1
+        while i < len(tokens):
+            if tokens[i].upper() == "AUX" and i + 1 < len(tokens):
+                aux_names.append(tokens[i + 1])
+                options.append(f"AUX {tokens[i + 1]}")
+                i += 2
+            else:
+                options.append(tokens[i])
+                i += 1
+
+        dtype = cls.get_default_dtype(structured=model.structured)
+        if aux_names:
+            dtype = Package.add_to_dtype(dtype, aux_names, np.float32)
+
+        spd = {}
+        current = None
+
+        for kper in range(nper):
+            line = f.readline()
+            if not line:
+                break
+            nact = int(line.split()[0])
+
+            if nact < 0:
+                # Reuse previous SP data
+                if current is not None:
+                    spd[kper] = current.copy()
+            else:
+                current = create_empty_recarray(nact, dtype, default_value=0.0)
+                for idx in range(nact):
+                    vals = f.readline().split()
+                    for j, name in enumerate(dtype.names):
+                        kind = dtype[name].kind
+                        current[idx][name] = (
+                            int(vals[j]) if kind in ("i", "u") else float(vals[j])
+                        )
+                spd[kper] = current
+
+        if openfile:
+            f.close()
+
+        return cls(
+            model,
+            stress_period_data=spd,
+            dtype=dtype,
+            options=options,
+            extension="chd",
+        )

@@ -456,14 +456,12 @@ class MfUsgBct(Package):
 
         """
         # Open file for writing
-        if f is None:
-            f_obj = open(self.fn_path, "w")
+        close_on_exit = f is None
+        f_obj = open(self.fn_path, "w") if f is None else f
 
-        # Item 1a: ITRNSP ipakcb MCOMP ICBNDFLG ITVD IADSORB ICT CINACT CICLOSE
-        # IDISP IXDISP DIFFNC IZOD IFOD IFMBC IHEAT IMCOMP IDISPCLN NSEQITR
+        # Item 1a: ITRNSP IPAKCB MCOMP ICBNDFLG ITVD IADSORB ICT CINACT CICLOSE
+        # IDISP IXDISP DIFFNC IZOD IFOD IFMBC IHEAT IMCOMP IDISPCLN NSEQITR IRCHCONC
         f_obj.write(f"{self.heading}\n")
-
-        print(self.parent.free_format_input)
 
         if self.parent.free_format_input:
             f_obj.write(
@@ -592,7 +590,8 @@ class MfUsgBct(Package):
                 f_obj.write(self.imconc[icomp].get_file_entry())
 
         # close the file
-        f_obj.close()
+        if close_on_exit:
+            f_obj.close()
 
     # Not implemented yet
     def check(
@@ -740,6 +739,7 @@ class MfUsgBct(Package):
         for i, (v, c) in enumerate(vars.items()):
             kwargs[v] = type_from_iterable(t, index=12 + i, _type=c, default_val=0)
             print(f"{v}={kwargs[v]}")
+
 
         # item 1a - options
         if "TIMEWEIGHT" in t:

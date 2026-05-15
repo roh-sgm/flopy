@@ -930,6 +930,88 @@ class MfusgListBudget(ListBudget):
         super().__init__(file_name, budgetkey=budgetkey, timeunit=timeunit, **kwargs)
 
 
+class MfusgTransportListBudget(ListBudget):
+    """
+    Reads transport species budget from a MODFLOW-USG-T listing file.
+
+    Handles both old USG-T format (transport blocks use "VOLUMETRIC BUDGET",
+    same keyword as flow) and new format (transport blocks use "MASS BUDGET").
+    Instantiate once per species for multi-species models.
+
+    Parameters
+    ----------
+    file_name : str
+        Path to the listing file.
+    species : int
+        One-based species index to read. Default is 1.
+    timeunit : str
+        Time unit for the recarray. Default is 'days'.
+
+    Examples
+    --------
+    >>> lst_s1 = MfusgTransportListBudget("model.lst", species=1)
+    >>> lst_s2 = MfusgTransportListBudget("model.lst", species=2)
+    >>> inc, cum = lst_s1.get_budget()
+    >>> df_inc, df_cum = lst_s2.get_dataframes(start_datetime="2000-01-01")
+    """
+
+    def __init__(self, file_name, species=1, timeunit="days", **kwargs):
+        self.target_species = species
+        kwargs.pop("budgetkey", None)
+        super().__init__(file_name, budgetkey=None, timeunit=timeunit, **kwargs)
+
+    def _get_index(self, maxentries):
+        idxs = []
+        current_species = None
+        in_transport = False
+
+        while True:
+            seekpoint = self.f.tell()
+            line = self.f.readline()
+            if line == "":
+                break
+
+            # New flow TS/SP begins — reset transport context
+            if "IN FLOW TIME STEP" in line:
+                in_transport = False
+                current_species = None
+            # Enter transport output section
+            elif "TRANSPORT SOLUTION COMPLETE FOR ALL SPECIES" in line:
+                in_transport = True
+            # Track current species from marker line
+            elif "TRANSPORT OUTPUT FOR COMPONENT SPECIES NUMBER" in line:
+                try:
+                    current_species = int(line.split()[-1])
+                except ValueError:
+                    pass
+            # Old USG-T format: transport reuses "VOLUMETRIC BUDGET" keyword
+            elif (
+                "VOLUMETRIC BUDGET FOR ENTIRE MODEL" in line
+                and in_transport
+                and current_species == self.target_species
+            ):
+                try:
+                    ts, sp = get_ts_sp(line)
+                    idxs.append([ts, sp, seekpoint])
+                except Exception:
+                    break
+            # New USG-T format: transport uses "MASS BUDGET" keyword
+            elif (
+                "MASS BUDGET FOR ENTIRE MODEL" in line
+                and current_species == self.target_species
+            ):
+                try:
+                    ts, sp = get_ts_sp(line)
+                    idxs.append([ts, sp, seekpoint])
+                except Exception:
+                    break
+
+            if maxentries and len(idxs) >= maxentries:
+                break
+
+        return idxs
+
+
 class SwrListBudget(ListBudget):
     def __init__(self, file_name, budgetkey=None, timeunit="days", **kwargs):
         budgetkey = budgetkey or "VOLUMETRIC SURFACE WATER BUDGET FOR ENTIRE MODEL"

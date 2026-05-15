@@ -130,6 +130,7 @@ class MfUsg(Modflow):
             "oc": flopy.mfusg.MfUsgOc,
             "lak": flopy.mfusg.MfUsgLak,
             "evt": flopy.mfusg.MfUsgEvt,
+            "ets": flopy.mfusg.MfUsgEts,
             "tib": flopy.mfusg.MfUsgTib,
         }
 
