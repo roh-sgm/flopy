@@ -1340,7 +1340,7 @@ class UnstructuredGrid(Grid):
             )
 
     @classmethod
-    def from_gridspec(cls, file_path: Union[str, PathLike]):
+    def from_gridspec(cls, file_path: Union[str, PathLike], split_vertices: bool = False):
         """
         Create an UnstructuredGrid from a grid specification file.
 
@@ -1348,6 +1348,13 @@ class UnstructuredGrid(Grid):
         ----------
         file_path : str or PathLike
             Path to the grid specification file
+        split_vertices : bool, optional
+            If True, assume the USG-T vertex convention where the first N/2
+            vertex entries for each cell are the top surface and the last N/2
+            are the bottom surface.  The mean of each half is used as the
+            representative top/bottom elevation.  This corrects the apparent
+            layer thickness for cells on tilted layers.  Default is False
+            (original behaviour: max/min of all vertex z-values).
 
         Returns
         -------
@@ -1408,8 +1415,19 @@ class UnstructuredGrid(Grid):
                 ycenters.append(yc)
                 layers.append(lay)
                 iverts.append(verts)
-                top.append(max(elevs))
-                bot.append(min(elevs))
+
+                if split_vertices and verts_declared % 2 == 0:
+                    # USG-T convention: first N/2 vertices = top surface,
+                    # last N/2 = bottom surface.  Taking the mean of each half
+                    # avoids inflated thickness on tilted cells (where mixing
+                    # the highest top corner with the lowest bottom corner on
+                    # opposite sides of the cell gives a spuriously large diff).
+                    n_half = verts_declared // 2
+                    top.append(sum(elevs[:n_half]) / n_half)
+                    bot.append(sum(elevs[n_half:]) / n_half)
+                else:
+                    top.append(max(elevs))
+                    bot.append(min(elevs))
 
             _, ncpl = np.unique(layers, return_counts=True)
 

@@ -55,6 +55,45 @@ density-coupled USG-T 2.7 model (BCT IDISP=2, DDF, 1382 stress periods):
 |---|---|
 | `flopy/mfusg/mfusgbct.py` | Removed a stray `print()` left from development. Fixed file-handle management in `write_file`: the file is now closed only when opened internally (`close_on_exit` flag), so callers that pass an open handle are not surprised. |
 
+### Fortran source audit, new implementations, and bug fixes (2026-05-20)
+
+All packages cross-referenced against the USG-Transport 2.7.0 Fortran source code
+(`USGT_V_2-7-0_Source_Code/`). See `USGT_roadmap.md` for the full coverage table.
+
+#### New: `MfUsgHfb` — HFB with TRANSIENT_HFB support
+
+| File | What it does |
+|---|---|
+| `flopy/mfusg/mfusghfb.py` | Full HFB6 (Hydraulic Flow Barrier) implementation for unstructured USG-T grids. Extends `ModflowHfb` with: (a) node-based `(node1, node2, hydchr)` unstructured format, (b) `TRANSIENT_HFB` keyword and per-SP `IHFBRD` flag + optional updated barrier data. Full `load` and `write_file`. |
+
+#### New: `MfUsgTvm` — TVM2 full semantic implementation
+
+`mfusgtvm.py` was rewritten from a verbatim text round-tripper into a complete
+semantic implementation verified against `tvmu2.f`:
+
+- Parameters: `itvmprint`, `tvmlogbasehk/vka/ss/sy`, `tvmddftr`, `tvmlogbasepor`
+- `stress_period_data`: `dict[int, dict[str, np.recarray]]` — boundary index 0..nper,
+  properties `hk/vka/ss/sy/ddftr/por`, nodes 0-based
+- Transport-aware: with BCT → 7 global + 6 SP fields; without BCT → 6 + 5 fields
+- nper+1 boundary blocks confirmed against `TVMU2AR` + `TVMU2RP` call structure
+- Fortran fixed-format `(I10,F10.0)` per record confirmed
+- 20 autotests in `autotest_local/test_mfusg_tvm.py` (all pass)
+
+#### LPF Richards fix
+
+| File | Fix |
+|---|---|
+| `flopy/mfusg/mfusglpf.py` | `Util2d.__eq__` returns `False` for any non-`Util2d` argument, so `if self.laytyp == 5:` was always `False`. This silently disabled Richards-equation array initialization (ALPHA/BETA/SR/BROOK) for any model with LAYTYP=5, even though the load path read them correctly. Fixed: replaced with `np.any(self.laytyp.array == 5)`. |
+
+#### Bugs found in Fortran source audit — all fixed
+
+| File | Bug | Severity | Fortran reference |
+|---|---|---|---|
+| `mfusgrch.py:396` | `t.index("INIZNRCH")` — `INIZNRCH` is an internal Fortran variable, not the file keyword. Raises `ValueError` on any model using RTS recharge zones. | **Critical** | `gwf2rch8u1.f` keyword is `INRCHZONES` |
+| `mfusgdpt.py:355,507` | DLIM written/loaded when only `idpf` is True. Fortran requires `IDPF≠0 AND IDISPIM≠0`. Models with `idpf=1, idispim=0` wrote an extra array, shifting all subsequent reads. | High | `gwt2dptu1.f` line 281: `IF(IDPF.NE.0.AND.IDISPIM.NE.0)THEN` |
+| `mfusgddf.py` | ISHARP (sharp-interface model flag) missing entirely from `__init__`, `write_file`, and `load`. ISHARP is the 6th numeric field after IMPHDD. Loading any file with ISHARP≠0 silently lost the flag; round-trip discarded it. | High | `density.f` line 64: `CALL URWORD(...,ISHARP,...)` |
+| `mfusgdpf.py:191` | `f_obj` unbound `NameError` when `write_file(f=<open handle>)` called directly. The `else: f_obj = f` branch was missing. | Low | — |
+
 ## Install
 
 ```bash

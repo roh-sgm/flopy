@@ -469,6 +469,9 @@ class BaseModel(ModelInterface):
         self.external_output = []
         self.package_units = []
         self._next_ext_unit = None
+        # Packages skipped by load_only: {unit: (filetype, basename)}
+        # Written verbatim to the NAM so the model can run without re-loading them.
+        self._skipped_nam_entries = {}
 
         # output files
         self.output_fnames = []

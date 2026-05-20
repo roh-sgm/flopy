@@ -335,16 +335,14 @@ class MfUsgLpf(ModflowLpf):
                 model, (njag,), np.float32, ksat, "ksat", locat=self.unit_number[0]
             )
 
-        if self.laytyp == 5:
-            self.richards = True
-            bas = model.get_package("BAS6")
-            if not hasattr(bas, "richards") or not bas.richards:
-                raise ValueError(
-                    "The MfUsgBas package must have richards=True"
-                    "when using laytyp=5 in the LPF package."
-                )
-        else:
-            self.richards = False
+        has_laytyp5 = np.any(self.laytyp.array == 5)
+        bas = model.get_package("BAS6")
+        has_bas_richards = bas is not None and getattr(bas, "richards", False)
+        if has_laytyp5 and not has_bas_richards:
+            raise ValueError(
+                "BAS6 must have richards=True when any layer uses LAYTYP=5."
+            )
+        self.richards = has_bas_richards
 
         self.bubblept = bubblept
         self.fullydry = fullydry

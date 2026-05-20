@@ -1,3 +1,4 @@
+import io
 import os
 from pathlib import Path
 
@@ -18,8 +19,11 @@ from flopy.mfusg import (
     MfUsgDisU,
     MfUsgDpf,
     MfUsgDpt,
+    MfUsgDrn,
     MfUsgEvt,
+    MfUsgGhb,
     MfUsgGnc,
+    MfUsgGsf,
     MfUsgLak,
     MfUsgLpf,
     MfUsgMdt,
@@ -27,6 +31,7 @@ from flopy.mfusg import (
     MfUsgPcb,
     MfUsgRch,
     MfUsgSms,
+    MfUsgTvm,
     MfUsgWel,
 )
 from flopy.modflow import (
@@ -881,3 +886,685 @@ def test_mfusgbas_unstructured_keyword_roundtrip(function_tmpdir):
     line = " ".join(opts)
     assert "UNSTRUCTURED" in line
     assert line.startswith("UNSTRUCTURED")
+
+
+# ============================================================
+# Tests for fork additions: MfUsgChd, MfUsgRiv, MfUsgEts,
+#                          MfusgTransportListBudget
+# ============================================================
+
+
+def test_mfusgchd_roundtrip(function_tmpdir):
+    """MfUsgChd load + write round-trip on a minimal unstructured CHD file.
+
+    Checks:
+    - SP with data loads correct node / shead / ehead values
+    - SP with -1 (reuse) copies previous SP's data
+    - Write emits the correct number of data rows per SP
+    """
+    from flopy.mfusg import MfUsgChd
+    from flopy.modflow import ModflowDis
+
+    chd_in = function_tmpdir / "test.chd"
+    chd_in.write_text(
+        "# MfUsgChd test\n"
+        "         3\n"
+        " 3    Stress Period 1\n"
+        " 101   15.000000  14.500000\n"
+        " 102   20.000000  19.500000\n"
+        " 103   25.000000  24.500000\n"
+        " -1    Stress Period 2\n"
+    )
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    chd = MfUsgChd.load(str(chd_in), ml, nper=2, ext_unit_dict={})
+
+    sp0 = chd.stress_period_data[0]
+    assert len(sp0) == 3
+    assert list(sp0["node"]) == [101, 102, 103]
+    assert np.isclose(sp0["shead"][0], 15.0, atol=0.01)
+    assert np.isclose(sp0["ehead"][2], 24.5, atol=0.01)
+
+    # Reuse SP copies previous data
+    sp1 = chd.stress_period_data[1]
+    assert len(sp1) == 3
+    assert list(sp1["node"]) == [101, 102, 103]
+
+    # Write and verify both SPs appear in output
+    chd_out = function_tmpdir / "out.chd"
+    chd.fn_path = str(chd_out)
+    chd.write_file()
+    text = chd_out.read_text()
+    assert "Stress Period 1" in text
+    assert "Stress Period 2" in text
+
+    # Re-load and verify data survives round-trip
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    chd2 = MfUsgChd.load(str(chd_out), ml2, nper=2, ext_unit_dict={})
+    sp0b = chd2.stress_period_data[0]
+    assert np.isclose(sp0b["shead"][0], 15.0, atol=0.01)
+    assert list(sp0b["node"]) == [101, 102, 103]
+
+
+def test_mfusgchd_aux_roundtrip(function_tmpdir):
+    """MfUsgChd with AUX concentration variable: load + write round-trip."""
+    from flopy.mfusg import MfUsgChd
+    from flopy.modflow import ModflowDis
+
+    chd_in = function_tmpdir / "aux.chd"
+    chd_in.write_text(
+        "# MfUsgChd aux test\n"
+        "         2 AUX C01\n"
+        " 2    Stress Period 1\n"
+        " 101   15.000000  14.500000  1.000000e-01\n"
+        " 102   20.000000  19.500000  2.000000e-01\n"
+        " -1    Stress Period 2\n"
+    )
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    chd = MfUsgChd.load(str(chd_in), ml, nper=2, ext_unit_dict={})
+
+    # Field name is preserved as-is from file ('C01', not lowercased)
+    assert "C01" in chd.dtype.names
+    sp0 = chd.stress_period_data[0]
+    assert np.isclose(sp0["C01"][0], 0.1, atol=1e-5)
+    assert np.isclose(sp0["C01"][1], 0.2, atol=1e-5)
+
+    # Write and verify AUX keyword appears in header
+    chd_out = function_tmpdir / "out_aux.chd"
+    chd.fn_path = str(chd_out)
+    chd.write_file()
+    lines = chd_out.read_text().splitlines()
+    header = next(l for l in lines if not l.startswith("#"))
+    assert "AUX" in header.upper()
+
+    # Values survive write → re-load
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    chd2 = MfUsgChd.load(str(chd_out), ml2, nper=2, ext_unit_dict={})
+    assert np.isclose(chd2.stress_period_data[0]["C01"][0], 0.1, atol=1e-4)
+
+
+def test_mfusgriv_roundtrip(function_tmpdir):
+    """MfUsgRiv load + write: IRDFLAG, node/stage/cond/rbot, reuse SP."""
+    from flopy.mfusg import MfUsgRiv
+    from flopy.modflow import ModflowDis
+
+    riv_in = function_tmpdir / "test.riv"
+    riv_in.write_text(
+        "# MfUsgRiv test\n"
+        " 2 50\n"
+        " 2 0    Stress Period 1\n"
+        " 101  15.000000  1.000000e-04  12.000000\n"
+        " 102  20.000000  2.000000e-04  17.000000\n"
+        " -1 0    Stress Period 2\n"
+    )
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+
+    assert riv.irdflag == 50
+    sp0 = riv.stress_period_data[0]
+    assert len(sp0) == 2
+    assert sp0["node"][0] == 101
+    assert np.isclose(sp0["stage"][0], 15.0, atol=0.01)
+    assert np.isclose(sp0["rbot"][1], 17.0, atol=0.01)
+
+    # Reuse SP copies previous data
+    sp1 = riv.stress_period_data[1]
+    assert len(sp1) == 2
+    assert sp1["node"][0] == 101
+
+    # Write and verify both SPs in output, then re-load
+    riv_out = function_tmpdir / "out.riv"
+    riv.fn_path = str(riv_out)
+    riv.write_file()
+    text = riv_out.read_text()
+    assert "Stress Period 1" in text
+    assert "Stress Period 2" in text
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    riv2 = MfUsgRiv.load(str(riv_out), ml2, nper=2, ext_unit_dict={})
+    assert np.isclose(riv2.stress_period_data[0]["stage"][0], 15.0, atol=0.01)
+
+
+def test_mfusgriv_irch_detection(function_tmpdir):
+    """MfUsgRiv auto-detects trailing irch column on load and preserves it on write."""
+    from flopy.mfusg import MfUsgRiv
+    from flopy.modflow import ModflowDis
+
+    riv_in = function_tmpdir / "irch.riv"
+    riv_in.write_text(
+        "# MfUsgRiv irch test\n"
+        " 2 50\n"
+        " 2 0    Stress Period 1\n"
+        " 101  15.000000  1.000000e-04  12.000000  5\n"
+        " 102  20.000000  2.000000e-04  17.000000  7\n"
+        " -1 0    Stress Period 2\n"
+    )
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+
+    assert "irch" in riv.dtype.names
+    sp0 = riv.stress_period_data[0]
+    assert sp0["irch"][0] == 5
+    assert sp0["irch"][1] == 7
+
+    # irch must NOT appear as AUX in options
+    assert not any("irch" in o.lower() for o in riv.options)
+
+    # Round-trip: irch values survive write → load
+    riv_out = function_tmpdir / "out_irch.riv"
+    riv.fn_path = str(riv_out)
+    riv.write_file()
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    riv2 = MfUsgRiv.load(str(riv_out), ml2, nper=2, ext_unit_dict={})
+    assert "irch" in riv2.dtype.names
+    assert riv2.stress_period_data[0]["irch"][0] == 5
+    assert riv2.stress_period_data[0]["irch"][1] == 7
+
+
+def test_mfusgriv_aux_and_irch(function_tmpdir):
+    """MfUsgRiv with both AUX concentration and trailing irch."""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "aux_irch.riv"
+    riv_in.write_text(
+        "# MfUsgRiv aux+irch test\n"
+        " 1 50 AUX C01\n"
+        " 1 0    Stress Period 1\n"
+        " 101  15.000000  1.000000e-04  12.000000  5.000000e-02  3\n"
+    )
+
+    ml = MfUsg(structured=False)
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=1, ext_unit_dict={})
+
+    # Field names are preserved as-is from file header (uppercase 'C01')
+    assert "C01" in riv.dtype.names
+    assert "irch" in riv.dtype.names
+    sp0 = riv.stress_period_data[0]
+    assert np.isclose(sp0["C01"][0], 0.05, atol=1e-5)
+    assert sp0["irch"][0] == 3
+
+
+def test_mfusgets_construction(function_tmpdir):
+    """MfUsgEts can be constructed and attached to a structured model."""
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    ets = MfUsgEts(ml, netsop=1, evtr=1.2e-4, netseg=1)
+
+    assert ml.ets is not None
+    assert ml.ets.netseg == 1
+    assert ml.ets.netsop == 1
+
+
+def test_mfusgets_write(function_tmpdir):
+    """MfUsgEts with netseg=2 writes a file with PXDP/PETM segment arrays."""
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    ets = MfUsgEts(ml, netsop=1, evtr=1.2e-4, netseg=2, pxdp=[0.5], petm=[0.5])
+    ml.write_input()
+
+    ets_file = Path(ets.fn_path)
+    assert ets_file.exists(), f"ETS file not written at {ets_file}"
+    content = ets_file.read_text()
+    # netseg=2 → PXDP and PETM segment arrays must be written
+    assert "pxdp" in content.lower() and "petm" in content.lower()
+
+
+def _make_usgt_lst_old_format():
+    """Return a minimal valid USG-T listing file (old format: VOLUMETRIC BUDGET
+    for both flow and transport) with 1 SP and 2 transport species."""
+    budget_block = (
+        " {bkey} AT END OF TIME STEP    1 STRESS PERIOD   1\n"
+        " IN:\n"
+        " WELLS =    {val:.6E}     WELLS =    {val:.6E}\n"
+        " -------------------------------------------------------\n"
+        " OUT:\n"
+        " WELLS =    {val:.6E}     WELLS =    {val:.6E}\n"
+        " PERCENT DISCREPANCY =    0.000000E+00"
+        "     PERCENT DISCREPANCY =    0.000000E+00\n"
+    )
+    time_block = (
+        " TIME SUMMARY AT END OF TIME STEP    1 IN STRESS PERIOD    1\n"
+        "                SECONDS     MINUTES      HOURS       DAYS        YEARS\n"
+        " -----------------------------------------------------------------------\n"
+        " TIME STEP          86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+        " STRESS PERIOD      86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+        " TOTAL              86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+    )
+
+    lines = []
+    # Flow section
+    lines.append(" IN FLOW TIME STEP    1   STRESS PERIOD    1\n")
+    lines.append("\n")
+    lines.append(budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=100.0))
+    lines.append("\n")
+    lines.append(time_block)
+    lines.append("\n")
+
+    # Transport section
+    lines.append(" TRANSPORT SOLUTION COMPLETE FOR ALL SPECIES\n")
+    for sp_num, val in [(1, 0.1), (2, 0.2)]:
+        lines.append(f" TRANSPORT OUTPUT FOR COMPONENT SPECIES NUMBER  {sp_num:4d}\n")
+        lines.append(budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=val))
+        lines.append("\n")
+        lines.append(time_block)
+        lines.append("\n")
+
+    return "".join(lines)
+
+
+def _make_usgt_lst_new_format():
+    """Return a minimal valid USG-T listing file (new format: MASS BUDGET for
+    transport) with 1 SP and 2 transport species."""
+    flow_budget_block = (
+        " VOLUMETRIC BUDGET FOR ENTIRE MODEL AT END OF TIME STEP    1 STRESS PERIOD   1\n"
+        " IN:\n"
+        " WELLS =    1.000000E+02     WELLS =    1.000000E+02\n"
+        " -------------------------------------------------------\n"
+        " OUT:\n"
+        " WELLS =    1.000000E+02     WELLS =    1.000000E+02\n"
+        " PERCENT DISCREPANCY =    0.000000E+00"
+        "     PERCENT DISCREPANCY =    0.000000E+00\n"
+    )
+    mass_budget_block = (
+        " MASS BUDGET FOR ENTIRE MODEL AT END OF TIME STEP    1 STRESS PERIOD   1\n"
+        " IN:\n"
+        " WELLS =    {val:.6E}     WELLS =    {val:.6E}\n"
+        " -------------------------------------------------------\n"
+        " OUT:\n"
+        " WELLS =    {val:.6E}     WELLS =    {val:.6E}\n"
+        " PERCENT DISCREPANCY =    0.000000E+00"
+        "     PERCENT DISCREPANCY =    0.000000E+00\n"
+    )
+    time_block = (
+        " TIME SUMMARY AT END OF TIME STEP    1 IN STRESS PERIOD    1\n"
+        "                SECONDS     MINUTES      HOURS       DAYS        YEARS\n"
+        " -----------------------------------------------------------------------\n"
+        " TIME STEP          86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+        " STRESS PERIOD      86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+        " TOTAL              86400.     1440.0     24.000     1.0000    2.7397E-03\n"
+    )
+
+    lines = []
+    lines.append(" IN FLOW TIME STEP    1   STRESS PERIOD    1\n")
+    lines.append("\n")
+    lines.append(flow_budget_block)
+    lines.append("\n")
+    lines.append(time_block)
+    lines.append("\n")
+    lines.append(" TRANSPORT SOLUTION COMPLETE FOR ALL SPECIES\n")
+    for sp_num, val in [(1, 0.1), (2, 0.2)]:
+        lines.append(f" TRANSPORT OUTPUT FOR COMPONENT SPECIES NUMBER  {sp_num:4d}\n")
+        lines.append(mass_budget_block.format(val=val))
+        lines.append("\n")
+        lines.append(time_block)
+        lines.append("\n")
+
+    return "".join(lines)
+
+
+def test_mfusg_transport_list_budget_old_format(function_tmpdir):
+    """MfusgTransportListBudget reads species budgets from old-format LST.
+
+    Old format: transport blocks use 'VOLUMETRIC BUDGET', same keyword as flow.
+    State machine must use in_transport + current_species to disambiguate.
+    """
+    from flopy.utils import MfusgTransportListBudget
+
+    lst_path = function_tmpdir / "old.lst"
+    lst_path.write_text(_make_usgt_lst_old_format())
+
+    # Species 1 — 1 SP → idx_map length must be 1
+    reader1 = MfusgTransportListBudget(str(lst_path), species=1)
+    assert len(reader1.idx_map) == 1, (
+        f"Expected 1 budget block for species 1, got {len(reader1.idx_map)}"
+    )
+    inc1, cum1 = reader1.get_budget()
+    assert len(inc1) == 1
+    assert np.isclose(inc1["WELLS_IN"][0], 0.1, atol=1e-4)
+
+    # Species 2 — independent reader
+    reader2 = MfusgTransportListBudget(str(lst_path), species=2)
+    assert len(reader2.idx_map) == 1
+    inc2, cum2 = reader2.get_budget()
+    assert np.isclose(inc2["WELLS_IN"][0], 0.2, atol=1e-4)
+
+
+def test_mfusg_transport_list_budget_new_format(function_tmpdir):
+    """MfusgTransportListBudget reads species budgets from new-format LST.
+
+    New format: transport blocks use 'MASS BUDGET' keyword.
+    The flow block still uses 'VOLUMETRIC BUDGET' and must not be indexed.
+    """
+    from flopy.utils import MfusgTransportListBudget
+
+    lst_path = function_tmpdir / "new.lst"
+    lst_path.write_text(_make_usgt_lst_new_format())
+
+    reader1 = MfusgTransportListBudget(str(lst_path), species=1)
+    assert len(reader1.idx_map) == 1
+    inc1, _ = reader1.get_budget()
+    assert np.isclose(inc1["WELLS_IN"][0], 0.1, atol=1e-4)
+
+    reader2 = MfusgTransportListBudget(str(lst_path), species=2)
+    assert len(reader2.idx_map) == 1
+    inc2, _ = reader2.get_budget()
+    assert np.isclose(inc2["WELLS_IN"][0], 0.2, atol=1e-4)
+
+
+def test_mfusg_transport_list_budget_species_isolation(function_tmpdir):
+    """Each species reader returns only its own blocks; neither reads the other's."""
+    from flopy.utils import MfusgTransportListBudget
+
+    # Use old format (more complex state machine)
+    lst_path = function_tmpdir / "isolation.lst"
+    lst_path.write_text(_make_usgt_lst_old_format())
+
+    reader1 = MfusgTransportListBudget(str(lst_path), species=1)
+    reader2 = MfusgTransportListBudget(str(lst_path), species=2)
+
+    inc1, _ = reader1.get_budget()
+    inc2, _ = reader2.get_budget()
+
+    # Values must differ — each reader got its own block
+    assert not np.isclose(inc1["WELLS_IN"][0], inc2["WELLS_IN"][0], atol=1e-4), (
+        "Species 1 and 2 readers returned identical values — isolation failed"
+    )
+    assert np.isclose(inc1["WELLS_IN"][0], 0.1, atol=1e-4)
+    assert np.isclose(inc2["WELLS_IN"][0], 0.2, atol=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# MfUsgGhb tests
+# ---------------------------------------------------------------------------
+
+def test_mfusgghb_roundtrip(function_tmpdir):
+    """Basic GHB: load → inspect → write → reload preserves data."""
+    from flopy.modflow import ModflowDis
+
+    ghb_in = function_tmpdir / "test.ghb"
+    ghb_in.write_text(
+        "# MfUsgGhb test\n"
+        "         2 0\n"
+        " 2 0    Stress Period 1\n"
+        " 101   5.000000  1.000000e+02\n"
+        " 102   4.500000  5.000000e+01\n"
+        " -1 0    Stress Period 2\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    ghb = MfUsgGhb.load(str(ghb_in), ml, nper=2, ext_unit_dict={})
+
+    sp0 = ghb.stress_period_data[0]
+    assert len(sp0) == 2
+    assert list(sp0["node"]) == [101, 102]
+    assert np.isclose(sp0["bhead"][0], 5.0, atol=0.01)
+    assert np.isclose(sp0["cond"][1], 50.0, atol=0.1)
+
+    # Reuse SP should copy SP0 data
+    sp1 = ghb.stress_period_data[1]
+    assert len(sp1) == 2
+
+    ghb_out = function_tmpdir / "out.ghb"
+    ghb.fn_path = str(ghb_out)
+    ghb.write_file()
+    text = ghb_out.read_text()
+    assert "Stress Period 1" in text
+    assert "Stress Period 2" in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    ghb2 = MfUsgGhb.load(str(ghb_out), ml2, nper=2, ext_unit_dict={})
+    assert np.isclose(ghb2.stress_period_data[0]["bhead"][0], 5.0, atol=0.01)
+
+
+def test_mfusgghb_aux_roundtrip(function_tmpdir):
+    """GHB with one AUX concentration field round-trips correctly."""
+    from flopy.modflow import ModflowDis
+
+    ghb_in = function_tmpdir / "aux.ghb"
+    ghb_in.write_text(
+        "# MfUsgGhb aux test\n"
+        " 1 0 AUX C01\n"
+        " 1 0    Stress Period 1\n"
+        " 101   6.000000  2.000000e+02  1.500000e-01\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    ghb = MfUsgGhb.load(str(ghb_in), ml, nper=1, ext_unit_dict={})
+
+    sp0 = ghb.stress_period_data[0]
+    assert "C01" in ghb.dtype.names
+    assert np.isclose(sp0["C01"][0], 0.15, atol=1e-5)
+
+    ghb_out = function_tmpdir / "aux_out.ghb"
+    ghb.fn_path = str(ghb_out)
+    ghb.write_file()
+    content = ghb_out.read_text()
+    assert "AUX C01" in content
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    ghb2 = MfUsgGhb.load(str(ghb_out), ml2, nper=1, ext_unit_dict={})
+    assert np.isclose(ghb2.stress_period_data[0]["C01"][0], 0.15, atol=1e-5)
+
+
+# ---------------------------------------------------------------------------
+# MfUsgDrn tests
+# ---------------------------------------------------------------------------
+
+def test_mfusgdrn_roundtrip(function_tmpdir):
+    """Basic DRN: load → inspect → write → reload preserves data."""
+    from flopy.modflow import ModflowDis
+
+    drn_in = function_tmpdir / "test.drn"
+    drn_in.write_text(
+        "# MfUsgDrn test\n"
+        "         3 0\n"
+        " 3 0    Stress Period 1\n"
+        " 101   2.500000  1.000000e+01\n"
+        " 102   3.000000  2.000000e+01\n"
+        " 103   1.800000  5.000000e+00\n"
+        " -1 0    Stress Period 2\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    drn = MfUsgDrn.load(str(drn_in), ml, nper=2, ext_unit_dict={})
+
+    sp0 = drn.stress_period_data[0]
+    assert len(sp0) == 3
+    assert list(sp0["node"]) == [101, 102, 103]
+    assert np.isclose(sp0["elev"][0], 2.5, atol=0.01)
+    assert np.isclose(sp0["cond"][2], 5.0, atol=0.1)
+
+    drn_out = function_tmpdir / "out.drn"
+    drn.fn_path = str(drn_out)
+    drn.write_file()
+    text = drn_out.read_text()
+    assert "Stress Period 1" in text
+    assert "Stress Period 2" in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    drn2 = MfUsgDrn.load(str(drn_out), ml2, nper=2, ext_unit_dict={})
+    assert np.isclose(drn2.stress_period_data[0]["elev"][0], 2.5, atol=0.01)
+
+
+def test_mfusgdrn_aux_roundtrip(function_tmpdir):
+    """DRN with AUX concentration field round-trips correctly."""
+    from flopy.modflow import ModflowDis
+
+    drn_in = function_tmpdir / "aux.drn"
+    drn_in.write_text(
+        "# MfUsgDrn aux test\n"
+        " 1 0 AUX C01\n"
+        " 1 0    Stress Period 1\n"
+        " 201   1.200000  3.000000e+01  2.500000e-02\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    drn = MfUsgDrn.load(str(drn_in), ml, nper=1, ext_unit_dict={})
+
+    assert "C01" in drn.dtype.names
+    assert np.isclose(drn.stress_period_data[0]["C01"][0], 0.025, atol=1e-6)
+
+    drn_out = function_tmpdir / "aux_out.drn"
+    drn.fn_path = str(drn_out)
+    drn.write_file()
+    assert "AUX C01" in drn_out.read_text()
+
+
+# ---------------------------------------------------------------------------
+# MfUsgTvm tests
+# ---------------------------------------------------------------------------
+
+def test_mfusgtvm_roundtrip(function_tmpdir):
+    """TVM text round-trip: load → write → reload preserves all content."""
+    from flopy.modflow import ModflowDis
+
+    tvm_content = (
+        "# MODFLOW-USG Time-Variant Materials (TVM) Package\n"
+        "  1  -1  -1  0  0  -1  0\n"
+        "  0  0  0  0  0  0    Stress Period 1\n"
+        "  0  0  0  0  0  0    Stress Period 2\n"
+        "  0  0  0  0  0  0    Stress Period 3\n"
+    )
+    tvm_in = function_tmpdir / "test.tvm"
+    tvm_in.write_text(tvm_content)
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+    tvm = MfUsgTvm.load(str(tvm_in), ml, nper=3, ext_unit_dict={})
+
+    assert len(tvm.blocks) == 3
+    assert "1  -1  -1" in tvm.global_header
+
+    tvm_out = function_tmpdir / "out.tvm"
+    tvm.fn_path = str(tvm_out)
+    tvm.write_file()
+    written = tvm_out.read_text()
+    assert "Stress Period 1" in written
+    assert "Stress Period 2" in written
+    assert "Stress Period 3" in written
+    assert "1  -1  -1" in written
+
+
+def test_mfusgtvm_missing_sp_gets_zeros(function_tmpdir):
+    """TVM SP blocks missing from the file are written as all-zero headers."""
+    from flopy.modflow import ModflowDis
+
+    # File only has 2 SPs but model has 3
+    tvm_in = function_tmpdir / "short.tvm"
+    tvm_in.write_text(
+        "# TVM\n"
+        "  0  0  0  0  0  0  0\n"
+        "  0  0  0  0  0  0    Stress Period 1\n"
+        "  0  0  0  0  0  0    Stress Period 2\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+    tvm = MfUsgTvm.load(str(tvm_in), ml, nper=3, ext_unit_dict={})
+    tvm_out = function_tmpdir / "out.tvm"
+    tvm.fn_path = str(tvm_out)
+    tvm.write_file()
+    written = tvm_out.read_text()
+    # SP 3 must be emitted with zeros even though it wasn't in the source
+    assert "Stress Period 3" in written
+
+
+# ---------------------------------------------------------------------------
+# MfUsgGsf tests
+# ---------------------------------------------------------------------------
+
+# Minimal valid GSF: 1-layer, 1 triangular cell, 3 vertices.
+# Format follows UnstructuredGrid.from_gridspec():
+#   UNSTRUCTURED
+#   NNODES [...]
+#   NVERTS
+#   X Y Z   (for each vertex)
+#   NODENO XC YC ZC LAY NVERTS V1 V2 ...  (for each node, 1-based vertex indices)
+_MINIMAL_GSF_LINES = [
+    "UNSTRUCTURED\n",
+    "1 1 1 1\n",       # nnodes=1 (only first token used)
+    "3\n",             # 3 vertices
+    "0.0 0.0 10.0\n",  # vertex 1
+    "1.0 0.0 10.0\n",  # vertex 2
+    "0.5 1.0 10.0\n",  # vertex 3
+    "1 0.5 0.333 5.0 1 3 1 2 3\n",  # node 1: xc=0.5, yc=0.333, lay=1, 3 verts (1-based)
+]
+
+
+def test_mfusggsf_load_stores_lines(function_tmpdir):
+    """MfUsgGsf.load() stores all file lines verbatim."""
+    from flopy.modflow import ModflowDis
+
+    gsf_in = function_tmpdir / "test.gsf"
+    gsf_in.write_text("".join(_MINIMAL_GSF_LINES))
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(gsf_in), ml, ext_unit_dict={})
+
+    assert len(gsf.lines) == len(_MINIMAL_GSF_LINES)
+    assert "UNSTRUCTURED" in gsf.lines[0].upper()
+
+
+def test_mfusggsf_text_roundtrip(function_tmpdir):
+    """write_file() reproduces the exact content that was loaded."""
+    from flopy.modflow import ModflowDis
+
+    gsf_in = function_tmpdir / "in.gsf"
+    original_text = "".join(_MINIMAL_GSF_LINES)
+    gsf_in.write_text(original_text)
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(gsf_in), ml, ext_unit_dict={})
+
+    gsf_out = function_tmpdir / "out.gsf"
+    gsf.fn_path = str(gsf_out)
+    gsf.write_file()
+
+    # Every line of the original must appear in the written file
+    written_lines = gsf_out.read_text().splitlines()
+    for ln in original_text.splitlines():
+        assert ln in written_lines, f"Line missing from written GSF: {ln!r}"
+
+
+def test_mfusggsf_to_grid(function_tmpdir):
+    """to_grid() returns an UnstructuredGrid parsed from the synthetic GSF."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    gsf_in = function_tmpdir / "grid.gsf"
+    gsf_in.write_text("".join(_MINIMAL_GSF_LINES))
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(gsf_in), ml, ext_unit_dict={})
+
+    # Point fn_path to the input file so to_grid() reads it without needing write_file first
+    gsf.fn_path = str(gsf_in)
+
+    grid = gsf.to_grid()
+    assert isinstance(grid, UnstructuredGrid)
+    assert len(grid.xcellcenters) == 1          # 1 node
+    assert np.isclose(grid.xcellcenters[0], 0.5, atol=1e-6)
+    assert np.isclose(grid.ycellcenters[0], 0.333, atol=1e-3)

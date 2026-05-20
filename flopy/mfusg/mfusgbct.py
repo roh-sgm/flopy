@@ -241,7 +241,6 @@ class MfUsgBct(Package):
 
         structured = self.parent.structured
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
-        shape_3d = (nlay, nrow, ncol)
 
         # Options
         opts = []
@@ -318,131 +317,140 @@ class MfUsgBct(Package):
             self.htcondw = kwargs["htcondw"]
             self.rhow = kwargs["rhow"]
             self.htcapw = kwargs["htcapw"]
-            self.htcaps = Util3d(
-                model, shape_3d, np.float32, kwargs["htcaps"], name="htcaps"
-            )
-            self.htconds = Util3d(
-                model, shape_3d, np.float32, kwargs["htconds"], name="htconds"
-            )
-            self.heat = Util3d(model, shape_3d, np.float32, kwargs["heat"], name="heat")
+            self.htcaps = self._build_prop_arrays(model, nlay, np.float32, kwargs["htcaps"], "htcaps")
+            self.htconds = self._build_prop_arrays(model, nlay, np.float32, kwargs["htconds"], "htconds")
+            self.heat = self._build_prop_arrays(model, nlay, np.float32, kwargs["heat"], "heat")
 
         if self.icbndflg == 0:
-            self.icbund = Util3d(model, shape_3d, np.int32, icbund, name="icbund")
+            self.icbund = self._build_prop_arrays(model, nlay, np.int32, icbund, "icbund")
 
-        self.prsity = Util3d(model, shape_3d, np.float32, prsity, name="prsity")
+        self.prsity = self._build_prop_arrays(model, nlay, np.float32, prsity, "prsity")
 
         if self.iadsorb or self.iheat:
-            self.bulkd = Util3d(model, shape_3d, np.float32, bulkd, name="bulkd")
+            self.bulkd = self._build_prop_arrays(model, nlay, np.float32, bulkd, "bulkd")
 
         if not structured and self.idisp:
             njag = self.parent.get_package("DISU").njag
             self.anglex = Util2d(model, (njag,), np.float32, anglex, name="anglex")
 
         if self.idisp == 1:
-            self.dl = Util3d(model, shape_3d, np.float32, dl, name="dl")
-            self.dt = Util3d(model, shape_3d, np.float32, dt, name="dt")
+            self.dl = self._build_prop_arrays(model, nlay, np.float32, dl, "dl")
+            self.dt = self._build_prop_arrays(model, nlay, np.float32, dt, "dt")
 
         if self.idisp == 2:
-            self.dlx = Util3d(model, shape_3d, np.float32, dlx, name="dlx")
-            self.dly = Util3d(model, shape_3d, np.float32, dly, name="dly")
-            self.dlz = Util3d(model, shape_3d, np.float32, dlz, name="dlz")
-            self.dtxy = Util3d(model, shape_3d, np.float32, dtxy, name="dtxy")
-            self.dtyz = Util3d(model, shape_3d, np.float32, dtyz, name="dtyz")
-            self.dtxz = Util3d(model, shape_3d, np.float32, dtxz, name="dtxz")
+            self.dlx = self._build_prop_arrays(model, nlay, np.float32, dlx, "dlx")
+            self.dly = self._build_prop_arrays(model, nlay, np.float32, dly, "dly")
+            self.dlz = self._build_prop_arrays(model, nlay, np.float32, dlz, "dlz")
+            self.dtxy = self._build_prop_arrays(model, nlay, np.float32, dtxy, "dtxy")
+            self.dtyz = self._build_prop_arrays(model, nlay, np.float32, dtyz, "dtyz")
+            self.dtxz = self._build_prop_arrays(model, nlay, np.float32, dtxz, "dtxz")
 
         if self.iadsorb:
             adsorb = kwargs["adsorb"]
-            self.adsorb = self.mcomp_Util3d(
-                model, shape_3d, np.float32, adsorb, "adsorb", mcomp
+            self.adsorb = self.mcomp_arrays(
+                model, nlay, np.float32, adsorb, "adsorb", mcomp
             )
 
         if self.iadsorb == 2 or self.iadsorb == 3:
             flich = kwargs["flich"]
-            self.flich = self.mcomp_Util3d(
-                model, shape_3d, np.float32, flich, "flich", mcomp
+            self.flich = self.mcomp_arrays(
+                model, nlay, np.float32, flich, "flich", mcomp
             )
 
         if self.izod in {1, 3, 4}:
             zodrw = kwargs["zodrw"]
-            self.zodrw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, zodrw, "zodrw", mcomp
+            self.zodrw = self.mcomp_arrays(
+                model, nlay, np.float32, zodrw, "zodrw", mcomp
             )
 
         if self.iadsorb and self.izod in {2, 3, 4}:
             zodrs = kwargs["zodrs"]
-            self.zodrs = self.mcomp_Util3d(
-                model, shape_3d, np.float32, zodrs, "zodrs", mcomp
+            self.zodrs = self.mcomp_arrays(
+                model, nlay, np.float32, zodrs, "zodrs", mcomp
             )
 
         if self.aw_adsorb and self.izod == 4:
             zodraw = kwargs["zodraw"]
-            self.zodraw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, zodraw, "zodraw", mcomp
+            self.zodraw = self.mcomp_arrays(
+                model, nlay, np.float32, zodraw, "zodraw", mcomp
             )
 
         if self.ifod in {1, 3, 4}:
             fodrw = kwargs["fodrw"]
-            self.fodrw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, fodrw, "fodrw", mcomp
+            self.fodrw = self.mcomp_arrays(
+                model, nlay, np.float32, fodrw, "fodrw", mcomp
             )
 
         if self.iadsorb and self.ifod in {2, 3, 4}:
             fodrs = kwargs["fodrs"]
-            self.fodrs = self.mcomp_Util3d(
-                model, shape_3d, np.float32, fodrs, "fodrs", mcomp
+            self.fodrs = self.mcomp_arrays(
+                model, nlay, np.float32, fodrs, "fodrs", mcomp
             )
 
         if self.aw_adsorb and self.ifod == 4:
             fodraw = kwargs["fodraw"]
-            self.fodraw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, fodraw, "fodraw", mcomp
+            self.fodraw = self.mcomp_arrays(
+                model, nlay, np.float32, fodraw, "fodraw", mcomp
             )
 
         if self.aw_adsorb and self.iarea_fn == 1:
-            self.awamax = Util3d(
-                model, shape_3d, np.float32, kwargs["awamax"], name="awamax"
-            )
+            self.awamax = self._build_prop_arrays(model, nlay, np.float32, kwargs["awamax"], "awamax")
 
         if self.aw_adsorb and self.iarea_fn == 2:
-            self.grain_dia = Util3d(
-                model, shape_3d, np.float32, kwargs["grain_dia"], name="grain_dia"
-            )
+            self.grain_dia = self._build_prop_arrays(model, nlay, np.float32, kwargs["grain_dia"], "grain_dia")
 
         if self.aw_adsorb and self.iarea_fn in {1, 2, 3}:
             alangaw = kwargs["alangaw"]
-            self.alangaw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, alangaw, "alangaw", mcomp
+            self.alangaw = self.mcomp_arrays(
+                model, nlay, np.float32, alangaw, "alangaw", mcomp
             )
             blangaw = kwargs["blangaw"]
-            self.blangaw = self.mcomp_Util3d(
-                model, shape_3d, np.float32, blangaw, "blangaw", mcomp
+            self.blangaw = self.mcomp_arrays(
+                model, nlay, np.float32, blangaw, "blangaw", mcomp
             )
 
-        self.conc = self.mcomp_Util3d(model, shape_3d, np.float32, conc, "conc", mcomp)
+        self.conc = self.mcomp_arrays(model, nlay, np.float32, conc, "conc", mcomp)
 
         if self.imcomp > 0:
             imconc = kwargs["imconc"]
-            self.imconc = self.mcomp_Util3d(
-                model, shape_3d, np.float32, imconc, "imconc", mcomp
+            self.imconc = self.mcomp_arrays(
+                model, nlay, np.float32, imconc, "imconc", mcomp
             )
 
         if add_package:
             self.parent.add_package(self)
 
     @staticmethod
-    def mcomp_Util3d(model, shape, dtype, value, name, mcomp):
+    def _build_prop_arrays(model, nlay, dtype, value, name):
+        """Return a list of Util2d (one per layer) for structured or DISU grids."""
+        if isinstance(value, list):
+            return value  # already per-layer from _load_prop_arrays
+        out = []
+        for layer in range(nlay):
+            shape = get_util2d_shape_for_layer(model, layer=layer)
+            out.append(Util2d(model, shape, dtype, value, f"{name}"))
+        return out
+
+    @staticmethod
+    def mcomp_arrays(model, nlay, dtype, value, name, mcomp):
+        """Return list[mcomp] of list[nlay]-of-Util2d for per-component node arrays."""
         if isinstance(value, (int, float)):
             value = [value] * mcomp
-        mcomp3D = [0] * mcomp
+        result = [0] * mcomp
         for icomp in range(mcomp):
-            mcomp3D[icomp] = Util3d(
-                model,
-                shape,
-                dtype,
-                value[icomp],
-                f"{name} of comp {icomp + 1}",
+            result[icomp] = MfUsgBct._build_prop_arrays(
+                model, nlay, dtype, value[icomp], f"{name} comp {icomp + 1}"
             )
-        return mcomp3D
+        return result
+
+    @staticmethod
+    def _write_array(f_obj, arr):
+        """Write a list-of-Util2d (per layer) or a single Util3d/Util2d."""
+        if isinstance(arr, list):
+            for u2d in arr:
+                f_obj.write(u2d.get_file_entry())
+        else:
+            f_obj.write(arr.get_file_entry())
 
     def write_file(self, f=None):
         """
@@ -486,11 +494,11 @@ class MfUsgBct(Package):
 
         f_obj.write(self.options + "\n")
 
-        # Item 1b.
+        # Item 1b: mbegwunf mbegwunt mbeclnunf mbeclnunt (unit_number indices 2-5)
         if self.ifmbc:
             f_obj.write(
-                f" {self.unit_number[1]:9d} {self.unit_number[2]:9d}"
-                f" {self.unit_number[3]:9d} {self.unit_number[4]:9d}\n"
+                f" {self.unit_number[2]:9d} {self.unit_number[3]:9d}"
+                f" {self.unit_number[4]:9d} {self.unit_number[5]:9d}\n"
             )
 
         # Item 1c: IHEAT == 1
@@ -511,14 +519,14 @@ class MfUsgBct(Package):
 
         # Item 2: ICBUND
         if self.icbndflg == 0:
-            f_obj.write(self.icbund.get_file_entry())
+            self._write_array(f_obj, self.icbund)
 
         # Item 3: PRSITY
-        f_obj.write(self.prsity.get_file_entry())
+        self._write_array(f_obj, self.prsity)
 
         # Item 4: BULKD
         if self.iadsorb or self.iheat:
-            f_obj.write(self.bulkd.get_file_entry())
+            self._write_array(f_obj, self.bulkd)
 
         # Item 5: ANGLEX
         structured = self.parent.structured
@@ -527,26 +535,26 @@ class MfUsgBct(Package):
 
         # Item 6 & 7: DL & DT
         if self.idisp == 1:
-            f_obj.write(self.dl.get_file_entry())
-            f_obj.write(self.dt.get_file_entry())
+            self._write_array(f_obj, self.dl)
+            self._write_array(f_obj, self.dt)
 
         # Item 8 - 13: DLX, DLY, DLZ, DTXY, DTYZ, DTXZ
         if self.idisp == 2:
-            f_obj.write(self.dlx.get_file_entry())
-            f_obj.write(self.dly.get_file_entry())
-            f_obj.write(self.dlz.get_file_entry())
-            f_obj.write(self.dtxy.get_file_entry())
-            f_obj.write(self.dtyz.get_file_entry())
-            f_obj.write(self.dtxz.get_file_entry())
+            self._write_array(f_obj, self.dlx)
+            self._write_array(f_obj, self.dly)
+            self._write_array(f_obj, self.dlz)
+            self._write_array(f_obj, self.dtxy)
+            self._write_array(f_obj, self.dtyz)
+            self._write_array(f_obj, self.dtxz)
 
         if self.iheat == 1:
-            f_obj.write(self.htcaps.get_file_entry())
-            f_obj.write(self.htconds.get_file_entry())
+            self._write_array(f_obj, self.htcaps)
+            self._write_array(f_obj, self.htconds)
 
         if self.aw_adsorb and self.iarea_fn == 1:
-            f_obj.write(self.awamax.get_file_entry())
+            self._write_array(f_obj, self.awamax)
         if self.aw_adsorb and self.iarea_fn == 2:
-            f_obj.write(self.grain_dia.get_file_entry())
+            self._write_array(f_obj, self.grain_dia)
         for icomp in range(self.mcomp):
             if self.chaindecay:
                 f_obj.write(f"{self.nparent[icomp]:9d}\n")
@@ -558,36 +566,36 @@ class MfUsgBct(Package):
 
             # Item A6-A7: ALANGAW, BLANGAW
             if self.aw_adsorb and self.iarea_fn in {1, 2, 3}:
-                f_obj.write(self.alangaw[icomp].get_file_entry())
-                f_obj.write(self.blangaw[icomp].get_file_entry())
+                self._write_array(f_obj, self.alangaw[icomp])
+                self._write_array(f_obj, self.blangaw[icomp])
 
             # Item 14 - 19: ADSORB, FLICH, ZODRW, ZODRS, ZODRAW, FODRW, FODRS, FODRAW
             if self.iadsorb:
-                f_obj.write(self.adsorb[icomp].get_file_entry())
+                self._write_array(f_obj, self.adsorb[icomp])
             if self.iadsorb == 2 or self.iadsorb == 3:
-                f_obj.write(self.flich[icomp].get_file_entry())
+                self._write_array(f_obj, self.flich[icomp])
             if self.izod == 1 or self.izod == 3 or self.izod == 4:
-                f_obj.write(self.zodrw[icomp].get_file_entry())
+                self._write_array(f_obj, self.zodrw[icomp])
             if self.iadsorb and (self.izod == 2 or self.izod == 3 or self.izod == 4):
-                f_obj.write(self.zodrs[icomp].get_file_entry())
+                self._write_array(f_obj, self.zodrs[icomp])
             if self.aw_adsorb and self.izod == 4:
-                f_obj.write(self.zodraw[icomp].get_file_entry())
+                self._write_array(f_obj, self.zodraw[icomp])
             if self.ifod == 1 or self.ifod == 3 or self.ifod == 4:
-                f_obj.write(self.fodrw[icomp].get_file_entry())
+                self._write_array(f_obj, self.fodrw[icomp])
             if self.iadsorb and (self.ifod == 2 or self.ifod == 3 or self.ifod == 4):
-                f_obj.write(self.fodrs[icomp].get_file_entry())
+                self._write_array(f_obj, self.fodrs[icomp])
             if self.aw_adsorb and self.ifod == 4:
-                f_obj.write(self.fodraw[icomp].get_file_entry())
+                self._write_array(f_obj, self.fodraw[icomp])
 
             # Item 20: CONC
-            f_obj.write(self.conc[icomp].get_file_entry())
+            self._write_array(f_obj, self.conc[icomp])
 
         if self.iheat == 1:
-            f_obj.write(self.heat.get_file_entry())
+            self._write_array(f_obj, self.heat)
 
         if self.imcomp > 0:
             for icomp in range(self.imcomp):
-                f_obj.write(self.imconc[icomp].get_file_entry())
+                self._write_array(f_obj, self.imconc[icomp])
 
         # close the file
         if close_on_exit:
@@ -722,9 +730,9 @@ class MfUsgBct(Package):
 
         for i, (v, c) in enumerate(vars.items()):
             kwargs[v] = c(t[i].strip())
-            print(f"{v}={kwargs[v]}")
 
-        ibctcb = kwargs["ibctcb"]
+        ibctcb = kwargs.pop("ibctcb")   # extract raw, rename to match constructor
+        kwargs["ipakcb"] = ibctcb
 
         vars = {
             "izod": int,
@@ -738,8 +746,6 @@ class MfUsgBct(Package):
 
         for i, (v, c) in enumerate(vars.items()):
             kwargs[v] = type_from_iterable(t, index=12 + i, _type=c, default_val=0)
-            print(f"{v}={kwargs[v]}")
-
 
         # item 1a - options
         if "TIMEWEIGHT" in t:
@@ -750,8 +756,6 @@ class MfUsgBct(Package):
         kwargs["only_satadsorb"] = "ONLY_SATADSORB" in t
         kwargs["spatialreact"] = "SPATIALREACT" in t
         kwargs["solubility"] = "SOLUBILITY" in t
-        kwargs["chaindecay"] = "CHAINDECAY" in t
-        kwargs["chaindecay"] = "CHAINDECAY" in t
 
         if "A-W_ADSORB" in t:
             idx = t.index("A-W_ADSORB")

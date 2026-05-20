@@ -221,8 +221,8 @@ class MfUsgRch(ModflowRch):
             if self.selev is not None:
                 f_rch.write(" INSELEV 1")
             if self.rchconc is not None:
-                f_rch.write(" INCONC 1")
-            f_rch.write(f"# Stress period {kper + 1}\n")
+                f_rch.write(" INCONC")
+            f_rch.write(f" # Stress period {kper + 1}\n")
 
             if inrech >= 0:
                 f_rch.write(file_entry_rech)
@@ -335,7 +335,8 @@ class MfUsgRch(ModflowRch):
                 print(f"   loading IRCHCONC[{mcomp}] ...")
             irchconc = read1d(f, irchconc)
 
-        print(f"irchconc: {irchconc}")
+        if model.verbose:
+            print(f"   irchconc: {irchconc}")
 
         # dataset 3 and 4 - parameters data
         pak_parms = None
@@ -392,7 +393,7 @@ class MfUsgRch(ModflowRch):
                 inselev[iper] = int(t[idx + 1])
 
             if "INRCHZONES" in t:
-                idx = t.index("INIZNRCH")
+                idx = t.index("INRCHZONES")
                 iniznrch[iper] = int(t[idx + 1])
 
             if "INCONC" in t:

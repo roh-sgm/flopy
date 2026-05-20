@@ -113,3 +113,9 @@ flopy/mf6/data/toml/
 
 # uv lockfile
 uv.lock
+
+# Local validation scratch — never commit
+_scratch/
+bin/
+mfsim.*
+test.gsf

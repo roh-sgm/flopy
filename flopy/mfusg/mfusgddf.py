@@ -68,6 +68,7 @@ class MfUsgDdf(Package):
         cstd=35.0,
         ithickav=1,
         imphdd=0,
+        isharp=0,
         nonlinear=False,
         density_table=None,
         extension="ddf",
@@ -99,6 +100,7 @@ class MfUsgDdf(Package):
         self.cstd = cstd
         self.ithickav = ithickav
         self.imphdd = imphdd
+        self.isharp = int(isharp)
         self.nonlinear = nonlinear
         self.density_table = list(density_table) if density_table else []
 
@@ -116,20 +118,17 @@ class MfUsgDdf(Package):
         """
         f = open(self.fn_path, "w")
         f.write(f"{self.heading}\n")
+        header = (
+            f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
+            f" {self.ithickav:9d} {self.imphdd:9d} {self.isharp:9d}"
+        )
         if self.nonlinear:
             nrows = len(self.density_table)
-            f.write(
-                f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
-                f" {self.ithickav:9d} {self.imphdd:9d}"
-                f" NONLINEAR {nrows}\n"
-            )
+            f.write(header + f" NONLINEAR {nrows}\n")
             for conc_i, rho_i in self.density_table:
                 f.write(f" {conc_i:g} {rho_i:g}\n")
         else:
-            f.write(
-                f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
-                f" {self.ithickav:9d} {self.imphdd:9d}\n"
-            )
+            f.write(header + "\n")
         f.close()
 
     @classmethod
@@ -198,6 +197,7 @@ class MfUsgDdf(Package):
         # ll now starts at what was originally index 3
         ithickav = type_from_iterable(ll, index=0, _type=int, default_val=0)
         imphdd = type_from_iterable(ll, index=1, _type=int, default_val=0)
+        isharp = type_from_iterable(ll, index=2, _type=int, default_val=0)
 
         nonlinear = False
         density_table = []
@@ -233,6 +233,7 @@ class MfUsgDdf(Package):
             cstd=cstd,
             ithickav=ithickav,
             imphdd=imphdd,
+            isharp=isharp,
             nonlinear=nonlinear,
             density_table=density_table,
             unitnumber=unitnumber,

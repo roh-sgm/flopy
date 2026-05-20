@@ -60,10 +60,11 @@ class NamData:
 
     """
 
-    def __init__(self, pkgtype, name, handle, packages):
+    def __init__(self, pkgtype, name, handle, packages, replace=False):
         self.filehandle = handle
         self.filename = name
         self.filetype = pkgtype
+        self.replace = replace  # True when REPLACE keyword was in the NAM line
         self.package = None
         if self.filetype.lower() in packages:
             self.package = packages[self.filetype.lower()]
@@ -147,6 +148,7 @@ def parsenamefile(namfilename, packages, verbose=True):
             raise ValueError(e)
         ftype, key, fpath = items[0:3]
         ftype = ftype.upper()
+        replace = "REPLACE" in (t.upper() for t in items[3:])
 
         # remove quotes in file path
         if '"' in fpath:
@@ -201,7 +203,7 @@ def parsenamefile(namfilename, packages, verbose=True):
                 key = packages[ftype_lower]._reservedunit()
             else:
                 key = ftype
-        ext_unit_dict[key] = NamData(ftype, str(fname), filehandle, packages)
+        ext_unit_dict[key] = NamData(ftype, str(fname), filehandle, packages, replace=replace)
     return ext_unit_dict
 
 

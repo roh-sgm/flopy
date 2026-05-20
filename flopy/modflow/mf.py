@@ -462,7 +462,13 @@ class Modflow(BaseModel):
         )
         f_nam.write(str(self.get_name_file_entries()))
 
-        # write the external files
+        # Packages skipped by load_only: write their NAM entries verbatim so
+        # the executable can still find them (e.g. SMS, OC copied verbatim).
+        for unit, (filetype, fname) in self._skipped_nam_entries.items():
+            f_nam.write(f"{filetype:14s} {unit:5d}  {fname}\n")
+
+        # write the external files — use basename so paths are always relative
+        # to model_ws regardless of where the model was originally loaded from.
         for u, f, b, o in zip(
             self.external_units,
             self.external_fnames,
@@ -471,24 +477,22 @@ class Modflow(BaseModel):
         ):
             if u == 0:
                 continue
-            replace_text = ""
-            if o:
-                replace_text = " REPLACE"
+            fname = os.path.basename(f)
+            replace_text = " REPLACE" if o else ""
             if b:
-                line = f"DATA(BINARY)   {u:5d}  {f}{replace_text}\n"
-
-                f_nam.write(line)
+                f_nam.write(f"DATA(BINARY)   {u:5d}  {fname}{replace_text}\n")
             else:
-                f_nam.write(f"DATA           {u:5d}  {f}\n")
+                f_nam.write(f"DATA           {u:5d}  {fname}\n")
 
-        # write the output files
+        # write the output files — always relative paths, no REPLACE (USG-T ignores it)
         for u, f, b in zip(self.output_units, self.output_fnames, self.output_binflag):
             if u == 0:
                 continue
+            fname = os.path.basename(f)
             if b:
-                f_nam.write(f"DATA(BINARY)   {u:5d}  {f} REPLACE\n")
+                f_nam.write(f"DATA(BINARY)   {u:5d}  {fname}\n")
             else:
-                f_nam.write(f"DATA           {u:5d}  {f}\n")
+                f_nam.write(f"DATA           {u:5d}  {fname}\n")
 
         # close the name file
         f_nam.close()

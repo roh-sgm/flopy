@@ -351,8 +351,8 @@ class MfUsgDpt(Package):
         if self.iadsorbim:
             f_obj.write(self.bulkdim.get_file_entry())
 
-        # Item 5: DLIM
-        if self.parent.idpf:
+        # Item 5: DLIM — Fortran: IF(IDPF.NE.0.AND.IDISPIM.NE.0)
+        if self.parent.idpf and self.idispim:
             f_obj.write(self.dlim.get_file_entry())
 
         # Item 6: DDTR
@@ -503,8 +503,8 @@ class MfUsgDpt(Package):
                 f_obj, model, nlay, np.float32, "bulkdim", ext_unit_dict
             )
 
-        # item 5
-        if model.idpf:
+        # item 5 — Fortran: IF(IDPF.NE.0.AND.IDISPIM.NE.0)
+        if model.idpf and kwargs.get("idispim", 0):
             kwargs["dlim"] = cls._load_prop_arrays(
                 f_obj, model, nlay, np.float32, "dlim", ext_unit_dict
             )

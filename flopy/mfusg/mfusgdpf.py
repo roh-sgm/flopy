@@ -190,6 +190,8 @@ class MfUsgDpf(Package):
         # Open file for writing
         if f is None:
             f_obj = open(self.fn_path, "w")
+        else:
+            f_obj = f
 
         #        f_obj.write(f"{self.heading}\n")
 
