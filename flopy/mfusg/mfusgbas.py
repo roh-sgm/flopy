@@ -112,6 +112,7 @@ class MfUsgBas(Package):
         double_io=False,
         ihm=0,
         sy_all=False,
+        ishowp=False,
         hnoflo=-999.99,
         extension="bas",
         unitnumber=None,
@@ -165,6 +166,7 @@ class MfUsgBas(Package):
         self.double_io = double_io
         self.ihm = ihm
         self.sy_all = sy_all
+        self.ishowp = ishowp
         self.stoper = stoper
         model.free_format_input = ifrefm
         self.hnoflo = hnoflo
@@ -254,8 +256,8 @@ class MfUsgBas(Package):
         f_bas.write(f"{self.heading}\n")
         # Second line: format specifier
         opts = []
-        # Emit UNSTRUCTURED when the parent model uses an unstructured grid so
-        # the written BAS file round-trips (MfUsgBas.load keys on this token).
+        if self.iprintfv:
+            opts.append("PRINTFV")
         if self.converge:
             opts.append("CONVERGE")
         if not getattr(self.parent, "structured", True):
@@ -266,6 +268,20 @@ class MfUsgBas(Package):
             opts.append("CHTOCH")
         if self.ifrefm:
             opts.append("FREE")
+        if self.iprinttime:
+            opts.append("PRINTTIME")
+        if self.ishowp:
+            opts.append("SHOWPROGRESS")
+        if self.richards:
+            opts.append("RICHARDS")
+        if self.double_prec:
+            opts.append("DPIN")
+        if self.double_out:
+            opts.append("DPOUT")
+        if self.double_io:
+            opts.append("DPIO")
+        if self.sy_all:
+            opts.append("SY-ALL")
         if self.stoper is not None:
             opts.append(f"STOPERROR {self.stoper}")
         self.options = " ".join(opts)
@@ -418,7 +434,15 @@ class MfUsgBas(Package):
             ichflg=ichflg,
             stoper=stoper,
             hnoflo=hnoflo,
+            iprintfv=iprintfv,
+            iprinttime=iprinttime,
+            ishowp=ishowp,
             converge=converge,
+            richards=richards,
+            double_prec=double_prec,
+            double_out=double_out,
+            double_io=double_io,
+            sy_all=sy_all,
             unitnumber=unitnumber,
             filenames=filenames,
         )

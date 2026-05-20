@@ -101,18 +101,19 @@ class MfUsg(Modflow):
             "pval": flopy.modflow.ModflowPval,
             "bas6": flopy.mfusg.MfUsgBas,
             "dis": flopy.mfusg.MfUsgDis,
-            "hfb6": flopy.modflow.ModflowHfb,
+            "hfb6": flopy.mfusg.MfUsgHfb,
             "fhb": flopy.modflow.ModflowFhb,
-            "drn": flopy.modflow.ModflowDrn,
+            "drn": flopy.mfusg.MfUsgDrn,
             "drt": flopy.modflow.ModflowDrt,
-            "ghb": flopy.modflow.ModflowGhb,
-            "riv": flopy.modflow.ModflowRiv,
+            "ghb": flopy.mfusg.MfUsgGhb,
+            "gsf": flopy.mfusg.MfUsgGsf,
+            "riv": flopy.mfusg.MfUsgRiv,
             "str": flopy.modflow.ModflowStr,
             "sfr": flopy.modflow.ModflowSfr2,
             "gage": flopy.modflow.ModflowGage,
             "sub": flopy.modflow.ModflowSub,
             "swt": flopy.modflow.ModflowSwt,
-            "chd": flopy.modflow.ModflowChd,
+            "chd": flopy.mfusg.MfUsgChd,
             "disu": flopy.mfusg.MfUsgDisU,
             "sms": flopy.mfusg.MfUsgSms,
             "wel": flopy.mfusg.MfUsgWel,
@@ -132,6 +133,7 @@ class MfUsg(Modflow):
             "evt": flopy.mfusg.MfUsgEvt,
             "ets": flopy.mfusg.MfUsgEts,
             "tib": flopy.mfusg.MfUsgTib,
+            "tvm": flopy.mfusg.MfUsgTvm,
         }
 
     def __repr__(self):
@@ -338,6 +340,13 @@ class MfUsg(Modflow):
 
         dis.start_datetime = model.start_datetime
 
+        # For DISU (unstructured) models, default to 10 values per line for
+        # free-format array output.  Without this, all nodes in a layer land on
+        # a single line (~29 000 chars for a 1942-node grid), which exceeds the
+        # internal buffer in some USG-T executables (e.g. usgt_270_arm).
+        if not model.structured and model.free_format_npl is None:
+            model.free_format_npl = 10
+
         # BCT has to be loaded before other transport packages for MFUSG-TRANSPORT
         bct_key = ext_pkg_d.get("BCT")
         if bct_key is not None:
@@ -361,6 +370,7 @@ class MfUsg(Modflow):
         # try loading packages in ext_unit_dict
         for key, item in ext_unit_dict.items():
             if item.package is not None:
+                in_load_only = item.filetype in load_only
                 (files_successfully_loaded, files_not_loaded) = (
                     cls._load_ext_unit_dict_paks(
                         model,
@@ -372,6 +382,15 @@ class MfUsg(Modflow):
                         files_not_loaded,
                     )
                 )
+                # Packages skipped by load_only are preserved in the model so
+                # write_name_file can include their NAM entries verbatim.  This
+                # allows verbatim-copied files (e.g. SMS, OC) to be referenced
+                # correctly without FloPy needing to parse or re-write them.
+                if not in_load_only:
+                    model._skipped_nam_entries[key] = (
+                        item.filetype,
+                        os.path.basename(item.filename),
+                    )
             elif "data" not in item.filetype.lower():
                 files_not_loaded.append(item.filename)
                 if model.verbose:
@@ -453,12 +472,17 @@ class MfUsg(Modflow):
             print(f"   {item.filetype} package load...skipped")
             print(f"      {os.path.basename(item.filename)}")
         if key not in model.pop_key_list:
-            # do not add unit number (key) if it already exists
-            if key not in model.external_units and key not in model.output_units:
+            if key in model.output_units:
+                # A package registered this unit with a generated filename
+                # (e.g., WEL AUTOFLOWREDUCE writes MDV.afr but the NAM has
+                # MDV_FlowReduction.dat). Override with the actual NAM filename.
+                idx = model.output_units.index(key)
+                model.output_fnames[idx] = item.filename
+            elif key not in model.external_units:
                 model.external_fnames.append(item.filename)
                 model.external_units.append(key)
                 model.external_binflag.append("binary" in item.filetype.lower())
-                model.external_output.append(False)
+                model.external_output.append(getattr(item, "replace", False))
 
     @staticmethod
     def _ext_unit_d_load(model, ext_unit_dict, ext_unit_d_item):

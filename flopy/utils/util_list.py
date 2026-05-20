@@ -746,10 +746,8 @@ class MfList(DataInterface, DataListInterface):
             if write_header:
                 if cln_data is None:
                     f.write(f" {itmp:9d} {0:9d} # stress period {kper + 1}\n")
-                elif cln_data.get_itmp(kper) is None:
-                    f.write(f" {itmp:9d} {0:9d} # stress period {kper + 1}\n")
                 else:
-                    itmpcln = cln_data.get_itmp(kper)
+                    itmpcln = cln_data.get_itmp(kper) or 0
                     f.write(
                         f" {itmp:9d} {0:9d} {itmpcln:9d} # stress period {kper + 1}\n"
                     )
