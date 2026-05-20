@@ -58,6 +58,7 @@ class MfUsgRiv(ModflowRiv):
     def __init__(
         self,
         model,
+        ipakcb=None,
         stress_period_data=None,
         dtype=None,
         irdflag=50,
@@ -72,15 +73,18 @@ class MfUsgRiv(ModflowRiv):
         if options is None:
             options = []
 
-        # Call Package base directly so we control when add_package fires.
-        # ModflowRiv.__init__ unconditionally calls add_package, so we bypass it.
+        # Prepare two filename slots (package input + CBC output) and register
+        # the CBC output file — mirrors ModflowRiv.__init__ exactly.
+        filenames = self._prepare_filenames(filenames, 2)
+        self.set_cbc_output_file(ipakcb, model, filenames[1])
+
         Package.__init__(
             self,
             model,
             extension=extension,
             name=self._ftype(),
             unit_number=unitnumber,
-            filenames=self._prepare_filenames(filenames),
+            filenames=filenames[0],
         )
         self._generate_heading()
         self.url = "riv.html"
@@ -109,7 +113,7 @@ class MfUsgRiv(ModflowRiv):
             return ModflowRiv.get_default_dtype(structured=True)
         return np.dtype([
             ("node", int),
-            ("stage", np.float32),
+            ("stage", np.float64),
             ("cond", np.float32),
             ("rbot", np.float32),
         ])
@@ -141,6 +145,9 @@ class MfUsgRiv(ModflowRiv):
 
     def write_file(self):
         """Write the package file in MODFLOW-USG-T RIV format."""
+        if self.parent.structured:
+            ModflowRiv.write_file(self)
+            return
         nper = self.parent.nper
         n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
 
@@ -192,6 +199,9 @@ class MfUsgRiv(ModflowRiv):
         -------
         MfUsgRiv
         """
+        if model.structured:
+            return ModflowRiv.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+
         if model.verbose:
             print("loading mfusg riv package file...")
         if nper is None:
@@ -268,6 +278,17 @@ class MfUsgRiv(ModflowRiv):
         if openfile:
             f.close()
 
+        unitnumber = None
+        filenames = [None]
+        if ext_unit_dict is not None:
+            unitnumber_ext, fname_ext = model.get_ext_dict_attr(
+                ext_unit_dict, filetype=cls._ftype()
+            )
+            if unitnumber_ext is not None:
+                unitnumber = unitnumber_ext
+            if fname_ext is not None:
+                filenames = [fname_ext]
+
         return cls(
             model,
             stress_period_data=spd,
@@ -275,6 +296,8 @@ class MfUsgRiv(ModflowRiv):
             irdflag=irdflag,
             options=options,
             extension="riv",
+            unitnumber=unitnumber,
+            filenames=filenames,
         )
 
 

@@ -256,6 +256,8 @@ class MfUsgBas(Package):
         opts = []
         # Emit UNSTRUCTURED when the parent model uses an unstructured grid so
         # the written BAS file round-trips (MfUsgBas.load keys on this token).
+        if self.converge:
+            opts.append("CONVERGE")
         if not getattr(self.parent, "structured", True):
             opts.append("UNSTRUCTURED")
         if self.ixsec:
@@ -416,6 +418,7 @@ class MfUsgBas(Package):
             ichflg=ichflg,
             stoper=stoper,
             hnoflo=hnoflo,
+            converge=converge,
             unitnumber=unitnumber,
             filenames=filenames,
         )

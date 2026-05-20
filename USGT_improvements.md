@@ -31,7 +31,23 @@ upstream flopy. They live here while testing continues.
 | `MfUsgChd` | `flopy/mfusg/mfusgchd.py` | CHD package for unstructured USG-T grids. Node-based (replaces k/i/j), supports AUX concentration variables. Full `load` and `write_file` for the USG-T format (`NACT    Stress Period N` headers, `-1` reuse). |
 | `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Supports AUX concentration and a trailing reach-ID column (`irch`) that is written positionally without being declared as AUX. `irch` is auto-detected from the first data row when loading. |
 | `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Distinct from the simpler EVT: supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays, the `IESFACTOR` transport flag, and named parameters. Full `load` and `write_file`. |
+| `MfUsgGhb` | `flopy/mfusg/mfusgghb.py` | GHB package for unstructured USG-T grids. Node-based, supports AUX concentration variables, stores `ipakcb` (CBC unit). Full `load` and `write_file`. Load registry now maps `"ghb"` to `MfUsgGhb`. |
+| `MfUsgDrn` | `flopy/mfusg/mfusgdrn.py` | DRN package for unstructured USG-T grids. Same pattern as GHB: node-based, AUX support, `ipakcb`. Full `load` and `write_file`. Load registry maps `"drn"` to `MfUsgDrn`. |
+| `MfUsgTvm` | `flopy/mfusg/mfusgtvm.py` | TVM2 (Time-Variant Materials) package. Text-block round-trip like `MfUsgTib`: global header (7-integer flags line) and per-SP blocks stored verbatim. SP blocks detected by `Stress Period` keyword. Missing SPs emit all-zero headers on write. |
+| `MfUsgGsf` | `flopy/mfusg/mfusgsf.py` | Grid Specification File wrapper. Text round-trip (stores raw lines). `to_grid()` delegates to `UnstructuredGrid.from_gridspec()` for full geometric parsing. Load registry maps `"gsf"` to `MfUsgGsf`. |
 | `MfusgTransportListBudget` | `flopy/utils/mflistfile.py` | Reads transport species budget from a USG-T listing file for a single species. Handles both **old** USG-T format (transport blocks use `VOLUMETRIC BUDGET`, same keyword as flow) and **new** format (transport blocks use `MASS BUDGET`). Instantiate once per species: `MfusgTransportListBudget("model.lst", species=2)`. Returns the same recarrays / DataFrames as `MfusgListBudget`. |
+
+### Density-coupled round-trip fixes (2026-05-19)
+
+Four bugs found during round-trip testing against a real-world Vistas-generated
+density-coupled USG-T 2.7 model (BCT IDISP=2, DDF, 1382 stress periods):
+
+| File | Fix |
+|---|---|
+| `flopy/mfusg/mfusgddf.py` | `ithickav` default: `default_val=1` → `default_val=0`. USG-T treats the absent ITHICKAV field as 0 (arithmetic averaging). Loading it as 1 changed transmissivity in the density layer and caused transport divergence. |
+| `flopy/mfusg/mfusgchd.py` | `shead`/`ehead` dtype: `np.float32` → `np.float64`. Float32 round-trip loss (~0.04 mm per CHD node) accumulated over 469 density-coupled SPs into concentration differences that marginally failed outer-loop convergence (ΔC > CICLOSE=1e-8). |
+| `flopy/mfusg/mfusgriv.py` | `stage` dtype: `np.float32` → `np.float64`, same reason. |
+| `flopy/mfusg/mfusgbas.py` | `CONVERGE` option: (1) `converge=converge` was missing from the `cls(...)` call in `load`, so `self.converge` was always `False`; (2) `write_file` never emitted `CONVERGE` even when `self.converge=True`. The `CONVERGE` keyword in BAS6 tells USG-T to use the coupled flow–transport convergence criterion in the outer nonlinear loop — without it the model failed to accept time step 2 of the first pumping stress period after 250 iterations. |
 
 ### Minor fixes
 
@@ -57,6 +73,10 @@ print(flopy.__version__)                              # 3.11.0.dev0 (or newer)
 print('MfUsgTib' in dir(flopy.mfusg))                # True
 print('MfUsgChd' in dir(flopy.mfusg))                # True
 print('MfUsgRiv' in dir(flopy.mfusg))                # True
+print('MfUsgGhb' in dir(flopy.mfusg))                # True
+print('MfUsgDrn' in dir(flopy.mfusg))                # True
+print('MfUsgTvm' in dir(flopy.mfusg))                # True
+print('MfUsgGsf' in dir(flopy.mfusg))                # True
 print('MfUsgEts' in dir(flopy.mfusg))                # True
 print('MfusgTransportListBudget' in dir(flopy.utils)) # True
 
@@ -73,16 +93,30 @@ text that `MfUsg.load(...).write_input()` produces for USG-T models.
 
 ## Validation
 
-Exercised end-to-end against an unstructured USG-T model with
-BCT + CLN + TIB transport (≈ 112 k nodes, 493 stress periods). Running the
-flopy-rewritten model through the same USG-T binary as the reference run
-produces a listing file that matches bit-for-bit on every budget column —
-flow and transport — (`max|diff| = 0` on all stress periods, across 20 flow
-and 16 mass components). Wall-clock runtime is equivalent to the reference.
+Exercised end-to-end against two real-world unstructured USG-T models built
+with Groundwater Vistas, using their Vistas-generated input packages as the
+reference:
+
+**Model A — BCT + CLN + TIB transport** (≈ 112 k nodes, 493 stress periods, USG-T 1.8):
+FloPy-rewritten input produces a listing file matching the reference bit-for-bit on every
+budget column — flow and transport (`max|diff| = 0`, 20 flow + 16 mass components).
+Wall-clock runtime equivalent to the reference.
+
+**Model B — BCT IDISP=2 + DDF density-coupled transport** (≈ 19 k nodes, 1382 stress periods,
+4322 time steps, USG-T 2.7 ARM):
+
+| Output | Time steps | Max difference |
+|--------|-----------|----------------|
+| LST budget | 4322 / 4322 ✓ | 0.000e+00 |
+| HDS heads | 4322 / 4322 ✓ | 0.000e+00 m |
+| CON concentrations | 4322 / 4322 ✓ | 0.000e+00 |
+| CBB (7 record types) | 4322 / 4322 ✓ | 0.000e+00 |
+
+**Both models: bit-for-bit identical to the Vistas reference on all outputs.**
 
 Tested binaries:
-- USG-T 2.7.0 (ARM) — round-trip sanity on a small reference model
-- USG-T 1.8 (ARM and x86) — full validation on the transport model above
+- USG-T 2.7.0 (ARM) — Model B full validation
+- USG-T 1.8 (ARM and x86) — Model A full validation
 
 ## Upstream
 

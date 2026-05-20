@@ -68,6 +68,8 @@ class MfUsgDdf(Package):
         cstd=35.0,
         ithickav=1,
         imphdd=0,
+        nonlinear=False,
+        density_table=None,
         extension="ddf",
         unitnumber=None,
         filenames=None,
@@ -97,6 +99,8 @@ class MfUsgDdf(Package):
         self.cstd = cstd
         self.ithickav = ithickav
         self.imphdd = imphdd
+        self.nonlinear = nonlinear
+        self.density_table = list(density_table) if density_table else []
 
         self.parent.add_package(self)
         return
@@ -112,10 +116,20 @@ class MfUsgDdf(Package):
         """
         f = open(self.fn_path, "w")
         f.write(f"{self.heading}\n")
-        f.write(
-            f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
-            f" {self.ithickav:9d} {self.imphdd:9d}\n"
-        )
+        if self.nonlinear:
+            nrows = len(self.density_table)
+            f.write(
+                f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
+                f" {self.ithickav:9d} {self.imphdd:9d}"
+                f" NONLINEAR {nrows}\n"
+            )
+            for conc_i, rho_i in self.density_table:
+                f.write(f" {conc_i:g} {rho_i:g}\n")
+        else:
+            f.write(
+                f" {self.rhofresh:9.2f} {self.rhostd:9.2f} {self.cstd:9.2f}"
+                f" {self.ithickav:9d} {self.imphdd:9d}\n"
+            )
         f.close()
 
     @classmethod
@@ -175,18 +189,31 @@ class MfUsgDdf(Package):
             line = f.readline().upper()
 
         if model.verbose:
-            print("   loading RHOFRESH RHOSTD CSTD ITHICKAV IMPHDD...")
+            print("   loading RHOFRESH RHOSTD CSTD ITHICKAV IMPHDD [NONLINEAR]...")
 
         ll = line_parse(line)
         rhofresh = float(ll.pop(0))
         rhostd = float(ll.pop(0))
         cstd = float(ll.pop(0))
-        ithickav = type_from_iterable(ll, index=3, _type=int, default_val=1)
-        imphdd = type_from_iterable(ll, index=4, _type=int, default_val=0)
+        # ll now starts at what was originally index 3
+        ithickav = type_from_iterable(ll, index=0, _type=int, default_val=0)
+        imphdd = type_from_iterable(ll, index=1, _type=int, default_val=0)
+
+        nonlinear = False
+        density_table = []
+        ll_upper = [tok.upper() for tok in ll]
+        if "NONLINEAR" in ll_upper:
+            nonlinear = True
+            nddftabrows = int(ll[ll_upper.index("NONLINEAR") + 1])
+            for _ in range(nddftabrows):
+                row = f.readline().split()
+                density_table.append((float(row[0]), float(row[1])))
+
         if model.verbose:
             print(
                 f"   RHOFRESH {rhofresh} \n   RHOSTD {rhostd} \n   CSTD {cstd} \n"
                 f"   ITHICKAV {ithickav} \n   IMPHDD {imphdd}"
+                + (f"\n   NONLINEAR with {len(density_table)} rows" if nonlinear else "")
             )
 
         if openfile:
@@ -206,6 +233,8 @@ class MfUsgDdf(Package):
             cstd=cstd,
             ithickav=ithickav,
             imphdd=imphdd,
+            nonlinear=nonlinear,
+            density_table=density_table,
             unitnumber=unitnumber,
             filenames=filenames,
         )

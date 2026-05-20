@@ -60,8 +60,7 @@ class MfUsgChd(ModflowChd):
         if options is None:
             options = []
 
-        # Call Package base directly so we control when add_package fires.
-        # ModflowChd.__init__ unconditionally calls add_package, so we bypass it.
+        # CHD has no CBC output file — mirrors ModflowChd.__init__ (single slot).
         Package.__init__(
             self,
             model,
@@ -96,8 +95,8 @@ class MfUsgChd(ModflowChd):
             return ModflowChd.get_default_dtype(structured=True)
         return np.dtype([
             ("node", int),
-            ("shead", np.float32),
-            ("ehead", np.float32),
+            ("shead", np.float64),
+            ("ehead", np.float64),
         ])
 
     @staticmethod
@@ -125,6 +124,9 @@ class MfUsgChd(ModflowChd):
 
     def write_file(self):
         """Write the package file in MODFLOW-USG-T CHD format."""
+        if self.parent.structured:
+            ModflowChd.write_file(self)
+            return
         nper = self.parent.nper
         n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
 
@@ -172,6 +174,9 @@ class MfUsgChd(ModflowChd):
         -------
         MfUsgChd
         """
+        if model.structured:
+            return ModflowChd.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+
         if model.verbose:
             print("loading mfusg chd package file...")
         if nper is None:
@@ -231,10 +236,23 @@ class MfUsgChd(ModflowChd):
         if openfile:
             f.close()
 
+        unitnumber = None
+        filenames = [None]
+        if ext_unit_dict is not None:
+            unitnumber_ext, fname_ext = model.get_ext_dict_attr(
+                ext_unit_dict, filetype=cls._ftype()
+            )
+            if unitnumber_ext is not None:
+                unitnumber = unitnumber_ext
+            if fname_ext is not None:
+                filenames = [fname_ext]
+
         return cls(
             model,
             stress_period_data=spd,
             dtype=dtype,
             options=options,
             extension="chd",
+            unitnumber=unitnumber,
+            filenames=filenames,
         )
