@@ -20,6 +20,7 @@ from flopy.mfusg import (
     MfUsgDpf,
     MfUsgDpt,
     MfUsgDrn,
+    MfUsgDrt,
     MfUsgEvt,
     MfUsgGhb,
     MfUsgGnc,
@@ -29,7 +30,9 @@ from flopy.mfusg import (
     MfUsgMdt,
     MfUsgOc,
     MfUsgPcb,
+    MfUsgQrt,
     MfUsgRch,
+    MfUsgSgb,
     MfUsgSms,
     MfUsgTvm,
     MfUsgWel,
@@ -2130,3 +2133,547 @@ def test_mfusggsf_to_grid(function_tmpdir):
     assert len(grid.xcellcenters) == 1          # 1 node
     assert np.isclose(grid.xcellcenters[0], 0.5, atol=1e-6)
     assert np.isclose(grid.ycellcenters[0], 0.333, atol=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
+# ---------------------------------------------------------------------------
+
+def test_mfusgsgb_roundtrip(function_tmpdir):
+    """SGB: load → inspect → write → reload preserves data and -1 reuse."""
+    from flopy.modflow import ModflowDis
+
+    sgb_in = function_tmpdir / "test.sgb"
+    sgb_in.write_text(
+        "# MfUsgSgb test\n"
+        "         2 0\n"
+        " 2 0    Stress Period 1\n"
+        " 101   1.000000e-02\n"
+        " 102   2.500000e-02\n"
+        " -1 0    Stress Period 2\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    sgb = MfUsgSgb.load(str(sgb_in), ml, nper=2, ext_unit_dict={})
+
+    sp0 = sgb.stress_period_data[0]
+    assert len(sp0) == 2
+    assert list(sp0["node"]) == [100, 101]
+    assert np.isclose(sp0["gradient"][0], 0.01, atol=1e-6)
+    assert np.isclose(sp0["gradient"][1], 0.025, atol=1e-6)
+
+    # -1 reuse copies SP0 data into SP1
+    sp1 = sgb.stress_period_data[1]
+    assert len(sp1) == 2
+    assert list(sp1["node"]) == [100, 101]
+
+    sgb_out = function_tmpdir / "out.sgb"
+    sgb.fn_path = str(sgb_out)
+    sgb.write_file()
+    text = sgb_out.read_text()
+    assert "Stress Period 1" in text
+    assert "Stress Period 2" in text
+    assert "\n 101" in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    sgb2 = MfUsgSgb.load(str(sgb_out), ml2, nper=2, ext_unit_dict={})
+    assert list(sgb2.stress_period_data[0]["node"]) == [100, 101]
+    assert np.isclose(sgb2.stress_period_data[0]["gradient"][1], 0.025, atol=1e-6)
+
+
+def test_mfusgsgb_aux_roundtrip(function_tmpdir):
+    """SGB with one AUX concentration field round-trips correctly."""
+    from flopy.modflow import ModflowDis
+
+    sgb_in = function_tmpdir / "aux.sgb"
+    sgb_in.write_text(
+        "# MfUsgSgb aux test\n"
+        " 1 0 AUX C01\n"
+        " 1 0    Stress Period 1\n"
+        " 101   3.000000e-02  1.500000e-01\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    sgb = MfUsgSgb.load(str(sgb_in), ml, nper=1, ext_unit_dict={})
+
+    assert "C01" in sgb.dtype.names
+    assert np.isclose(sgb.stress_period_data[0]["C01"][0], 0.15, atol=1e-5)
+
+    sgb_out = function_tmpdir / "aux_out.sgb"
+    sgb.fn_path = str(sgb_out)
+    sgb.write_file()
+    assert "AUX C01" in sgb_out.read_text()
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    sgb2 = MfUsgSgb.load(str(sgb_out), ml2, nper=1, ext_unit_dict={})
+    assert np.isclose(sgb2.stress_period_data[0]["C01"][0], 0.15, atol=1e-5)
+
+
+def test_mfusgsgb_programmatic_authoring(function_tmpdir):
+    """SGB authored from scratch uses 0-based nodes; file is written 1-based."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    dtype = MfUsgSgb.get_default_dtype()
+    spd = {0: np.array([(0, 0.01), (4, 0.05)], dtype=dtype).view(np.recarray)}
+    sgb = MfUsgSgb(ml, stress_period_data=spd)
+    sgb.fn_path = str(function_tmpdir / "created.sgb")
+    sgb.write_file()
+    text = Path(sgb.fn_path).read_text()
+    assert "\n 1  1.000000e-02" in text
+    assert "\n 5  5.000000e-02" in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    sgb2 = MfUsgSgb.load(sgb.fn_path, ml2, nper=1)
+    assert list(sgb2.stress_period_data[0]["node"]) == [0, 4]
+    assert np.isclose(sgb2.stress_period_data[0]["gradient"][1], 0.05, atol=1e-6)
+
+
+def test_mfusgsgb_nam_registry():
+    """MfUsg.load() registry maps the SGB package key to MfUsgSgb."""
+    ml = MfUsg(structured=False)
+    assert ml.mfnam_packages["sgb"] is MfUsgSgb
+
+
+def test_mfusgsgb_parameters_fail_explicitly(function_tmpdir):
+    """Named SGB parameters (NPSGB>0 / per-SP NP>0) raise NotImplementedError."""
+    from flopy.modflow import ModflowDis
+
+    # PARAMETER prefix in the header (NPSGB > 0)
+    sgb_param = function_tmpdir / "param.sgb"
+    sgb_param.write_text(
+        "# param header\n"
+        " PARAMETER 1 5 2 0\n"
+        " 0 0    Stress Period 1\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    with pytest.raises(NotImplementedError):
+        MfUsgSgb.load(str(sgb_param), ml, nper=1, ext_unit_dict={})
+
+    # active parameter declared in a stress period (NP > 0)
+    sgb_sp = function_tmpdir / "sp_param.sgb"
+    sgb_sp.write_text(
+        "# sp param\n"
+        "         2 0\n"
+        " 1 1    Stress Period 1\n"
+        " 101   1.000000e-02\n"
+    )
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    with pytest.raises(NotImplementedError):
+        MfUsgSgb.load(str(sgb_sp), ml2, nper=1, ext_unit_dict={})
+
+
+# ---------------------------------------------------------------------------
+# MfUsgQrt tests (Sink with Return Flow, gwf2QRT8u.f)
+# ---------------------------------------------------------------------------
+
+def test_mfusgqrt_minimal_authoring(function_tmpdir):
+    """Minimal QRT authored from scratch: 0-based API, 1-based file, reload."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True, changec=False)
+    spd = {0: np.array([(0, -100.0, 0.75)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[9, 10]]}  # 0-based recipient nodes
+    qrt = MfUsgQrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=["RETURNFLOW"]
+    )
+    qrt.fn_path = str(function_tmpdir / "created.qrt")
+    qrt.write_file()
+    text = Path(qrt.fn_path).read_text()
+
+    # Sink node 0 -> 1 in file; recipients 9,10 -> 10,11 in file
+    assert "\n 1  -1.000000e+02  2  7.500000e-01" in text
+    assert "INTERNAL" in text
+    assert "\n 10 11\n" in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    qrt2 = MfUsgQrt.load(qrt.fn_path, ml2, nper=1)
+    rec = qrt2.stress_period_data[0]
+    assert list(rec["node"]) == [0]
+    assert np.isclose(rec["q"][0], -100.0)
+    assert np.isclose(rec["rfprop"][0], 0.75)
+    assert qrt2.recipient_nodes[0][0] == [9, 10]
+
+
+def test_mfusgqrt_returnflow_concentration(function_tmpdir):
+    """QRT CHANGEC + AUX concentration round-trips (line order: rfprop, ichng, aux)."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    opts = ["RETURNFLOW", "CHANGEC", "AUX C01"]
+    dtype = MfUsgQrt.get_default_dtype(
+        returnflow=True, changec=True, aux_names=["C01"]
+    )
+    spd = {0: np.array([(3, -25.0, 0.5, 2, 0.15)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[7]]}
+    qrt = MfUsgQrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=opts
+    )
+    qrt.fn_path = str(function_tmpdir / "conc.qrt")
+    qrt.write_file()
+    text = qrt.fn_path
+    content = Path(text).read_text()
+    assert "RETURNFLOW CHANGEC AUX C01" in content
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    qrt2 = MfUsgQrt.load(text, ml2, nper=1)
+    rec = qrt2.stress_period_data[0]
+    assert "iqchngtyp" in qrt2.dtype.names
+    assert "C01" in qrt2.dtype.names
+    assert rec["iqchngtyp"][0] == 2
+    assert np.isclose(rec["rfprop"][0], 0.5)
+    assert np.isclose(rec["C01"][0], 0.15)
+    assert qrt2.recipient_nodes[0][0] == [7]
+
+
+def test_mfusgqrt_multi_recipient_and_pure_sink(function_tmpdir):
+    """QRT mixing a multi-recipient sink with a no-return (NumRT=0) sink."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True)
+    spd = {
+        0: np.array(
+            [(0, -200.0, 0.9), (4, -30.0, 0.0)], dtype=dtype
+        ).view(np.recarray)
+    }
+    recips = {0: [[10, 11, 12], []]}
+    qrt = MfUsgQrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=["RETURNFLOW"]
+    )
+    qrt.fn_path = str(function_tmpdir / "multi.qrt")
+    qrt.write_file()
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    qrt2 = MfUsgQrt.load(qrt.fn_path, ml2, nper=1)
+    assert qrt2.recipient_nodes[0][0] == [10, 11, 12]
+    assert qrt2.recipient_nodes[0][1] == []
+    # MXRTCELLS in the header equals the total recipient nodes in the SP (3)
+    header = Path(qrt.fn_path).read_text().splitlines()[1]
+    assert header.split()[1] == "3"
+
+
+def test_mfusgqrt_nam_registry():
+    """MfUsg.load() registry maps the QRT package key to MfUsgQrt."""
+    ml = MfUsg(structured=False)
+    assert ml.mfnam_packages["qrt"] is MfUsgQrt
+
+
+def test_mfusgqrt_unsupported_modes_fail_explicitly(function_tmpdir):
+    """NPQRT>0 and TRANSIENTQ raise NotImplementedError rather than partial-write."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    # NPQRT > 0 (named parameters)
+    qrt_param = function_tmpdir / "param.qrt"
+    qrt_param.write_text(
+        "# qrt params\n"
+        "        10        10 0 1 5 RETURNFLOW\n"
+        " 0    Stress Period 1\n"
+    )
+    with pytest.raises(NotImplementedError):
+        MfUsgQrt.load(str(qrt_param), ml, nper=1, ext_unit_dict={})
+
+    # TRANSIENTQ option
+    qrt_tq = function_tmpdir / "tq.qrt"
+    qrt_tq.write_text(
+        "# qrt transientq\n"
+        "        10        10 0 0 0 RETURNFLOW TRANSIENTQ 5\n"
+        " 0    Stress Period 1\n"
+    )
+    with pytest.raises(NotImplementedError):
+        MfUsgQrt.load(str(qrt_tq), ml, nper=1, ext_unit_dict={})
+
+
+# ---------------------------------------------------------------------------
+# MfUsgDrt tests (Drain Return DRT8, gwf2drt8u.f)
+# ---------------------------------------------------------------------------
+
+def test_mfusgdrt_inline_single_recipient(function_tmpdir):
+    """DRT with a single inline recipient (NR>0): 0-based API, 1-based file."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
+    spd = {0: np.array([(0, 5.0, 100.0, 0.7)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[8]]}
+    drt = MfUsgDrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=["RETURNFLOW"]
+    )
+    drt.fn_path = str(function_tmpdir / "created.drt")
+    drt.write_file()
+    text = Path(drt.fn_path).read_text()
+    # drain node 0->1, recipient node 8->9, inline (no INTERNAL block)
+    assert "\n 1  5.000000e+00  1.000000e+02  9  7.000000e-01" in text
+    assert "INTERNAL" not in text
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    drt2 = MfUsgDrt.load(drt.fn_path, ml2, nper=1)
+    rec = drt2.stress_period_data[0]
+    assert list(rec["node"]) == [0]
+    assert np.isclose(rec["elev"][0], 5.0)
+    assert np.isclose(rec["cond"][0], 100.0)
+    assert np.isclose(rec["rfprop"][0], 0.7)
+    assert drt2.recipient_nodes[0][0] == [8]
+
+
+def test_mfusgdrt_changec_concentration(function_tmpdir):
+    """DRT with CHANGEC (IDCHNGTYP) + AUX concentration round-trips."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    opts = ["RETURNFLOW", "CHANGEC", "AUX C01"]
+    dtype = MfUsgDrt.get_usg_dtype(
+        returnflow=True, changec=True, aux_names=["C01"]
+    )
+    spd = {0: np.array([(2, 6.0, 75.0, 0.4, 3, 0.2)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[5]]}
+    drt = MfUsgDrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=opts
+    )
+    drt.fn_path = str(function_tmpdir / "conc.drt")
+    drt.write_file()
+    assert "RETURNFLOW CHANGEC AUX C01" in Path(drt.fn_path).read_text()
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    drt2 = MfUsgDrt.load(drt.fn_path, ml2, nper=1)
+    rec = drt2.stress_period_data[0]
+    assert "idchngtyp" in drt2.dtype.names
+    assert rec["idchngtyp"][0] == 3
+    assert np.isclose(rec["C01"][0], 0.2)
+    assert drt2.recipient_nodes[0][0] == [5]
+
+
+def test_mfusgdrt_spread_multi_node(function_tmpdir):
+    """DRT spreading ground (NR<0): multiple recipients via a U1DINT block."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
+    spd = {0: np.array([(0, 5.0, 100.0, 0.9)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[10, 11, 12]]}
+    drt = MfUsgDrt(
+        ml, stress_period_data=spd, recipient_nodes=recips, options=["RETURNFLOW"]
+    )
+    drt.fn_path = str(function_tmpdir / "spread.drt")
+    drt.write_file()
+    content = Path(drt.fn_path).read_text()
+    lines = content.splitlines()
+    # NR = -3 (spreading), SPREAD 3 in header, U1DINT block with 1-based nodes
+    assert lines[1].split()[-2:] == ["SPREAD", "3"]
+    assert "1.000000e+02  -3" in content  # NR = -3 on the drain line
+    assert "INTERNAL" in content
+    assert "\n 11 12 13\n" in content
+
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    drt2 = MfUsgDrt.load(drt.fn_path, ml2, nper=1)
+    assert drt2.recipient_nodes[0][0] == [10, 11, 12]
+
+
+def test_mfusgdrt_stress_period_reuse(function_tmpdir):
+    """DRT -1 reuse copies the previous stress period's drains."""
+    from flopy.modflow import ModflowDis
+
+    drt_in = function_tmpdir / "reuse.drt"
+    drt_in.write_text(
+        "# drt reuse\n"
+        "         1 0 0 0 RETURNFLOW\n"
+        " 1 0    Stress Period 1\n"
+        " 1  5.000000e+00  1.000000e+02  9  7.000000e-01\n"
+        " -1    Stress Period 2\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+    drt = MfUsgDrt.load(str(drt_in), ml, nper=2, ext_unit_dict={})
+    assert list(drt.stress_period_data[0]["node"]) == [0]
+    assert list(drt.stress_period_data[1]["node"]) == [0]
+    assert drt.recipient_nodes[1][0] == [8]
+
+
+def test_mfusgdrt_nam_registry():
+    """MfUsg.load() registry maps the DRT package key to MfUsgDrt."""
+    ml = MfUsg(structured=False)
+    assert ml.mfnam_packages["drt"] is MfUsgDrt
+
+
+def test_mfusgdrt_parameters_fail_explicitly(function_tmpdir):
+    """Named DRT parameters (NPDRT>0) raise NotImplementedError on load."""
+    from flopy.modflow import ModflowDis
+
+    drt_param = function_tmpdir / "param.drt"
+    drt_param.write_text(
+        "# drt params\n"
+        "        10 0 1 5 RETURNFLOW\n"
+        " 0    Stress Period 1\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    with pytest.raises(NotImplementedError):
+        MfUsgDrt.load(str(drt_param), ml, nper=1, ext_unit_dict={})
+
+
+# ---------------------------------------------------------------------------
+# BCF / LPF TABRICH tests (items 1c IUZONTAB + 1d RETCRVS, gwf2bcf-lpf-u1.f)
+# ---------------------------------------------------------------------------
+
+_RETCRVS_2x2 = np.array(
+    [
+        [[0.0, 1.0, 1.0], [1.0, 0.5, 0.10]],  # zone 1: (caphead, sat, relperm)
+        [[0.0, 1.0, 1.0], [2.0, 0.3, 0.05]],  # zone 2
+    ]
+)
+
+
+def test_mfusgbcf_tabrich_authoring_roundtrip(function_tmpdir):
+    """BCF TABRICH: author IUZONTAB + RETCRVS from scratch, write, reload."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    bcf = MfUsgBcf(
+        ml,
+        laycon=[0, 5],
+        ipakcb=0,
+        tabrich=True,
+        nuzones=2,
+        nutabrows=2,
+        iuzontab=[1, 2],
+        retcrvs=_RETCRVS_2x2,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+    bcf.fn_path = str(function_tmpdir / "tabrich.bcf")
+    bcf.write_file()
+    text = Path(bcf.fn_path).read_text()
+    assert "TABRICH" in text.splitlines()[0]  # BCF writes item 1 first (no heading)
+    assert "#iuzontab" in text
+
+    ml2 = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml2, ibound=1, strt=1.0, richards=True)
+    bcf2 = MfUsgBcf.load(bcf.fn_path, ml2)
+    assert bcf2.tabrich and bcf2.nuzones == 2 and bcf2.nutabrows == 2
+    assert list(bcf2.iuzontab.array) == [1, 2]
+    assert bcf2.retcrvs.shape == (2, 2, 3)
+    assert np.allclose(bcf2.retcrvs, _RETCRVS_2x2)
+
+
+def test_mfusglpf_tabrich_authoring_roundtrip(function_tmpdir):
+    """LPF TABRICH: author IUZONTAB + RETCRVS, skip Richards arrays, reload."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    lpf = MfUsgLpf(
+        ml,
+        laytyp=[0, 5],
+        ipakcb=0,
+        tabrich=True,
+        nuzones=2,
+        nutabrows=2,
+        iuzontab=[1, 2],
+        retcrvs=_RETCRVS_2x2,
+        hk=1.0,
+        vka=1.0,
+        ss=1.0e-5,
+        sy=0.15,
+    )
+    lpf.fn_path = str(function_tmpdir / "tabrich.lpf")
+    lpf.write_file(check=False)
+    text = Path(lpf.fn_path).read_text()
+    assert "TABRICH 2 2" in text
+    assert "#iuzontab" in text
+    # Richards per-layer arrays must NOT be written under TABRICH
+    assert "richards alpha" not in text
+
+    ml2 = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml2, ibound=1, strt=1.0, richards=True)
+    lpf2 = MfUsgLpf.load(lpf.fn_path, ml2, check=False)
+    assert lpf2.tabrich and lpf2.nuzones == 2 and lpf2.nutabrows == 2
+    assert list(lpf2.iuzontab.array) == [1, 2]
+    assert np.allclose(lpf2.retcrvs, _RETCRVS_2x2)
+
+
+def test_mfusgbcf_tabrich_incomplete_write_fails(function_tmpdir):
+    """tabrich=True without iuzontab/retcrvs: construction OK, write fails."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    # Construction must NOT raise (BCF can be used purely as model setup).
+    bcf = MfUsgBcf(
+        ml,
+        laycon=[0, 5],
+        ipakcb=0,
+        tabrich=True,
+        nuzones=1,
+        nutabrows=2,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+    bcf.fn_path = str(function_tmpdir / "bad.bcf")
+    with pytest.raises(ValueError):
+        bcf.write_file()
+
+
+def test_tabrich_retcrvs_shape_validation(function_tmpdir):
+    """A mis-shaped RETCRVS raises ValueError at construction."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    with pytest.raises(ValueError):
+        MfUsgBcf(
+            ml,
+            laycon=[0, 5],
+            ipakcb=0,
+            tabrich=True,
+            nuzones=2,
+            nutabrows=2,
+            iuzontab=[1, 2],
+            retcrvs=np.zeros((2, 3, 3)),  # nutabrows mismatch (expects (2,2,3))
+            tran=1.0,
+            hy=1.0,
+            kv=1.0,
+            sf1=1.0e-5,
+            sf2=0.15,
+        )

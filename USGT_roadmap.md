@@ -34,8 +34,8 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | BAS6 | `BAS6` | `MfUsgBas` | ⚠️ Partial | `gwf2basu1.f` | Standard USG-T options load/write tested, including UNSTRUCTURED, PRINTTIME, SHOWPROGRESS, DPIN/DPOUT/DPIO, SY-ALL. See Gap §1 for remaining niche options. **Verified** |
 | DIS | `DIS` | `MfUsgDis` | ✅ | `mfusg.f` | Structured grid discretization |
 | DISU | `DISU` | `MfUsgDisU` | ✅ | `mfusg.f` | Unstructured. `free_format_npl=10` default prevents buffer overflow for large grids. **Verified** |
-| BCF6 | `BCF6` | `MfUsgBcf` | ⚠️ Partial | `gwf2bcf-lpf-u1.f` | TABRICH items 1c/1d (zone map + retention curves) not loaded/written. See Gap §2. **Verified** |
-| LPF | `LPF` | `MfUsgLpf` | ⚠️ Partial | `gwf2bcf-lpf-u1.f` | Same TABRICH gap as BCF. Richards (LAYTYP=5) arrays correctly load/write after `Util2d.__eq__` fix (2026-05-20). **Verified** |
+| BCF6 | `BCF6` | `MfUsgBcf` | ✅ Full | `gwf2bcf-lpf-u1.f` | TABRICH items 1c (`IUZONTAB`) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = caphead/saturation/relperm) now authored/loaded/written; incomplete TABRICH write fails explicitly. See Gap §2 (resolved). **Verified** |
+| LPF | `LPF` | `MfUsgLpf` | ✅ Full | `gwf2bcf-lpf-u1.f` | TABRICH 1c/1d implemented (RETCRVS replaces per-layer alpha/beta/sr/brook, which are skipped under TABRICH); parse bug fixed (nutabrows token, int cast). Richards (LAYTYP=5) arrays load/write after `Util2d.__eq__` fix. See Gap §2 (resolved). **Verified** |
 | SMS | `SMS` | `MfUsgSms` | ✅ Full | `glo2sms-u1.f` | All solver options. **Verified** |
 | OC | `OC` | `MfUsgOc` | ✅ | — | ATS adaptive time-stepping and BOOTSTRAPPING supported |
 | CHD | `CHD` | `MfUsgChd` | ✅ Full | `gwf2chd7u1.f` | Node-based unstructured. Internal nodes 0-based, file I/O 1-based. AUX transport concentrations. Programmatic authoring tested. float64 precision. **Verified** |
@@ -63,11 +63,11 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | STR | `STR` | base `ModflowStr` | ⚠️ Partial | `gwf2str7u1.f` | Base class used. Unstructured format not validated |
 | GAG | `GAGE` | base `ModflowGage` | ⚠️ Partial | `gwf2gag7u1.f` | Base class used. Depends on SFR/LAK; not independently validated |
 | FHB | `FHB` | base `ModflowFhb` | ⚠️ Partial | `gwf2fhb7u1.f` | Base class used. Unstructured format not validated |
-| DRT | `DRT` | base `ModflowDrt` | ⚠️ Partial | `gwf2drt8u.f` | Base class used. DRT8 USG-T extensions (transport AUX, IQCHANGEC, MXSPREADNDS) not in base class. **Verified (gap documented)** |
+| DRT | `DRT` | `MfUsgDrt` | ✅ Full | `gwf2drt8u.f` | Node-based DRT8. EL+COND, RETURNFLOW (inline single recipient `NR>0` or `SPREAD` multi-node `NR<0` via U1DINT), `CHANGEC`/`IDCHNGTYP` transport, AUX, `ITMP/-1` reuse; 0-based internal / 1-based file. `NPDRT>0` fails explicitly. Structured grids delegate to base `ModflowDrt`. **Verified** |
 | SUB | `SUB` | base `ModflowSub` | ⚠️ Partial | `gwf2sub7u1.f` | Base class used. Unstructured items not validated |
 | SWT | `SWT` | base `ModflowSwt` | ⚠️ Partial | — | Base class used. Unstructured format not validated |
-| **SGB** | — | ❌ **Missing** | ❌ | `glo2sgbu1.f` | Specified Gradient Boundary. Not in FloPy registry. If present in a NAM file, `MfUsg.load()` will silently skip it. **Verified (absent)** |
-| **QRT** | — | ❌ **Missing** | ❌ | `gwf2QRT8u.f` | Sink with Return Flow. Not in FloPy registry. Transport return-flow concentrations not supported. **Verified (absent)** |
+| SGB | `SGB` | `MfUsgSgb` | ✅ Full | `glo2sgbu1.f` | Specified Gradient Boundary. Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse; 0-based internal / 1-based file. `NPSGB>0` fails explicitly. Registered in `MfUsg.load()`. **Verified** |
+| QRT | `QRT` | `MfUsgQrt` | ✅ Full | `gwf2QRT8u.f` | Sink with Return Flow. Node-based `(node, q, rfprop)` + variable-length recipient-node lists (`NodQRT` via U1DINT), `CHANGEC`/`IQCHNGTYP` transport, AUX, `ITMP/-1` reuse. `AUTOFLOWREDUCE` preserved. `NPQRT>0` and `TRANSIENTQ` fail explicitly. Registered in `MfUsg.load()`. **Verified** |
 
 ---
 
@@ -115,10 +115,19 @@ Remaining niche options to model explicitly if needed:
 The LPF Richards bug (LAYTYP=5 condition always False due to `Util2d.__eq__`) was
 fixed (2026-05-20) — see `USGT_improvements.md`.
 
-### Gap §2 — BCF/LPF: TABRICH items 1c and 1d not implemented
+### Gap §2 — BCF/LPF: TABRICH items 1c and 1d — RESOLVED
 
-When `tabrich=True`, the Fortran reads two additional datasets after the standard
-array block:
+**Resolved.** `MfUsgBcf` and `MfUsgLpf` now author/load/write items 1c
+(`IUZONTAB`) and 1d (`RETCRVS`) via the shared `flopy/mfusg/_tabrich.py`
+helper. `RETCRVS` is an ndarray of shape `(nuzones, nutabrows, 3)`
+(capillary head / saturation / relative permeability), read zone-outer /
+row-middle as the Fortran does. For LPF the per-layer Richards arrays
+(alpha/beta/sr/brook) are skipped under TABRICH, matching `ITABRICH/=0`.
+Writing `tabrich=True` without both arrays fails explicitly instead of
+emitting an incomplete file.
+
+Original gap (for reference): when `tabrich=True`, the Fortran reads two
+additional datasets after the standard array block:
 
 - **Item 1c**: `IUZONTAB` — integer zone map array (one zone index per node)
 - **Item 1d**: `RETCRVS(NUZONES, NUTABROWS, 3)` — tabular moisture-retention curves
@@ -173,17 +182,21 @@ domain. The physics is activated via a BCT option (`A-W_ADSORB`), but DPT may
 need complementary parameters that have not been validated. Low priority —
 `A-W_ADSORB` models are very uncommon.
 
-### Gap §7 — DRT: USG-T 2.7 transport extensions (verified against `gwf2drt8u.f`)
+### Gap §7 — DRT: USG-T 2.7 transport extensions — RESOLVED
 
-The base `ModflowDrt` class is used. It does not support:
+**Resolved.** `MfUsgDrt` (subclass of `ModflowDrt`) implements the node-based
+DRT8 unstructured format with the USG-T extensions:
 
-- Transport concentration auxiliary variables for inflowing return-flow water
-- `IQCHANGEC` / `IQCHNGTYP` flow-reduction behavior flags
-- `MXSPREADNDS` (spreading return flows to multiple nodes)
+- `CHANGEC` / `IDCHNGTYP` per-cell return-flow concentration-change type.
+- `RETURNFLOW` recipient nodes: a single inline recipient (`NR>0`) or a
+  `SPREAD` multi-node spreading ground (`NR<0`, recipients via a `U1DINT`
+  block written immediately after the drain line). `MXSPREADNDS` is
+  recomputed from the data on write.
+- AUX concentration variables and `ITMP/-1` stress-period reuse.
 
-These are DRT8 USG-T additions not present in MODFLOW-2005 DRT. A model using
-DRT with transport will load correctly (the static barriers are format-compatible)
-but cannot specify return-flow concentrations.
+`NPDRT>0` (named parameters) fails explicitly. Structured (DIS) models
+delegate to the base `ModflowDrt`. Return-flow node lists with
+`EXTERNAL`/`OPEN/CLOSE` control records are not supported (explicit failure).
 
 ### Gap §8 — ETS: parameter syntax is expanded, not preserved
 
@@ -209,27 +222,26 @@ explicitly for that case until parameter expansion/preservation is added.
 
 ---
 
-## Missing packages
+## Previously-missing packages — now implemented
 
-### SGB — Specified Gradient Boundary (`glo2sgbu1.f`)
+### SGB — Specified Gradient Boundary (`glo2sgbu1.f`) — IMPLEMENTED
 
-SGB is listed in the USG-T 2.7 CUNIT array. It applies a specified hydraulic
-gradient at the model boundary (distinct from GHB, which specifies head-to-head
-conductance). It has its own I/O format and Fortran subroutines. There is no
-FloPy class for it. If a USG-T model uses SGB, `MfUsg.load()` will silently
-skip the package and the written model will be incomplete.
+`MfUsgSgb` applies a specified hydraulic gradient at boundary nodes (distinct
+from GHB, which specifies a head-to-head conductance). Node-based
+`(node, gradient)` list with AUX transport concentrations and `ITMP/-1`
+reuse; internal nodes 0-based, file 1-based. Registered as `"sgb"` in
+`MfUsg.load()`, so SGB models are no longer silently skipped. `NPSGB>0`
+(named parameters) fails explicitly.
 
-**Workaround**: SGB can often be approximated by GHB or CHD.
+### QRT — Sink with Return Flow (`gwf2QRT8u.f`) — IMPLEMENTED
 
-### QRT — Sink with Return Flow (`gwf2QRT8u.f`)
-
-QRT8 is a flow package (analogous to DRT) that allows extracted water to be
-returned to other nodes, with optional transport concentration for the returned
-water, `IQCHANGEC`/`IQCHNGTYP` flow-reduction control, and `MXSPREADNDS`.
-There is no FloPy class. If a model uses QRT, `MfUsg.load()` silently skips it.
-
-**Workaround**: None available through FloPy. QRT-using models require manual
-file management.
+`MfUsgQrt` extracts water at sink nodes and returns a proportion to one or
+more recipient nodes (analogous to DRT). Per-sink `(node, q, rfprop)` with
+variable-length recipient-node lists (`NodQRT`, read/written via `U1DINT`),
+`CHANGEC`/`IQCHNGTYP` return-flow concentration-change type, AUX, and
+`ITMP/-1` reuse. `AUTOFLOWREDUCE` is preserved as an option. `NPQRT>0` and
+the `TRANSIENTQ` transient-flow time-series option fail explicitly.
+Registered as `"qrt"` in `MfUsg.load()`.
 
 ---
 

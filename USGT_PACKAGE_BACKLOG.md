@@ -128,8 +128,10 @@ FloPy classes: `MfUsgBcf`, `MfUsgLpf`
 
 Fortran: `gwf2bcf-lpf-u1.f`
 
-Status: partial. This is the clearest remaining package gap for programmatic
-authoring of Richards/TABRICH models.
+Status: **DONE** (2026-05-30). `IUZONTAB` + `RETCRVS` authored/loaded/written
+for BCF and LPF via shared `_tabrich.py`; LPF Richards arrays skipped under
+TABRICH; incomplete TABRICH write fails explicitly. Authoring + round-trip +
+shape-validation tests in `autotest/test_usg_transport.py`.
 
 Problem:
 
@@ -175,7 +177,10 @@ FloPy class: currently base `ModflowDrt`
 
 Fortran: `gwf2drt8u.f`
 
-Status: partial. Base MODFLOW DRT is not enough for USG-T transport authoring.
+Status: **DONE** (2026-05-30). `MfUsgDrt` (subclass of `ModflowDrt`) added and
+registered. Node-based EL+COND, RETURNFLOW single/spread recipients,
+`CHANGEC`/`IDCHNGTYP`, AUX, reuse; `NPDRT>0` fails explicitly; structured
+delegates to base. Authoring + round-trip + reuse tests added.
 
 Problem:
 
@@ -225,8 +230,10 @@ Status: not implemented.
 
 Problem:
 
-- SGB appears in USG-T 2.7 but has no package class or load registry support.
-- Models using SGB may be silently incomplete after `MfUsg.load()`.
+- **DONE** (2026-05-30): `MfUsgSgb` added (`flopy/mfusg/mfusgsgb.py`) and
+  registered as `"sgb"`. Node-based `(node, gradient)`, AUX, `ITMP/-1` reuse,
+  0-based internal / 1-based file, `NPSGB>0` explicit failure. Authoring +
+  round-trip + NAM-registry + parameter-failure tests added.
 
 Fortran facts to verify:
 
@@ -268,9 +275,11 @@ Status: not implemented.
 
 Problem:
 
-- QRT is absent from FloPy USG-T registry.
-- It overlaps conceptually with DRT but has its own package I/O and transport
-  return-flow behavior.
+- **DONE** (2026-05-30): `MfUsgQrt` added (`flopy/mfusg/mfusgqrt.py`) and
+  registered as `"qrt"`. Per-sink `(node, q, rfprop)` + recipient-node lists,
+  `CHANGEC`/`IQCHNGTYP`, AUX, reuse; `NPQRT>0` and `TRANSIENTQ` explicit
+  failures; shares `_usgt_returnflow.py` with DRT. Authoring (minimal,
+  return-flow concentration, multi-recipient) + round-trip + registry tests.
 
 Fortran facts to verify:
 

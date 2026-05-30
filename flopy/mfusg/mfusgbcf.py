@@ -16,6 +16,12 @@ from ..utils.utils_def import (
     get_util2d_shape_for_layer,
     type_from_iterable,
 )
+from ._tabrich import (
+    make_iuzontab,
+    read_tabrich,
+    validate_retcrvs,
+    write_tabrich,
+)
 from .mfusg import MfUsg
 
 
@@ -141,6 +147,8 @@ class MfUsgBcf(ModflowBcf):
         tabrich=False,
         nuzones=0,
         nutabrows=0,
+        iuzontab=None,
+        retcrvs=None,
         bubblept=False,
         fullydry=False,
         altsto=False,
@@ -207,6 +215,19 @@ class MfUsgBcf(ModflowBcf):
         self.fullydry = fullydry
         self.altsto = altsto
 
+        # TABRICH items 1c (IUZONTAB zone map) and 1d (RETCRVS curves).
+        # Stored if provided; completeness is enforced at write_file time so
+        # the package can still be used purely as model setup (e.g. enabling
+        # Richards mode for a dependent DPF) without authoring the curves.
+        if tabrich and iuzontab is not None:
+            self.iuzontab = make_iuzontab(model, iuzontab)
+        else:
+            self.iuzontab = None
+        if tabrich and retcrvs is not None:
+            self.retcrvs = validate_retcrvs(retcrvs, nuzones, nutabrows)
+        else:
+            self.retcrvs = None
+
         self.kv = kv
         self.anglex = anglex
         self.ksat = ksat
@@ -270,6 +291,16 @@ class MfUsgBcf(ModflowBcf):
         if self.altsto:
             f_obj.write(" ALTSTO")
         f_obj.write("\n")
+
+        # Items 1c/1d: TABRICH zone map and retention curves (before LAYCON).
+        # Fail explicitly rather than write an incomplete TABRICH file.
+        if self.tabrich:
+            if self.iuzontab is None or self.retcrvs is None:
+                raise ValueError(
+                    "Writing a TABRICH BCF file requires both iuzontab and "
+                    "retcrvs; got None. Provide both, or set tabrich=False."
+                )
+            write_tabrich(f_obj, self.iuzontab, self.retcrvs)
 
         # LAYCON array
         for layer in range(nlay):
@@ -403,8 +434,8 @@ class MfUsgBcf(ModflowBcf):
         if "TABRICH" in text_list:
             idx = text_list.index("TABRICH")
             tabrich = True
-            nuzones = float(text_list[idx + 1])
-            nutabrows = float(text_list[idx + 2])
+            nuzones = int(text_list[idx + 1])
+            nutabrows = int(text_list[idx + 2])
         else:
             tabrich = False
             nuzones = None
@@ -425,10 +456,13 @@ class MfUsgBcf(ModflowBcf):
         else:
             altsto = False
 
-        # item 1c and d  -- Not implemented
+        # items 1c (IUZONTAB) and 1d (RETCRVS), read before LAYCON
+        iuzontab = None
+        retcrvs = None
         if tabrich:
-            iuzontab = []
-            retcrvs = []
+            iuzontab, retcrvs = read_tabrich(
+                f_obj, model, nuzones, nutabrows, ext_unit_dict
+            )
 
         # LAYCON array
         laycon, intercellt = cls._load_laycon(f_obj, model)
@@ -493,6 +527,8 @@ class MfUsgBcf(ModflowBcf):
             tabrich=tabrich,
             nuzones=nuzones,
             nutabrows=nutabrows,
+            iuzontab=iuzontab,
+            retcrvs=retcrvs,
             bubblept=bubblept,
             fullydry=fullydry,
             altsto=altsto,

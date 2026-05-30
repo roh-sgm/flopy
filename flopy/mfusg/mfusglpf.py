@@ -20,6 +20,12 @@ from ..utils.utils_def import (
     get_unitnumber_from_ext_unit_dict,
     get_util2d_shape_for_layer,
 )
+from ._tabrich import (
+    make_iuzontab,
+    read_tabrich,
+    validate_retcrvs,
+    write_tabrich,
+)
 from .mfusg import MfUsg
 
 
@@ -248,6 +254,11 @@ class MfUsgLpf(ModflowLpf):
         novfc=False,
         bubblept=False,
         fullydry=False,
+        tabrich=False,
+        nuzones=0,
+        nutabrows=0,
+        iuzontab=None,
+        retcrvs=None,
         alpha=1.0,
         beta=7.0,
         sr=0.05,
@@ -347,6 +358,21 @@ class MfUsgLpf(ModflowLpf):
         self.bubblept = bubblept
         self.fullydry = fullydry
 
+        # TABRICH tabular Richards input (items 1c IUZONTAB, 1d RETCRVS).
+        # When active, RETCRVS replaces the per-layer alpha/beta/sr/brook
+        # arrays; completeness is enforced at write_file time.
+        self.tabrich = tabrich
+        self.nuzones = nuzones
+        self.nutabrows = nutabrows
+        if tabrich and iuzontab is not None:
+            self.iuzontab = make_iuzontab(model, iuzontab)
+        else:
+            self.iuzontab = None
+        if tabrich and retcrvs is not None:
+            self.retcrvs = validate_retcrvs(retcrvs, nuzones, nutabrows)
+        else:
+            self.retcrvs = None
+
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         if self.richards:
             self.alpha = Util3d(
@@ -426,15 +452,29 @@ class MfUsgLpf(ModflowLpf):
         f_obj.write(f"{self.heading}\n")
 
         # Item 1: IBCFCB, HDRY, NPLPF, <IKCFLAG>, OPTIONS
+        opts = self.options
+        if self.tabrich:
+            opts = f"{opts}TABRICH {self.nuzones} {self.nutabrows} "
         if self.parent.version == "mfusg" and not self.parent.structured:
             f_obj.write(
                 f" {self.ipakcb:9d} {self.hdry:9.5G} {self.nplpf:9d}"
-                f" {self.ikcflag:9d} {self.options:s}\n"
+                f" {self.ikcflag:9d} {opts:s}\n"
             )
         else:
             f_obj.write(
-                f" {self.ipakcb:9d} {self.hdry:9.5G} {self.nplpf:9d} {self.options}\n"
+                f" {self.ipakcb:9d} {self.hdry:9.5G} {self.nplpf:9d} {opts}\n"
             )
+
+        # Items 1c/1d: TABRICH zone map and retention curves (before LAYTYP).
+        # Fail explicitly rather than write an incomplete TABRICH file.
+        if self.tabrich:
+            if self.iuzontab is None or self.retcrvs is None:
+                raise ValueError(
+                    "Writing a TABRICH LPF file requires both iuzontab and "
+                    "retcrvs; got None. Provide both, or set tabrich=False."
+                )
+            write_tabrich(f_obj, self.iuzontab, self.retcrvs)
+
         # LAYTYP array
         f_obj.write(self.laytyp.string)
         # LAYAVG array
@@ -472,7 +512,7 @@ class MfUsgLpf(ModflowLpf):
                 if self.laywet[layer] != 0 and self.laytyp[layer] != 0:
                     f_obj.write(self.wetdry[layer].get_file_entry())
 
-            if self.richards:
+            if self.richards and not self.tabrich:
                 f_obj.write(self.alpha[layer].get_file_entry())
                 f_obj.write(self.beta[layer].get_file_entry())
                 f_obj.write(self.sr[layer].get_file_entry())
@@ -556,7 +596,18 @@ class MfUsgLpf(ModflowLpf):
             novfc,
             bubblept,
             fullydry,
+            tabrich,
+            nuzones,
+            nutabrows,
         ) = cls._load_item1(line, model)
+
+        # items 1c (IUZONTAB) and 1d (RETCRVS), read before LAYTYP
+        iuzontab = None
+        retcrvs = None
+        if tabrich:
+            iuzontab, retcrvs = read_tabrich(
+                f_obj, model, nuzones, nutabrows, ext_unit_dict
+            )
 
         (laytyp, layavg, chani, layvka, laywet, wetfct, iwetit, ihdwet, iwetdry) = (
             cls._load_items_2_to_7(f_obj, model)
@@ -587,6 +638,7 @@ class MfUsgLpf(ModflowLpf):
                 nplpf,
                 bubblept,
                 ext_unit_dict,
+                tabrich,
             )
         )
 
@@ -629,6 +681,11 @@ class MfUsgLpf(ModflowLpf):
             wetdry=wetdry,
             bubblept=bubblept,
             fullydry=fullydry,
+            tabrich=tabrich,
+            nuzones=nuzones,
+            nutabrows=nutabrows,
+            iuzontab=iuzontab,
+            retcrvs=retcrvs,
             alpha=alpha,
             beta=beta,
             sr=sr,
@@ -670,15 +727,17 @@ class MfUsgLpf(ModflowLpf):
         bubblept = "BUBBLEPT" in text_list
         fullydry = "FULLYDRY" in text_list
 
-        # Not implemented --- Richards equation uses a tabular input for the
-        # moisture retention and relative permeability curves
+        # TABRICH: tabular moisture-retention / relative-permeability curves
+        # (items 1c IUZONTAB and 1d RETCRVS are read separately, before LAYTYP)
         if "TABRICH" in text_list:
             i = text_list.index("TABRICH")
-            nuzones = np.float32(text_list[i + 1])
-            nutabrows = np.float32(text_list[i + 1])
+            tabrich = True
+            nuzones = int(text_list[i + 1])
+            nutabrows = int(text_list[i + 2])
         else:
-            nuzones = None
-            nutabrows = None
+            tabrich = False
+            nuzones = 0
+            nutabrows = 0
 
         return (
             ipakcb,
@@ -692,6 +751,9 @@ class MfUsgLpf(ModflowLpf):
             novfc,
             bubblept,
             fullydry,
+            tabrich,
+            nuzones,
+            nutabrows,
         )
 
     @staticmethod
@@ -839,6 +901,7 @@ class MfUsgLpf(ModflowLpf):
         nplpf,
         bubblept,
         ext_unit_dict,
+        tabrich=False,
     ):
         """Loads layer properties."""
         # parameters data
@@ -911,8 +974,8 @@ class MfUsgLpf(ModflowLpf):
                     f_obj, model, util2d_shape, np.float32, "wetdry", ext_unit_dict
                 )
 
-            # Richards equation
-            if richards:
+            # Richards equation (skipped under TABRICH: RETCRVS replaces these)
+            if richards and not tabrich:
                 if model.verbose:
                     print(f"   loading Richards equation layer {layer + 1:3d}...")
                 alpha[layer] = Util2d.load(

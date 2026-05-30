@@ -14,6 +14,22 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### USG-T 2.7 Priority-1 packages (2026-05-30)
+
+The four highest-value coverage gaps against the USG-T 2.7 Fortran source are
+now closed (parser + writer + from-scratch authoring tests + round-trip tests,
+all in `autotest/test_usg_transport.py`):
+
+| Package | File | What it does |
+|---|---|---|
+| `MfUsgSgb` | `flopy/mfusg/mfusgsgb.py` | **New.** Specified Gradient Boundary (`glo2sgbu1.f`). Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse. Registered as `"sgb"`, so `MfUsg.load()` no longer silently skips SGB. `NPSGB>0` fails explicitly. |
+| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` and `TRANSIENTQ` fail explicitly. Registered as `"qrt"`. |
+| `MfUsgDrt` | `flopy/mfusg/mfusgdrt.py` | **New** (replaces base `ModflowDrt` in the registry). DRT8 (`gwf2drt8u.f`): EL+COND, `RETURNFLOW` single recipient (`NR>0`) or `SPREAD` multi-node (`NR<0`, `U1DINT` block), `CHANGEC`/`IDCHNGTYP` transport, AUX, reuse. `NPDRT>0` fails explicitly; structured grids delegate to base `ModflowDrt`. |
+| `MfUsgBcf` / `MfUsgLpf` TABRICH | `flopy/mfusg/mfusgbcf.py`, `mfusglpf.py`, `_tabrich.py` | TABRICH items 1c (`IUZONTAB` zone map) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = capillary head / saturation / relative permeability) are now authored/loaded/written via a shared helper. For LPF the per-layer Richards arrays are skipped under TABRICH (matching `ITABRICH/=0`) and a token-index/`int` parse bug was fixed. Incomplete TABRICH writes fail explicitly. |
+
+Shared helpers: `flopy/mfusg/_usgt_returnflow.py` (DRT/QRT recipient-node
+`U1DINT` lists) and `flopy/mfusg/_tabrich.py` (BCF/LPF 1c/1d).
+
 ### Round-trip fixes (original five)
 
 | Branch | What it does |
