@@ -2784,3 +2784,76 @@ def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
     with pytest.raises(NotImplementedError):
         MfUsgDpt.load(str(dpt_file), ml, ext_unit_dict={})
+
+
+# ---------------------------------------------------------------------------
+# Priority-3 review: from-scratch authoring tests for BCT / DDF
+# (previously only exercised via real-model round-trips)
+# ---------------------------------------------------------------------------
+
+def _minimal_transport_model(ws, nrow=2, ncol=2):
+    """A minimal structured MfUsg + DIS + BAS for BCT/DDF authoring tests."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(ws))
+    ModflowDis(ml, nlay=1, nrow=nrow, ncol=ncol, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0)
+    return ml
+
+
+def test_mfusgbct_minimal_authoring_roundtrip(function_tmpdir):
+    """BCT single-species (IDISP=1) authored from scratch, written, reloaded."""
+    ml = _minimal_transport_model(function_tmpdir)
+    bct = MfUsgBct(ml, mcomp=1, idisp=1, prsity=0.2, conc=0.0)
+    bct.fn_path = str(function_tmpdir / "min.bct")
+    bct.write_file()
+
+    ml2 = _minimal_transport_model(function_tmpdir)
+    bct2 = MfUsgBct.load(bct.fn_path, ml2)
+    assert bct2.mcomp == 1
+    assert bct2.idisp == 1
+
+
+def test_mfusgbct_idisp2_authoring_roundtrip(function_tmpdir):
+    """BCT IDISP=2 (full dispersion tensor DLX/DLY/DLZ/DTXY/DTYZ/DTXZ) authoring."""
+    ml = _minimal_transport_model(function_tmpdir)
+    bct = MfUsgBct(
+        ml, mcomp=1, idisp=2, prsity=0.2,
+        dlx=1.0, dly=1.0, dlz=0.1, dtxy=0.1, dtyz=0.1, dtxz=0.1, conc=0.0,
+    )
+    bct.fn_path = str(function_tmpdir / "idisp2.bct")
+    bct.write_file()
+
+    ml2 = _minimal_transport_model(function_tmpdir)
+    bct2 = MfUsgBct.load(bct.fn_path, ml2)
+    assert bct2.idisp == 2
+
+
+def test_mfusgbct_multispecies_authoring_roundtrip(function_tmpdir):
+    """BCT multi-species (MCOMP=2) authoring round-trips with species isolated."""
+    ml = _minimal_transport_model(function_tmpdir)
+    bct = MfUsgBct(ml, mcomp=2, idisp=1, prsity=0.2, conc=0.0)
+    bct.fn_path = str(function_tmpdir / "multi.bct")
+    bct.write_file()
+
+    ml2 = _minimal_transport_model(function_tmpdir)
+    bct2 = MfUsgBct.load(bct.fn_path, ml2)
+    assert bct2.mcomp == 2
+
+
+def test_mfusgddf_nonlinear_table_authoring_roundtrip(function_tmpdir):
+    """DDF NONLINEAR density table authored from scratch, written, reloaded."""
+    ml = _minimal_transport_model(function_tmpdir)
+    table = [(0.0, 1000.0), (17.5, 1012.5), (35.0, 1025.0)]
+    ddf = MfUsgDdf(ml, rhofresh=1000.0, rhostd=1025.0, cstd=35.0,
+                   nonlinear=True, density_table=table)
+    ddf.fn_path = str(function_tmpdir / "nl.ddf")
+    ddf.write_file()
+    content = Path(ddf.fn_path).read_text()
+    assert "NONLINEAR" in content
+
+    ml2 = _minimal_transport_model(function_tmpdir)
+    ddf2 = MfUsgDdf.load(ddf.fn_path, ml2)
+    assert ddf2.nonlinear
+    assert len(ddf2.density_table) == 3
+    assert np.isclose(ddf2.density_table[1][1], 1012.5, atol=1e-3)

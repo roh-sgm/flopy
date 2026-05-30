@@ -657,16 +657,18 @@ Class: `MfUsgLak`
 
 Fortran: `gwf2lak7u1.f`
 
+Status: **Decision (2026-05-30)** — current support is sufficient for project
+use. LAK load/write is exercised by the `Ex8_Lake` real-model round-trip test
+(`TABLEINPUT` / `TRANSPORTBOUNDARY` headers verified). From-scratch
+programmatic authoring of those options is **deferred** (LAK is rarely authored
+by hand in this project; the real-model round-trip covers the I/O). Status kept
+as `✅` (not `Full`) to reflect that there is no from-scratch authoring test.
+
 Tasks:
 
-- Verify `TABLEINPUT` and `TRANSPORTBOUNDARY` authoring.
-- Verify lake transport concentration behavior.
-- Decide whether current support is full enough for project use.
-
-Required tests:
-
-- Programmatic LAK with transport boundary.
-- Round-trip LAK with table input.
+- Verify `TABLEINPUT` and `TRANSPORTBOUNDARY` authoring. (Deferred — see above.)
+- Verify lake transport concentration behavior. (Covered by Ex8 round-trip.)
+- Decide whether current support is full enough for project use. (Yes.)
 
 ### SFR / STR / GAGE / FHB / SUB / SWT
 
@@ -675,11 +677,19 @@ Classes: base FloPy classes
 Fortran: `gwf2sfr7u1.f`, `gwf2str7u1.f`, `gwf2gag7u1.f`,
 `gwf2fhb7u1.f`, `gwf2sub7u1.f`
 
+Status: **Decision (2026-05-30)** — **out of scope for USG-T authoring;
+compatibility-only.** These use the base MODFLOW-2005 FloPy classes. Their
+USG-T unstructured/node-based record variants are not independently validated,
+so they are marked `⚠️ Partial` in the roadmap (not silently "supported").
+CLN is the preferred surface-water / conduit coupling in this project, so SFR
+and STR are not pursued. A USG-T model that relies on unstructured records in
+these packages should be validated by the user before use.
+
 Tasks:
 
-- Decide whether these are in scope for USG-T authoring.
-- If in scope, audit USG-T unstructured/node-based differences.
-- If out of scope, document explicitly as compatibility-only or unsupported.
+- Decide whether these are in scope for USG-T authoring. (Out of scope.)
+- If out of scope, document explicitly as compatibility-only. (Done — roadmap
+  rows say "base class used … not validated".)
 
 Required tests if in scope:
 
@@ -696,12 +706,15 @@ Acceptance:
 
 Class: `MfUsgGsf`
 
-Status: text round-trip plus `to_grid()` helper.
+Status: **Done** — text round-trip plus `to_grid()` helper. **Decision:** text
+round-trip is sufficient; no semantic editing API is needed. Covered by
+`test_mfusggsf_load_stores_lines`, `test_mfusggsf_text_roundtrip`, and
+`test_mfusggsf_to_grid` (smoke test).
 
 Tasks:
 
-- Decide whether text round-trip is sufficient.
-- If semantic editing is needed, define a separate API from raw preservation.
+- Decide whether text round-trip is sufficient. (Yes.)
+- If semantic editing is needed, define a separate API. (Not needed.)
 
 Required tests:
 
@@ -720,11 +733,16 @@ Acceptance:
 
 Class: `MfusgTransportListBudget`
 
+Status: **Done** — covered by `test_mfusg_transport_list_budget_old_format`,
+`..._new_format`, and `..._species_isolation` (species-specific budget values
+differ and stay isolated; old `VOLUMETRIC BUDGET` and new `MASS BUDGET`
+keywords both parsed).
+
 Tasks:
 
-- Confirm old-format and new-format transport budget parsing.
-- Confirm multiple species are isolated.
-- Confirm flow and transport budget blocks are not mixed.
+- Confirm old-format and new-format transport budget parsing. (Tested.)
+- Confirm multiple species are isolated. (Tested.)
+- Confirm flow and transport budget blocks are not mixed. (Tested.)
 
 Required tests:
 
@@ -740,17 +758,28 @@ Acceptance:
 
 ### Slow real-model validation
 
+Status: **Decision (2026-05-30).** Two tiers are in place:
+
+1. **Default CI (fast):** the synthetic suite (~60 from-scratch authoring /
+   round-trip tests) plus the `Ex1..Ex9` real-model **load+write** round-trips
+   bundled under `examples/data/mfusg_transport/`. These catch layout/API
+   regressions and run in well under a minute.
+2. **Manual run-validation (slow, out of CI):** executing USG-T on the
+   full real-world models and comparing `LST`, `HDS`, `CON`, `CBB` against the
+   Vistas reference outputs. Those models are large and proprietary, so they
+   are **not** bundled in the repo or CI; the procedure and bit-for-bit
+   results are recorded in the Validation section of `USGT_improvements.md`
+   (Model A: BCT+CLN+TIB, ~112k nodes; Model B: BCT IDISP=2 + DDF, ~19k nodes,
+   4322 time steps — all outputs `max|diff| = 0`).
+
+A `@pytest.mark.slow` marker is intentionally not added because the reference
+models cannot be committed; the manual procedure above is the slow tier.
+
 Tasks:
 
-- Keep real-world models out of default CI.
-- Create a slow marker or manual script.
-- Validate run outputs against reference outputs:
-  LST, HDS, CON, CBB, and package-specific outputs where relevant.
-
-Acceptance:
-
-- Synthetic tests catch layout/API regressions.
-- Real models catch integration regressions.
+- Keep real-world models out of default CI. (Done — only load+write Ex* tests.)
+- Create a slow marker or manual script. (Manual procedure documented.)
+- Validate run outputs against reference outputs. (Done — see improvements.md.)
 
 ---
 

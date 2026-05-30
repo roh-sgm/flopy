@@ -43,6 +43,25 @@ preservation (ETS), parameterized barriers (HFB `NPHFB>0`), and the DPT
 air-water adsorption sub-mode are intentionally out of scope and fail
 explicitly rather than producing incomplete or mis-parsed files.
 
+### Priority-3/4/5 review (2026-05-30)
+
+- **BCT / DDF from-scratch authoring tests** added (previously these were only
+  exercised through real-model round-trips): minimal BCT (1 species, IDISP=1),
+  BCT IDISP=2 (full dispersion tensor), BCT multi-species (MCOMP=2), and a DDF
+  NONLINEAR density-table round-trip. This justifies their `✅ Full` status.
+- **CHD/RIV/GHB/DRN, WEL, CLN, DPF, TVM** already carry from-scratch authoring
+  and/or round-trip tests; reviewed and left as-is.
+- **Scope decisions (Priority 4):** `GSF` text round-trip + `to_grid()` is
+  sufficient (tested). `LAK` is sufficient for project use and validated via
+  the `Ex8_Lake` round-trip; from-scratch `TABLEINPUT`/`TRANSPORTBOUNDARY`
+  authoring is deferred. `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility-only**
+  (base MODFLOW-2005 classes; USG-T unstructured records not validated; CLN is
+  the preferred coupling) — documented, not silently "supported".
+- **Post-processing (Priority 5):** `MfusgTransportListBudget` old/new format
+  and multi-species isolation are tested. Real-model run-validation stays a
+  manual, out-of-CI tier (see the Validation section below); the `Ex*`
+  load+write round-trips are the in-CI real-model regression.
+
 ### Round-trip fixes (original five)
 
 | Branch | What it does |

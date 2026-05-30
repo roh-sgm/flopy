@@ -48,10 +48,10 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | ETS | `ETS` | `MfUsgEts` | ⚠️ Partial | `gwf2ets8u1.f` | Authoring tested for NETSEG=1, NETSEG>1 (PXDP/PETM), NETSOP=2 (IEVT), and IESFACTOR transport flag. Parameterized files load as expanded non-parametric arrays (`NPETS=0` on write); programmatic `npets>0` fails explicitly. Parameter-syntax preservation intentionally not supported (Expanded valid write). **Verified** |
 | HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static, structured static, and `TRANSIENT_HFB` IHFBRD = >0/0/-1 semantics implemented and tested. `NPHFB>0` (named parameters) fails explicitly on load/write. **Verified** |
 | GNC | `GNC` | `MfUsgGnc` | ✅ | `disu2gncn1.f` | **Verified** |
-| LAK | `LAK` | `MfUsgLak` | ✅ | `gwf2lak7u1.f` | TABLEINPUT and TRANSPORTBOUNDARY options; lake transport coupling. **Verified (header)** |
+| LAK | `LAK` | `MfUsgLak` | ✅ | `gwf2lak7u1.f` | TABLEINPUT and TRANSPORTBOUNDARY options; lake transport coupling. Load+write validated via the `Ex8_Lake` round-trip; from-scratch authoring of those options deferred (not `Full`). **Verified (header + Ex8 round-trip)** |
 | CLN | `CLN` | `MfUsgCln` | ✅ | `cln2basu1.f`, `cln2props1.f` | `PROCESSCCF`/`ICLNGWCB`, `ISHAPE` node records, and `GENERAL_SEC` tabular shape authoring/load/write tested. **Verified** |
-| DDF | `DDF` | `MfUsgDdf` | ✅ Full | `density.f` | RHOFRESH/RHOSTD/CSTD/ITHICKAV/IMPHDD/ISHARP + NONLINEAR table. ISHARP added 2026-05-20. **Verified** |
-| BCT | `BCT` | `MfUsgBct` | ✅ Full | `glo2btnu1.f` | IDISP=1 and IDISP=2 (DLX/DLY/DLZ/DTXY/DTYZ/DTXZ), all 19 item 1a fields, A-W_ADSORB, ICHAIN, ISPRCT, ISOLUBILITY, IMULTI, IMASSWR options. **Verified** |
+| DDF | `DDF` | `MfUsgDdf` | ✅ Full | `density.f` | RHOFRESH/RHOSTD/CSTD/ITHICKAV/IMPHDD/ISHARP + NONLINEAR table. From-scratch NONLINEAR-table authoring test added (2026-05-30). **Verified** |
+| BCT | `BCT` | `MfUsgBct` | ✅ Full | `glo2btnu1.f` | IDISP=1 and IDISP=2 (DLX/DLY/DLZ/DTXY/DTYZ/DTXZ), all 19 item 1a fields, A-W_ADSORB, ICHAIN, ISPRCT, ISOLUBILITY, IMULTI, IMASSWR options. From-scratch authoring tests (1-species, IDISP=2, multi-species) added 2026-05-30. **Verified** |
 | PCB | `PCB` | `MfUsgPcb` | ✅ | — | **Verified (field order)** |
 | MDT | `MDT` | `MfUsgMdt` | ✅ | — | Not independently verified against Fortran source |
 | DPF | `DPF` | `MfUsgDpf` | ✅ | `gwf2dpf1u1.f` | `FRAHK`, `IUZONTABIM`, conditional `SC2IM`, immobile Richards arrays, and programmatic `model.idpf` covered by focused tests. f_obj bug fixed 2026-05-20. **Verified** |
