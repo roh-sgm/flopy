@@ -18,6 +18,33 @@ disagree, follow the Fortran.
 
 ---
 
+## Closeout status (2026-05-30)
+
+All priority tiers below have been worked through. Commits on `develop`:
+`b0de152f` (checkpoint of prior P0/P2/P3 work), `ad7de360` (P1 packages),
+`036d714d` (P2 closeout), `6429dcc6` (P3/P4/P5 closeout).
+
+- **P0 — guardrails:** accepted (NAM external paths; CHD/RIV/GHB/DRN/WEL 0-based
+  nodes), tested.
+- **P1 — highest-value gaps:** **done.** `MfUsgSgb`, `MfUsgQrt`, `MfUsgDrt`
+  (new/registered), and BCF/LPF `TABRICH` 1c/1d. Each: parser + writer +
+  authoring + round-trip tests, verified against Fortran.
+- **P2 — partial packages:** ETS (NETSEG/NETSOP/IESFACTOR authoring; params
+  expand or fail explicitly), HFB (static/transient/IHFBRD; `NPHFB>0` fails),
+  BAS (`RICHARDS_HP`, `IHM` implemented), DPT (`A-W_ADSORBIM` explicit fail),
+  TIB (raw/text decision kept).
+- **P3 — review:** BCT (1-species/IDISP=2/multi-species) and DDF (NONLINEAR
+  table) from-scratch authoring tests added; other Full packages reviewed.
+- **P4 — base-class packages:** GSF sufficient; LAK validated via Ex8 (authoring
+  deferred); SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented).
+- **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
+  real-model run-validation is a documented manual tier (Ex* loads in CI).
+
+Test status: **80 tests pass** in `autotest/test_usg_transport.py` (synthetic
+authoring/round-trip + `Ex1..Ex9` real-model load+write), ~40 s.
+
+---
+
 ## Non-Negotiable Design Rules
 
 1. Internal FloPy data is 0-based. USG-T files are 1-based.
@@ -69,7 +96,10 @@ Every agent should complete these gates in order:
 
 ### NAM and external files
 
-Status: patch candidate exists.
+Status: **Accepted** — committed and covered by
+`test_modflow_name_file_preserves_input_external_paths`; input `DATA`
+subdirectories are preserved and outputs rebased to basenames. (Checkpoint
+`b0de152f`.)
 
 Why it matters: upstream-ready package support can still fail if name-file
 rewriting breaks external input paths.
@@ -95,7 +125,9 @@ Acceptance:
 
 ### Shared USG-T list packages
 
-Status: patch candidates for CHD/RIV/GHB/DRN/WEL exist.
+Status: **Accepted** — CHD/RIV/GHB/DRN/WEL keep `node` 0-based internally and
+write 1-based; AUX concentrations and `-1` reuse are covered by authoring and
+round-trip tests. (Checkpoint `b0de152f`; SGB/QRT/DRT follow the same pattern.)
 
 Why it matters: many USG-T packages use node-based records. One indexing error
 silently shifts the physical target cell.
