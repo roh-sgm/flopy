@@ -430,6 +430,7 @@ class MfUsgBas(Package):
             ibound=ibound,
             strt=strt,
             ixsec=ixsec,
+            structured=structured,
             ifrefm=ifrefm,
             ichflg=ichflg,
             stoper=stoper,

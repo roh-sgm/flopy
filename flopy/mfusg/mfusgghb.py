@@ -151,7 +151,7 @@ class MfUsgGhb(ModflowGhb):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node'])}"
+                        row = (f" {int(rec['node']) + 1}"
                                f"  {float(rec['bhead']):.6f}"
                                f"  {float(rec['cond']):.6e}")
                         for name in self.dtype.names[n_base:]:
@@ -238,6 +238,7 @@ class MfUsgGhb(ModflowGhb):
                         current[idx][name] = (
                             int(vals[j]) if kind in ("i", "u") else float(vals[j])
                         )
+                    current[idx]["node"] -= 1
                 spd[kper] = current
 
         if openfile:

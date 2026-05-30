@@ -19,14 +19,8 @@ for models that load, rewrite, and run through MfUsg without manual patching.
 
 from __future__ import annotations
 
-import re
-
 from ..pakbase import Package
 from .mfusg import MfUsg
-
-# Matches a stress-period header: 3 or 6 integers on a single line.
-# Used to split the TIB body into per-SP blocks.
-_HDR = re.compile(r"^\s*-?\d+(?:\s+-?\d+){2,5}\s*$")
 
 
 class MfUsgTib(Package):
@@ -60,6 +54,7 @@ class MfUsgTib(Package):
         self,
         model,
         blocks=None,
+        raw_body=None,
         extension="tib",
         unitnumber=None,
         filenames=None,
@@ -85,6 +80,7 @@ class MfUsgTib(Package):
         self._generate_heading()
 
         self.blocks = dict(blocks) if blocks else {}
+        self.raw_body = raw_body
         self.parent.add_package(self)
 
     def write_file(self, check=False):
@@ -92,6 +88,11 @@ class MfUsgTib(Package):
         nper = self.parent.nper
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
+            if self.raw_body is not None:
+                f.write(self.raw_body)
+                if self.raw_body and not self.raw_body.endswith("\n"):
+                    f.write("\n")
+                return
             for kper in range(nper):
                 block = self.blocks.get(kper, "")
                 if not block:
@@ -137,18 +138,7 @@ class MfUsgTib(Package):
         while i < len(lines) and lines[i].lstrip().startswith("#"):
             i += 1
 
-        blocks: dict[int, str] = {}
-        kper = 0
-        current: list[str] = []
-        for ln in lines[i:]:
-            if _HDR.match(ln):
-                if current:
-                    blocks[kper] = "".join(current)
-                    kper += 1
-                    current = []
-            current.append(ln)
-        if current:
-            blocks[kper] = "".join(current)
+        raw_body = "".join(lines[i:])
 
         # Construct package
         # Preserve original unit + filename from NAM
@@ -165,7 +155,7 @@ class MfUsgTib(Package):
 
         return cls(
             model,
-            blocks=blocks,
+            raw_body=raw_body,
             unitnumber=unitnumber,
             filenames=filenames,
         )

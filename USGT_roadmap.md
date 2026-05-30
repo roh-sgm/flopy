@@ -19,6 +19,10 @@ and/or round-trip testing only.
 | ⚠️ Partial | Implemented but with known gaps (see Known Gaps section) |
 | ❌ | Not implemented |
 
+For USG-T packages, `Full` requires both semantic load/write behavior and
+from-scratch programmatic authoring tests. A package that only preserves existing
+text is classified as raw/text round-trip, even if it can write a runnable file.
+
 ---
 
 ## Package coverage table
@@ -27,32 +31,32 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 
 | Package | CUNIT | FloPy class | Status | Fortran file | Notes |
 |---------|-------|-------------|--------|--------------|-------|
-| BAS6 | `BAS6` | `MfUsgBas` | ⚠️ Partial | `gwf2basu1.f` | All standard options implemented. See Gap §1 for write-only omissions. **Verified** |
+| BAS6 | `BAS6` | `MfUsgBas` | ⚠️ Partial | `gwf2basu1.f` | Standard USG-T options load/write tested, including UNSTRUCTURED, PRINTTIME, SHOWPROGRESS, DPIN/DPOUT/DPIO, SY-ALL. See Gap §1 for remaining niche options. **Verified** |
 | DIS | `DIS` | `MfUsgDis` | ✅ | `mfusg.f` | Structured grid discretization |
 | DISU | `DISU` | `MfUsgDisU` | ✅ | `mfusg.f` | Unstructured. `free_format_npl=10` default prevents buffer overflow for large grids. **Verified** |
 | BCF6 | `BCF6` | `MfUsgBcf` | ⚠️ Partial | `gwf2bcf-lpf-u1.f` | TABRICH items 1c/1d (zone map + retention curves) not loaded/written. See Gap §2. **Verified** |
 | LPF | `LPF` | `MfUsgLpf` | ⚠️ Partial | `gwf2bcf-lpf-u1.f` | Same TABRICH gap as BCF. Richards (LAYTYP=5) arrays correctly load/write after `Util2d.__eq__` fix (2026-05-20). **Verified** |
 | SMS | `SMS` | `MfUsgSms` | ✅ Full | `glo2sms-u1.f` | All solver options. **Verified** |
 | OC | `OC` | `MfUsgOc` | ✅ | — | ATS adaptive time-stepping and BOOTSTRAPPING supported |
-| CHD | `CHD` | `MfUsgChd` | ✅ Full | `gwf2chd7u1.f` | Node-based unstructured. AUX transport concentrations. float64 precision. **Verified** |
-| WEL | `WEL` | `MfUsgWel` | ⚠️ Partial | `gwf2wel7u1.f` | See Gap §3 (ITMPCLN) |
-| DRN | `DRN` | `MfUsgDrn` | ✅ Full | `gwf2drn7u1.f` | Node-based unstructured. AUX transport concentrations. **Verified** |
-| RIV | `RIV` | `MfUsgRiv` | ✅ Full | `gwf2riv7u1.f` | Node-based, AUX concentrations, optional `irch` column, float64 precision. **Verified** |
-| GHB | `GHB` | `MfUsgGhb` | ✅ Full | `gwf2ghb7u1.f` | Node-based, AUX transport concentrations. **Verified** |
+| CHD | `CHD` | `MfUsgChd` | ✅ Full | `gwf2chd7u1.f` | Node-based unstructured. Internal nodes 0-based, file I/O 1-based. AUX transport concentrations. Programmatic authoring tested. float64 precision. **Verified** |
+| WEL | `WEL` | `MfUsgWel` | ✅ Full | `gwf2wel7u1.f` | Rates on GWF and CLN nodes, AUX transport concentrations, `ITMPCLN`, and programmatic authoring tested. CLN connectivity is handled by `MfUsgCln`. **Verified** |
+| DRN | `DRN` | `MfUsgDrn` | ✅ Full | `gwf2drn7u1.f` | Node-based unstructured. Internal nodes 0-based, file I/O 1-based. AUX transport concentrations. Programmatic authoring tested. **Verified** |
+| RIV | `RIV` | `MfUsgRiv` | ✅ Full | `gwf2riv7u1.f` | Node-based, internal nodes 0-based, file I/O 1-based, AUX concentrations, optional `irch` column, programmatic authoring tested, float64 precision. **Verified** |
+| GHB | `GHB` | `MfUsgGhb` | ✅ Full | `gwf2ghb7u1.f` | Node-based, internal nodes 0-based, file I/O 1-based, AUX transport concentrations. Programmatic authoring tested. **Verified** |
 | RCH | `RCH` | `MfUsgRch` | ✅ Full | `gwf2rch8u1.f` | INRCHZONES crash bug fixed (2026-05-20). INCONC/INIRCH spacing fixed. **Verified** |
 | EVT | `EVT` | `MfUsgEvt` | ✅ | `gwf2evt8u1.f` | **Verified** |
-| ETS | `ETS` | `MfUsgEts` | ✅ Full | `gwf2ets8u1.f` | NETSEG>1 segment arrays, IESFACTOR transport flag. **Verified** |
-| HFB | `HFB6` | `MfUsgHfb` | ✅ Full | `gwf2hfb7u1.f` | Node-based. `TRANSIENT_HFB` keyword and per-SP IHFBRD. **Verified** |
+| ETS | `ETS` | `MfUsgEts` | ⚠️ Partial | `gwf2ets8u1.f` | NETSEG>1 segment arrays, IESFACTOR transport flag. Parameterized files load as expanded non-parametric arrays (`NPETS=0` on write); parameter syntax preservation is not supported. **Verified** |
+| HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static and `TRANSIENT_HFB` IHFBRD semantics implemented. `NPHFB>0` is not supported. **Verified** |
 | GNC | `GNC` | `MfUsgGnc` | ✅ | `disu2gncn1.f` | **Verified** |
 | LAK | `LAK` | `MfUsgLak` | ✅ | `gwf2lak7u1.f` | TABLEINPUT and TRANSPORTBOUNDARY options; lake transport coupling. **Verified (header)** |
-| CLN | `CLN` | `MfUsgCln` | ⚠️ Partial | `cln2basu1.f` | See Gap §4 (ISHAPE, PROCESSCCF, NGENSHPTYP). **Verified** |
+| CLN | `CLN` | `MfUsgCln` | ✅ | `cln2basu1.f`, `cln2props1.f` | `PROCESSCCF`/`ICLNGWCB`, `ISHAPE` node records, and `GENERAL_SEC` tabular shape authoring/load/write tested. **Verified** |
 | DDF | `DDF` | `MfUsgDdf` | ✅ Full | `density.f` | RHOFRESH/RHOSTD/CSTD/ITHICKAV/IMPHDD/ISHARP + NONLINEAR table. ISHARP added 2026-05-20. **Verified** |
 | BCT | `BCT` | `MfUsgBct` | ✅ Full | `glo2btnu1.f` | IDISP=1 and IDISP=2 (DLX/DLY/DLZ/DTXY/DTYZ/DTXZ), all 19 item 1a fields, A-W_ADSORB, ICHAIN, ISPRCT, ISOLUBILITY, IMULTI, IMASSWR options. **Verified** |
 | PCB | `PCB` | `MfUsgPcb` | ✅ | — | **Verified (field order)** |
 | MDT | `MDT` | `MfUsgMdt` | ✅ | — | Not independently verified against Fortran source |
-| DPF | `DPF` | `MfUsgDpf` | ⚠️ Partial | `gwf2dpf1u1.f` | See Gap §5 (SC2IM conditional, Richards arrays). f_obj bug fixed 2026-05-20. **Verified** |
+| DPF | `DPF` | `MfUsgDpf` | ✅ | `gwf2dpf1u1.f` | `FRAHK`, `IUZONTABIM`, conditional `SC2IM`, immobile Richards arrays, and programmatic `model.idpf` covered by focused tests. f_obj bug fixed 2026-05-20. **Verified** |
 | DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition fixed 2026-05-20 (now checks both IDPF and IDISPIM). See Gap §6 for remaining items. **Verified** |
-| TIB | `TIB` | `MfUsgTib` | ✅ | — | Text round-tripper; sufficient for all load/write of existing files |
+| TIB | `TIB` | `MfUsgTib` | ✅ | `glo2basu1.f` | Raw-body text round-tripper; avoids parsing `U1DINT` node-list continuation lines. Sufficient for load/write of existing files |
 | TVM | `TVM` | `MfUsgTvm` | ✅ Full | `tvmu2.f` | Full semantic implementation (2026-05-20). HK/VKA/SS/SY/DDFTR/POR; transport-aware field counts; nper+1 boundaries; 20 autotests pass. **Verified** |
 | GSF | `GSF` | `MfUsgGsf` | ✅ | — | Text round-trip. `to_grid()` delegates to `UnstructuredGrid.from_gridspec()` |
 | SFR | `SFR` | base `ModflowSfr2` | ⚠️ Partial | `gwf2sfr7u1.f` | Base class used. Unstructured node-indexed items not independently validated in USG-T context |
@@ -95,17 +99,20 @@ FloPy class.
 
 ## Known gaps within implemented packages
 
-### Gap §1 — BAS6: options parsed on load but not written
+### Gap §1 — BAS6: remaining niche options
 
-The following BAS6 options are correctly detected and stored on `load`, but
-`write_file` never emits them. Models loaded with any of these flags will lose
-them silently on round-trip:
+Resolved for the standard options previously at risk: `UNSTRUCTURED`, `PRINTFV`,
+`CONVERGE`, `FREE`, `PRINTTIME`, `SHOWPROGRESS`, `RICHARDS`, `DPIN`, `DPOUT`,
+`DPIO`, `SY-ALL`, and `STOPERROR` are covered by programmatic write + load tests.
 
-`DPIN`, `DPOUT`, `DPIO` (double-precision binary output),
-`PRINTTIME`, `SHOWPROGRESS`, `SY-ALL`
+Remaining niche options to model explicitly if needed:
 
-`RICHARDS` is separately handled: it IS written by `MfUsgBas` (confirmed). The
-LPF Richards bug (LAYTYP=5 condition always False due to `Util2d.__eq__`) was
+- `RICHARDS_HP`: Fortran variant of Richards mode where starting values are
+  pressure heads.
+- `IHM [IUIHM]`: runtime coupling/debug option for integrated hydrologic model
+  workflows.
+
+The LPF Richards bug (LAYTYP=5 condition always False due to `Util2d.__eq__`) was
 fixed (2026-05-20) — see `USGT_improvements.md`.
 
 ### Gap §2 — BCF/LPF: TABRICH items 1c and 1d not implemented
@@ -124,47 +131,40 @@ BCF/LPF file that USG-T cannot run.
 **Source**: `gwf2bcf-lpf-u1.f` lines that read `IUZONTAB` and call
 `U2DREL(RETCRVS, ...)` in the TABRICH block.
 
-### Gap §3 — WEL: ITMPCLN missing from per-SP header
+### Gap §3 — WEL: ITMPCLN resolved
 
-USG-T WEL writes a 3-token per-SP header `MXACT ITMPCWL ITMPCLN`. FloPy emits
-only `MXACT ITMPCWL`. USG-T defaults `ITMPCLN=0` when absent, so this is
-harmless if there are no CLN injection wells, but the written file does not
-exactly match Vistas output.
+USG-T WEL writes a 3-token per-SP header `ITMP NP ITMPCLN` when CLN is active.
+`MfUsgWel` now has focused tests proving from-scratch authoring of stress-period
+rates on GWF and CLN nodes, correct `ITMPCLN` headers, AUX concentration output,
+and 0-based internal node storage after reload. Connectivity, geometry, and
+CLN-GWF links remain the responsibility of `MfUsgCln`.
 
-### Gap §4 — CLN: three missing features (verified against `cln2basu1.f`)
+### Gap §4 — CLN: PROCESSCCF, ISHAPE, and GENERAL_SEC resolved
 
-1. **ISHAPE in 9-field node records** (`NRECTYP>0` or `NGENSHPTYP>0`): When
-   conduit types use the new format, the Fortran reads a 9-field record
-   `(IFNO, ISHAPE, IFTYPE, IFDIR, FLENG, FELEV, FANGLE, IFLIN, ICCWADI)`.
-   The FloPy `cln_dtypes.py` dtype has 8 fields — ISHAPE is absent. Any CLN file
-   with `nrectyp>0` will fail to round-trip: FloPy writes 8 fields, Fortran reads
-   9, causing a field shift for all subsequent node records.
+CLN now supports the USG-T 2.7 features verified against `cln2basu1.f` and
+`cln2props1.f`:
 
-2. **PROCESSCCF option**: When present on the OPTIONS2 line, this flag activates a
-   separate CLN-GWF exchange flow budget file (`ICLNGWCB` unit number). FloPy CLN
-   has no parameter for it and neither reads nor writes it.
+- `PROCESSCCF` / `ICLNGWCB` on the `OPTIONS` line.
+- 9-field node-property records with `ISHAPE` when `NRECTYP>0` or
+  `NGENSHPTYP>0`.
+- `GENERAL_SEC NGENSHPTYP NGENTABROWS` plus per-type
+  `(FDEPTH, FAREA, FWETPERI, FTOPWID)` tables.
 
-3. **NGENSHPTYP**: The general conduit shape type (tabular depth/area/wetted-perimeter
-   input) is not implemented. The Fortran reads `NGENSHPTYP` from OPTIONS2 and then
-   reads a table `(FDEPTH, FAREA, FWETPERI, FTOPWID)` per shape type. FloPy CLN
-   has no parameter or parsing for this.
+Focused tests cover from-scratch authoring, file output, and reload.
 
-### Gap §5 — DPF: SC2IM conditionality and Richards arrays (verified against `gwf2dpf1u1.f`)
+### Gap §5 — DPF: SC2IM, Richards arrays, and IUZONTABIM resolved
 
-1. **SC2IM written unconditionally**: Fortran reads SC2IM only when `LAYCON(K)≠0`
-   (line 174). FloPy writes it for every layer. For a DPF model with confined layers
-   (`LAYCON=0`), the written file contains an extra array that Fortran does not
-   consume, causing a read offset and corrupting all arrays that follow. This bug
-   does not affect models where all layers are convertible (LAYCON=1,3,4), which
-   is the common case.
+DPF now matches the key conditional reads in `gwf2dpf1u1.f`:
 
-2. **Richards arrays absent**: When `LAYCON(K)=5`, Fortran reads `alphaIM`,
-   `betaIM`, `srIM`, `brookIM`, and optionally `bPIM` (lines 180–187). These are
-   declared in the Fortran module but commented out in FloPy. A DPF model with
-   Richards-equation layers cannot produce a valid DPF file with this implementation.
+- `SC2IM` is written/loaded only for layers where `LAYCON(K) != 0`.
+- For `LAYCON(K)=5` with `TABRICH` off, `alphaIM`, `betaIM`, `srIM`, `brookIM`,
+  and optional `bPIM` are written/loaded.
+- For `ITABRICH != 0`, the immobile-domain `IUZONTABIM` node map is
+  written/loaded before `IBOUNDIM`.
+- Programmatic construction sets `model.idpf = 1`, so dependent packages see
+  DPF as active.
 
-3. **IUZONTABIM**: Tabular moisture retention for the immobile domain is also
-   commented out. Affects only `ITABRICH≠0` DPF models.
+Focused tests cover from-scratch authoring, file output, and reload.
 
 ### Gap §6 — DPT: air-water interface adsorption immobile domain
 
@@ -184,6 +184,28 @@ The base `ModflowDrt` class is used. It does not support:
 These are DRT8 USG-T additions not present in MODFLOW-2005 DRT. A model using
 DRT with transport will load correctly (the static barriers are format-compatible)
 but cannot specify return-flow concentrations.
+
+### Gap §8 — ETS: parameter syntax is expanded, not preserved
+
+USG-T ETS supports named parameters (`NPETS > 0`) for the ETSR array. FloPy now
+loads those definitions through the shared MODFLOW parameter reader and expands
+them into concrete ETSR arrays. The returned `MfUsgEts` object writes a valid
+non-parametric ETS file with `NPETS=0`.
+
+This is intentionally classified as partial: preserving the original parameter
+definitions and active-parameter records is not implemented. Programmatic
+`MfUsgEts(..., npets > 0).write_file()` raises `NotImplementedError` rather than
+writing a misleading or incomplete parametric package.
+
+### Gap §9 — HFB: parameterized barriers are not supported
+
+For non-parametric HFB, the implementation matches `gwf2hfb7u1.f`: static HFB
+reads/writes `NHFBNP` rows once, and transient HFB reads `IHFBRD` for every stress
+period, using `IHFBRD <= 0` as reuse/no-read and `IHFBRD > 0` as the flag to read
+exactly `NHFBNP` rows.
+
+Parameterized HFB (`NPHFB > 0`) is not implemented yet. Load and write fail
+explicitly for that case until parameter expansion/preservation is added.
 
 ---
 

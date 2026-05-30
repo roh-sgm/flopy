@@ -812,7 +812,7 @@ class MfUsgBct(Package):
         # item 2 ICBUND
         if kwargs["icbndflg"] == 0:
             kwargs["icbund"] = cls._load_prop_arrays(
-                f_obj, model, nlay, np.float32, "icbund", ext_unit_dict
+                f_obj, model, nlay, np.int32, "icbund", ext_unit_dict
             )
 
         # item 3 PRSITY

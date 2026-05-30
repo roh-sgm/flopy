@@ -467,8 +467,10 @@ class Modflow(BaseModel):
         for unit, (filetype, fname) in self._skipped_nam_entries.items():
             f_nam.write(f"{filetype:14s} {unit:5d}  {fname}\n")
 
-        # write the external files — use basename so paths are always relative
-        # to model_ws regardless of where the model was originally loaded from.
+        # write the external files.  Preserve input paths exactly as stored
+        # (including subdirectories); output paths are rebased by
+        # BaseModel._reset_external when change_model_ws(reset_external=True)
+        # is used.
         for u, f, b, o in zip(
             self.external_units,
             self.external_fnames,
@@ -477,7 +479,7 @@ class Modflow(BaseModel):
         ):
             if u == 0:
                 continue
-            fname = os.path.basename(f)
+            fname = os.path.basename(f) if o else f
             replace_text = " REPLACE" if o else ""
             if b:
                 f_nam.write(f"DATA(BINARY)   {u:5d}  {fname}{replace_text}\n")

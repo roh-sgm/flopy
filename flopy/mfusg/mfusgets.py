@@ -192,6 +192,12 @@ class MfUsgEts(Package):
 
     def write_file(self, f=None):
         """Write the ETS package file."""
+        if self.npets > 0:
+            raise NotImplementedError(
+                "MfUsgEts.write_file cannot preserve ETS parameter definitions. "
+                "Load parameterized ETS files with MfUsgEts.load, which expands "
+                "parameters to arrays and writes NPETS=0."
+            )
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         close_on_exit = f is None
         if f is None:
@@ -504,6 +510,10 @@ class MfUsgEts(Package):
             )
             _, filenames[1] = model.get_ext_dict_attr(ext_unit_dict, unit=ipakcb)
 
+        # Parameter definitions are expanded to concrete ETSR arrays on load.
+        # The returned package writes a valid non-parametric ETS file.
+        npets_out = 0 if pak_parms is not None else npets
+
         return cls(
             model,
             netsop=netsop,
@@ -513,7 +523,7 @@ class MfUsgEts(Package):
             exdp=exdp_d,
             ievt=ievt_d if netsop == 2 else 1,
             netseg=netseg,
-            npets=npets,
+            npets=npets_out,
             iesfactor=iesfactor,
             esfactor=esfactor,
             pxdp=pxdp_d if nseg_int > 0 else None,

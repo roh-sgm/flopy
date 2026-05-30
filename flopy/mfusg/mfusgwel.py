@@ -173,6 +173,8 @@ class MfUsgWel(ModflowWel):
             f"but received type: {type(model)}."
         )
         assert isinstance(model, MfUsg), msg
+        if options is None:
+            options = []
 
         # set filenames
         filenames = self._prepare_filenames(filenames)

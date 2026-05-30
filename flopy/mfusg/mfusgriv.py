@@ -165,7 +165,7 @@ class MfUsgRiv(ModflowRiv):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node'])}"
+                        row = (f" {int(rec['node']) + 1}"
                                f"  {float(rec['stage']):.6f}"
                                f"  {float(rec['cond']):.6e}"
                                f"  {float(rec['rbot']):.6f}")
@@ -306,3 +306,4 @@ def _fill_row(arr, i, vals, dtype):
     for j, name in enumerate(dtype.names):
         kind = dtype[name].kind
         arr[i][name] = int(vals[j]) if kind in ("i", "u") else float(vals[j])
+    arr[i]["node"] -= 1

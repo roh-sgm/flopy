@@ -7,7 +7,7 @@ class MfUsgClnDtypes:
     """Defines MfUsgCln dtypes for various CLN geometries."""
 
     @staticmethod
-    def get_clnnode_dtype():
+    def get_clnnode_dtype(has_shape=False):
         """Define dtype of CLN node properties.
 
         Returns
@@ -15,6 +15,28 @@ class MfUsgClnDtypes:
         dtype
 
         """
+        if has_shape:
+            dtype = np.dtype(
+                [
+                    ("ifno", int),  # node number
+                    ("ishape", int),  # 1=circular, 2=rectangular, 3=general
+                    ("iftyp", int),  # type-index within shape
+                    ("ifdir", int),  # directional index
+                    ("fleng", np.float32),  # length
+                    ("felev", np.float32),  # elevation of the bottom
+                    ("fangle", np.float32),  # angle
+                    ("iflin", int),  # flag of flow conditions
+                    ("iccwadi", int),  # flag of vertical flow correction
+                    ("x1", np.float32),  # coordinates
+                    ("y1", np.float32),  # coordinates
+                    ("z1", np.float32),  # coordinates
+                    ("x2", np.float32),  # coordinates
+                    ("y2", np.float32),  # coordinates
+                    ("z2", np.float32),  # coordinates
+                ]
+            )
+            return dtype
+
         dtype = np.dtype(
             [
                 ("ifno", int),  # node number

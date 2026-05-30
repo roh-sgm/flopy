@@ -20,22 +20,36 @@ upstream flopy. They live here while testing continues.
 |---|---|
 | `usgt/rch-transport-fix` | In `MfUsgRch.write_file`, `"# Stress period {kper + 1}"` becomes an f-string so the comment substitutes per SP, and `INRECH` is followed by `INIRCH` only when `NRCHOP == 2` (matching the read path). Both details were harmless at runtime but left the written RCH file not round-trippable. |
 | `usgt/cln-load-none-unit` | In `MfUsgCln.__init__`, treat `None` entries in `unitnumber` as 0 instead of calling `int(None)`. This comes up when a CLN-declared output unit is not declared in the NAM's `ext_unit_dict`. |
-| `usgt/tib-package` | Adds a new `MfUsgTib` class for the Transient Ibound package. Minimal text-preserving round-trip — enough to load + write an existing TIB. |
+| `usgt/tib-package` | Adds a new `MfUsgTib` class for the Transient Ibound package. Raw-body text-preserving round-trip — enough to load + write an existing TIB without mis-parsing `U1DINT` continuation lines. |
 | `usgt/bas-preserve-unstructured` | `MfUsgBas.write_file` re-emits the `UNSTRUCTURED` keyword when `parent.structured is False`. The load side already reads the token; adding it to write closes the round-trip. |
-| `usgt/nam-rebase-output-paths` | `BaseModel._reset_external` stores the basename of output files on `change_model_ws`. Previously the absolute paths from the original workspace were preserved, so a relocated model wrote its binary output back into the source folder. On one real test this inflated runtime roughly 15× because of remote-folder I/O. |
+| `usgt/nam-rebase-output-paths` | `BaseModel._reset_external` stores the basename of output files on `change_model_ws`, and `Modflow.write_name_file` preserves subdirectories for external input files. Previously the NAM writer also reduced inputs to basenames, breaking valid `DATA` paths in subfolders. |
 
 ### New packages and utilities
 
 | What | File | What it does |
 |---|---|---|
-| `MfUsgChd` | `flopy/mfusg/mfusgchd.py` | CHD package for unstructured USG-T grids. Node-based (replaces k/i/j), supports AUX concentration variables. Full `load` and `write_file` for the USG-T format (`NACT    Stress Period N` headers, `-1` reuse). |
-| `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Supports AUX concentration and a trailing reach-ID column (`irch`) that is written positionally without being declared as AUX. `irch` is auto-detected from the first data row when loading. |
-| `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Distinct from the simpler EVT: supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays, the `IESFACTOR` transport flag, and named parameters. Full `load` and `write_file`. |
-| `MfUsgGhb` | `flopy/mfusg/mfusgghb.py` | GHB package for unstructured USG-T grids. Node-based, supports AUX concentration variables, stores `ipakcb` (CBC unit). Full `load` and `write_file`. Load registry now maps `"ghb"` to `MfUsgGhb`. |
-| `MfUsgDrn` | `flopy/mfusg/mfusgdrn.py` | DRN package for unstructured USG-T grids. Same pattern as GHB: node-based, AUX support, `ipakcb`. Full `load` and `write_file`. Load registry maps `"drn"` to `MfUsgDrn`. |
-| `MfUsgTvm` | `flopy/mfusg/mfusgtvm.py` | TVM2 (Time-Variant Materials) package. Text-block round-trip like `MfUsgTib`: global header (7-integer flags line) and per-SP blocks stored verbatim. SP blocks detected by `Stress Period` keyword. Missing SPs emit all-zero headers on write. |
+| `MfUsgChd` | `flopy/mfusg/mfusgchd.py` | CHD package for unstructured USG-T grids. Node-based (replaces k/i/j), supports AUX concentration variables. Internal `node` values are 0-based and file I/O is 1-based. Full `load` and `write_file` for the USG-T format (`NACT    Stress Period N` headers, `-1` reuse). |
+| `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration and a trailing reach-ID column (`irch`) that is written positionally without being declared as AUX. `irch` is auto-detected from the first data row when loading. |
+| `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays and the `IESFACTOR` transport flag. Parameterized ETS files load by expanding parameters to concrete arrays and then write as valid non-parametric `NPETS=0`; preserving parameter syntax is not yet supported. |
+| `MfUsgGhb` | `flopy/mfusg/mfusgghb.py` | GHB package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration variables, stores `ipakcb` (CBC unit). Full `load` and `write_file`. Load registry now maps `"ghb"` to `MfUsgGhb`. |
+| `MfUsgDrn` | `flopy/mfusg/mfusgdrn.py` | DRN package for unstructured USG-T grids. Same pattern as GHB: internal `node` values are 0-based, file I/O is 1-based, AUX support, `ipakcb`. Full `load` and `write_file`. Load registry maps `"drn"` to `MfUsgDrn`. |
+| `MfUsgTvm` | `flopy/mfusg/mfusgtvm.py` | TVM2 (Time-Variant Materials) package. Semantic implementation: global interpolation controls plus nper+1 stress-period boundary records, with 0-based internal nodes and 1-based file I/O. Missing boundaries emit all-zero headers on write. |
 | `MfUsgGsf` | `flopy/mfusg/mfusgsf.py` | Grid Specification File wrapper. Text round-trip (stores raw lines). `to_grid()` delegates to `UnstructuredGrid.from_gridspec()` for full geometric parsing. Load registry maps `"gsf"` to `MfUsgGsf`. |
 | `MfusgTransportListBudget` | `flopy/utils/mflistfile.py` | Reads transport species budget from a USG-T listing file for a single species. Handles both **old** USG-T format (transport blocks use `VOLUMETRIC BUDGET`, same keyword as flow) and **new** format (transport blocks use `MASS BUDGET`). Instantiate once per species: `MfusgTransportListBudget("model.lst", species=2)`. Returns the same recarrays / DataFrames as `MfusgListBudget`. |
+
+Authoring note: semantic packages are expected to support direct construction
+from Python/numpy inputs, not only `load()` + `write_file()` round-trips. The
+USG-T boundary package tests now include from-scratch CHD/RIV/GHB/DRN creation
+with 0-based internal nodes and 1-based file output.
+
+### Authoring-focused fixes (2026-05-29)
+
+| File | Fix |
+|---|---|
+| `flopy/mfusg/mfusgbas.py` | `MfUsgBas.load` now preserves the `UNSTRUCTURED` option on the constructed package. Programmatic tests cover write/load of `PRINTFV`, `CONVERGE`, `UNSTRUCTURED`, `FREE`, `PRINTTIME`, `SHOWPROGRESS`, `RICHARDS`, `DPIN`, `DPOUT`, `DPIO`, `SY-ALL`, and `STOPERROR`. |
+| `flopy/mfusg/mfusgwel.py` | `options=None` is normalized before AUX auto-registration, so programmatic WEL authoring with AUX fields no longer crashes. Tests cover WEL rates assigned to GWF and CLN nodes, `ITMP NP ITMPCLN` headers, AUX concentrations, and 0-based internal node storage after reload. CLN connectivity stays in the CLN package. |
+| `flopy/mfusg/mfusgcln.py`, `flopy/mfusg/cln_dtypes.py` | CLN now supports direct authoring and reload of `PROCESSCCF`/`ICLNGWCB`, `GENERAL_SEC`, and the 9-field `ISHAPE` node-property format used by rectangular/general conduit shapes. |
+| `flopy/mfusg/mfusgdpf.py` | DPF now sets `model.idpf=1` when constructed programmatically, writes/loads optional `FRAHK`, supports `IUZONTABIM` for TABRICH models, writes `SC2IM` only for convertible layers, and supports immobile Richards arrays (`alphaIM`, `betaIM`, `srIM`, `brookIM`, optional `bPIM`). |
 
 ### Density-coupled round-trip fixes (2026-05-19)
 
@@ -53,7 +67,7 @@ density-coupled USG-T 2.7 model (BCT IDISP=2, DDF, 1382 stress periods):
 
 | File | Fix |
 |---|---|
-| `flopy/mfusg/mfusgbct.py` | Removed a stray `print()` left from development. Fixed file-handle management in `write_file`: the file is now closed only when opened internally (`close_on_exit` flag), so callers that pass an open handle are not surprised. |
+| `flopy/mfusg/mfusgbct.py` | Removed a stray `print()` left from development. Fixed file-handle management in `write_file`: the file is now closed only when opened internally (`close_on_exit` flag), so callers that pass an open handle are not surprised. `ICBUND` now loads as `np.int32`, so round-trip writes integer constants instead of `1.000000E+00` values that USG-T rejects. |
 
 ### Fortran source audit, new implementations, and bug fixes (2026-05-20)
 
@@ -64,7 +78,7 @@ All packages cross-referenced against the USG-Transport 2.7.0 Fortran source cod
 
 | File | What it does |
 |---|---|
-| `flopy/mfusg/mfusghfb.py` | Full HFB6 (Hydraulic Flow Barrier) implementation for unstructured USG-T grids. Extends `ModflowHfb` with: (a) node-based `(node1, node2, hydchr)` unstructured format, (b) `TRANSIENT_HFB` keyword and per-SP `IHFBRD` flag + optional updated barrier data. Full `load` and `write_file`. |
+| `flopy/mfusg/mfusghfb.py` | HFB6 (Hydraulic Flow Barrier) implementation for unstructured USG-T grids. Extends `ModflowHfb` with: (a) node-based `(node1, node2, hydchr)` unstructured format, (b) `TRANSIENT_HFB` keyword and the Fortran `IHFBRD` reuse/read flag semantics. Non-parametric static and transient HFB load/write are semantic; parameterized HFB (`NPHFB > 0`) now fails explicitly until preservation/expansion is implemented. |
 
 #### New: `MfUsgTvm` — TVM2 full semantic implementation
 

@@ -87,18 +87,19 @@ class MfUsgDpf(Package):
         ipakcb=0,
         idpfhd=0,
         idpfdd=0,
-        # iuzontabim=0,
+        frahk=False,
+        iuzontabim=0,
         iboundim=0,
         hnewim=0.0,
         phif=0.0,
         ddftr=0.0,
         sc1im=0.0,
         sc2im=0.0,
-        # alphaim=0.0,
-        # betaim=0.0,
-        # srim=0.0,
-        # brookim=0.0,
-        # bpim=0.0,
+        alphaim=1.0,
+        betaim=7.0,
+        srim=0.05,
+        brookim=6.0,
+        bpim=0.0,
         extension="dpf",
         unitnumber=None,
         filenames=None,
@@ -127,51 +128,51 @@ class MfUsgDpf(Package):
         self.ipakcb = ipakcb
         self.idpfhd = idpfhd
         self.idpfdd = idpfdd
+        self.frahk = frahk
 
-        model.idpf = 0
+        model.idpf = 1
 
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
+        shape = (nlay, nrow, ncol)
+        self._laycon = self._get_laycon(model)
+        self._tabrich = self._has_tabrich(model)
+        self._richards_layers = np.asarray(self._laycon) == 5
 
-        # if self.parent.tabrich:
-        #     self.iuzontabim = Util3d(
-        #         model, (nlay, nrow, ncol), np.int32, iuzontabim, name="iuzontabim"
-        #     )
+        if self._tabrich:
+            self.iuzontabim = Util2d(
+                model,
+                (self._get_nodes(model),),
+                np.int32,
+                iuzontabim,
+                name="iuzontabim",
+                locat=self.unit_number[0],
+            )
 
         self.iboundim = Util3d(
-            model, (nlay, nrow, ncol), np.float32, iboundim, name="iboundim"
+            model, shape, np.int32, iboundim, name="iboundim"
         )
 
         self.hnewim = Util3d(
-            model, (nlay, nrow, ncol), np.float32, hnewim, name="hnewim"
+            model, shape, np.float32, hnewim, name="hnewim"
         )
 
-        self.phif = Util3d(model, (nlay, nrow, ncol), np.float32, phif, name="phif")
+        self.phif = Util3d(model, shape, np.float32, phif, name="phif")
 
-        self.ddftr = Util3d(model, (nlay, nrow, ncol), np.float32, ddftr, name="ddftr")
+        self.ddftr = Util3d(model, shape, np.float32, ddftr, name="ddftr")
 
-        self.sc1im = Util3d(model, (nlay, nrow, ncol), np.float32, sc1im, name="sc1im")
+        self.sc1im = Util3d(model, shape, np.float32, sc1im, name="sc1im")
 
-        self.sc2im = Util3d(model, (nlay, nrow, ncol), np.float32, sc2im, name="sc2im")
+        self.sc2im = Util3d(model, shape, np.float32, sc2im, name="sc2im")
 
-        # self.alphaim = Util3d(
-        #     model, (nlay, nrow, ncol), np.float32, alphaim, name="alphaim"
-        # )
-
-        # self.betaim = Util3d(
-        #     model, (nlay, nrow, ncol), np.float32, betaim, name="betaim"
-        # )
-
-        # self.srim = Util3d(
-        #     model, (nlay, nrow, ncol), np.float32, srim, name="srim"
-        # )
-
-        # self.brookim = Util3d(
-        #     model, (nlay, nrow, ncol), np.float32, brookim, name="brookim"
-        # )
-
-        # self.bpim = Util3d(
-        #     model, (nlay, nrow, ncol), np.float32, bpim, name="bpim"
-        # )
+        if np.any(self._richards_layers) and not self._tabrich:
+            self.alphaim = Util3d(
+                model, shape, np.float32, alphaim, name="alphaim"
+            )
+            self.betaim = Util3d(model, shape, np.float32, betaim, name="betaim")
+            self.srim = Util3d(model, shape, np.float32, srim, name="srim")
+            self.brookim = Util3d(model, shape, np.float32, brookim, name="brookim")
+            if self._has_bubblept(model):
+                self.bpim = Util3d(model, shape, np.float32, bpim, name="bpim")
 
         if add_package:
             self.parent.add_package(self)
@@ -196,14 +197,28 @@ class MfUsgDpf(Package):
         #        f_obj.write(f"{self.heading}\n")
 
         # Item 0: IPAKCB, IdpfCON
-        f_obj.write(f" {self.ipakcb:9d} {self.idpfhd:9d} {self.idpfdd:9d} \n")
+        f_obj.write(f" {self.ipakcb:9d} {self.idpfhd:9d} {self.idpfdd:9d}")
+        if self.frahk:
+            f_obj.write(" FRAHK")
+        f_obj.write(" \n")
 
+        if self._tabrich:
+            f_obj.write(self.iuzontabim.get_file_entry())
         f_obj.write(self.iboundim.get_file_entry())
         f_obj.write(self.hnewim.get_file_entry())
         f_obj.write(self.phif.get_file_entry())
         f_obj.write(self.ddftr.get_file_entry())
         f_obj.write(self.sc1im.get_file_entry())
-        f_obj.write(self.sc2im.get_file_entry())
+        for layer in self._iter_convertible_layers():
+            f_obj.write(self.sc2im[layer].get_file_entry())
+        if np.any(self._richards_layers) and not self._tabrich:
+            for layer in self._iter_richards_layers():
+                f_obj.write(self.alphaim[layer].get_file_entry())
+                f_obj.write(self.betaim[layer].get_file_entry())
+                f_obj.write(self.srim[layer].get_file_entry())
+                f_obj.write(self.brookim[layer].get_file_entry())
+                if hasattr(self, "bpim"):
+                    f_obj.write(self.bpim[layer].get_file_entry())
 
         # close the file
         f_obj.close()
@@ -269,12 +284,22 @@ class MfUsgDpf(Package):
         for i, (v, c) in enumerate(vars.items()):
             kwargs[v] = c(t[i].strip())
             # print(f"{v}={kwargs[v]}\n")
+        kwargs["frahk"] = "FRAHK" in t[3:]
+
+        laycon = cls._get_laycon(model)
+        tabrich = cls._has_tabrich(model)
+        richards_layers = np.asarray(laycon) == 5
 
         # item 1b
-        # if self.parent.tabrich:
-        # kwargs["iuzontabim"] = cls._load_prop_arrays(
-        #     f_obj, model, nlay, np.int32, "iuzontabim", ext_unit_dict
-        # )
+        if tabrich:
+            kwargs["iuzontabim"] = Util2d.load(
+                f_obj,
+                model,
+                (cls._get_nodes(model),),
+                np.int32,
+                "iuzontabim",
+                ext_unit_dict,
+            )
 
         kwargs["iboundim"] = cls._load_prop_arrays(
             f_obj, model, nlay, np.int32, "iboundim", ext_unit_dict
@@ -297,8 +322,62 @@ class MfUsgDpf(Package):
         )
 
         kwargs["sc2im"] = cls._load_prop_arrays(
-            f_obj, model, nlay, np.float32, "sc2im", ext_unit_dict
+            f_obj,
+            model,
+            nlay,
+            np.float32,
+            "sc2im",
+            ext_unit_dict,
+            active_layers=np.asarray(laycon) != 0,
         )
+
+        if np.any(richards_layers) and not tabrich:
+            kwargs["alphaim"] = cls._load_prop_arrays(
+                f_obj,
+                model,
+                nlay,
+                np.float32,
+                "alphaim",
+                ext_unit_dict,
+                active_layers=richards_layers,
+            )
+            kwargs["betaim"] = cls._load_prop_arrays(
+                f_obj,
+                model,
+                nlay,
+                np.float32,
+                "betaim",
+                ext_unit_dict,
+                active_layers=richards_layers,
+            )
+            kwargs["srim"] = cls._load_prop_arrays(
+                f_obj,
+                model,
+                nlay,
+                np.float32,
+                "srim",
+                ext_unit_dict,
+                active_layers=richards_layers,
+            )
+            kwargs["brookim"] = cls._load_prop_arrays(
+                f_obj,
+                model,
+                nlay,
+                np.float32,
+                "brookim",
+                ext_unit_dict,
+                active_layers=richards_layers,
+            )
+            if cls._has_bubblept(model):
+                kwargs["bpim"] = cls._load_prop_arrays(
+                    f_obj,
+                    model,
+                    nlay,
+                    np.float32,
+                    "bpim",
+                    ext_unit_dict,
+                    active_layers=richards_layers,
+                )
 
         f_obj.close()
         # set package unit number
@@ -309,16 +388,77 @@ class MfUsgDpf(Package):
         return cls(model, unitnumber=unitnumber, filenames=filenames, **kwargs)
 
     @staticmethod
-    def _load_prop_arrays(f_obj, model, nlay, dtype, name, ext_unit_dict):
+    def _load_prop_arrays(
+        f_obj, model, nlay, dtype, name, ext_unit_dict, active_layers=None
+    ):
         if model.verbose:
             print(f"   loading {name} ...")
+        if active_layers is None:
+            active_layers = np.ones(nlay, dtype=bool)
         prop_array = [0] * nlay
         for layer in range(nlay):
             util2d_shape = get_util2d_shape_for_layer(model, layer=layer)
-            prop_array[layer] = Util2d.load(
-                f_obj, model, util2d_shape, dtype, name, ext_unit_dict
-            )
+            if active_layers[layer]:
+                prop_array[layer] = Util2d.load(
+                    f_obj, model, util2d_shape, dtype, name, ext_unit_dict
+                )
+            else:
+                prop_array[layer] = Util2d(
+                    model,
+                    util2d_shape,
+                    dtype,
+                    0,
+                    name=name,
+                    locat=MfUsgDpf._defaultunit(),
+                )
         return prop_array
+
+    def _iter_convertible_layers(self):
+        for layer, laycon in enumerate(self._laycon):
+            if laycon != 0:
+                yield layer
+
+    def _iter_richards_layers(self):
+        for layer, is_richards in enumerate(self._richards_layers):
+            if is_richards:
+                yield layer
+
+    @staticmethod
+    def _get_laycon(model):
+        nlay = model.nlay
+        flow = model.get_package("BCF6") or model.get_package("BCF")
+        if flow is not None and hasattr(flow, "laycon"):
+            laycon = getattr(flow.laycon, "array", flow.laycon)
+            return np.asarray(laycon, dtype=np.int32)
+
+        flow = model.get_package("LPF")
+        if flow is not None and hasattr(flow, "laytyp"):
+            laytyp = getattr(flow.laytyp, "array", flow.laytyp)
+            return np.asarray(laytyp, dtype=np.int32)
+
+        return np.ones(nlay, dtype=np.int32)
+
+    @staticmethod
+    def _has_tabrich(model):
+        flow = model.get_package("BCF6") or model.get_package("BCF")
+        return flow is not None and bool(getattr(flow, "tabrich", False))
+
+    @staticmethod
+    def _has_bubblept(model):
+        flow = model.get_package("BCF6") or model.get_package("BCF")
+        if flow is None:
+            flow = model.get_package("LPF")
+        return flow is not None and bool(getattr(flow, "bubblept", False))
+
+    @staticmethod
+    def _get_nodes(model):
+        disu = model.get_package("DISU")
+        if disu is not None:
+            return int(disu.nodes)
+        nrow, ncol, nlay, _ = model.nrow_ncol_nlay_nper
+        if nrow is None:
+            return int(np.asarray(ncol).sum())
+        return int(nlay * nrow * ncol)
 
     @staticmethod
     def _ftype():

@@ -178,12 +178,26 @@ class MfUsgCln(Package):
         strt=1.0,  # initial head in CLN cells
         transient=False,  # OPTIONS: transient IBOUND for each stress period
         printiaja=False,  # OPTIONS: print IA_CLN and JA_CLN to listing file
+        processccf=False,  # OPTIONS: save CLN-GWF CCF budget separately
+        iclngwcb=None,  # OPTIONS PROCESSCCF unit number
         nrectyp=0,  # OPTIONS2: number of rectangular fracture types
         cln_rect=None,  # rectangular fracture properties
+        ngenshptyp=0,  # OPTIONS2: number of general-section types
+        ngentabrows=0,  # OPTIONS2: rows in each general-section table
+        cln_gen=None,  # general-section type properties
         bhe=False,  # OPTIONS2: borehole heat exchanger (BHE)
         grav=None,  # OPTIONS2: gravitational acceleration constant
         visk=None,  # OPTIONS2: kinematic viscosity of water
-        extension=["cln", "clncb", "clnhd", "clndd", "clnib", "clncn", "clnmb"],
+        extension=[
+            "cln",
+            "clncb",
+            "clnhd",
+            "clndd",
+            "clnib",
+            "clncn",
+            "clnmb",
+            "clngwcb",
+        ],
         unitnumber=None,
         filenames=None,
         **kwargs,
@@ -199,12 +213,19 @@ class MfUsgCln(Package):
         if unitnumber is None:
             unitnumber = self._defaultunit()
         elif isinstance(unitnumber, list):
-            if len(unitnumber) < 7:
-                for idx in range(len(unitnumber), 7):
+            if len(unitnumber) < len(extension):
+                for idx in range(len(unitnumber), len(extension)):
                     unitnumber.append(0)
+        if (
+            processccf
+            and iclngwcb is not None
+            and isinstance(unitnumber, list)
+            and unitnumber[7] == 0
+        ):
+            unitnumber[7] = iclngwcb
 
         # set filenames
-        filenames = self._prepare_filenames(filenames, num=7)
+        filenames = self._prepare_filenames(filenames, num=len(extension))
 
         # Call ancestor's init to set self.parent, extension, name and unit number
         super().__init__(
@@ -220,6 +241,7 @@ class MfUsgCln(Package):
         # Options
         self.transient = transient
         self.printiaja = printiaja
+        self.processccf = processccf
 
         for idx, attr in enumerate(extension[1:]):
             # unit may be None when a CLN-declared output unit is missing from the
@@ -255,7 +277,10 @@ class MfUsgCln(Package):
             )
 
         self.node_prop = self._make_recarray(
-            node_prop, dtype=MfUsgClnDtypes.get_clnnode_dtype()
+            node_prop,
+            dtype=MfUsgClnDtypes.get_clnnode_dtype(
+                has_shape=(nrectyp > 0 or ngenshptyp > 0)
+            ),
         )
 
         # Define CLN groundwater connections
@@ -280,6 +305,9 @@ class MfUsgCln(Package):
         self.cln_circ = cln_circ
         self.nrectyp = nrectyp
         self.cln_rect = cln_rect
+        self.ngenshptyp = ngenshptyp
+        self.ngentabrows = ngentabrows
+        self.cln_gen = cln_gen
         self.bhe = bhe
         self.grav = grav
         self.visk = visk
@@ -410,6 +438,7 @@ class MfUsgCln(Package):
             "clnib",
             "clncn",
             "clnmb",
+            "clngwcb",
         ]
 
     def _define_cln_networks(self, model):
@@ -496,13 +525,18 @@ class MfUsgCln(Package):
 
         # Rectangular conduit geometry types
         if self.nrectyp > 0:
-            if len(self.cln_rect) != self.nconduityp:
+            if self.cln_rect is None or len(self.cln_rect) != self.nrectyp:
                 raise Exception(
                     "mfcln: Number of rectangular properties not equal nrectyp"
                 )
             self.cln_rect = self._make_recarray(
                 self.cln_rect, dtype=MfUsgClnDtypes.get_clnrect_dtype(self.bhe)
             )
+
+        if self.ngenshptyp > 0:
+            if self.cln_gen is None:
+                raise Exception("mfcln: General-section properties must be provided")
+            self.cln_gen = self._make_cln_gen(self.cln_gen)
 
     @property
     def cln_nodes(self):
@@ -565,6 +599,9 @@ class MfUsgCln(Package):
                 f_cln, self.cln_rect, fmt=fmt_string(self.cln_rect, free), delimiter=""
             )
 
+        if self.ngenshptyp > 0:
+            self._write_cln_gen(f_cln)
+
         f_cln.write(self.ibound.get_file_entry())
         f_cln.write(self.strt.get_file_entry())
 
@@ -574,12 +611,14 @@ class MfUsgCln(Package):
 
     def _write_items_0_1(self, f_cln):
         """Writes cln items 0 and 1."""
-        if self.transient or self.printiaja:
+        if self.transient or self.printiaja or self.processccf:
             f_cln.write("OPTIONS   ")
             if self.transient:
                 f_cln.write("TRANSIENT ")
             if self.printiaja:
                 f_cln.write("PRINTIAJA ")
+            if self.processccf:
+                f_cln.write(f"PROCESSCCF {self.iclngwcb:d} ")
             f_cln.write("\n")
 
         f_cln.write(
@@ -590,6 +629,10 @@ class MfUsgCln(Package):
 
         if self.nrectyp > 0:
             f_cln.write(f" RECTANGULAR {self.nrectyp:d}")
+        if self.ngenshptyp > 0:
+            f_cln.write(
+                f" GENERAL_SEC {self.ngenshptyp:d} {self.ngentabrows:d}"
+            )
         if self.bhe:
             f_cln.write(" BHEDETAIL ")
         if self.iclncn != 0:
@@ -675,8 +718,12 @@ class MfUsgCln(Package):
             iclnib,
             nclngwc,
             nconduityp,
+            processccf,
+            iclngwcb,
             nrectyp,
             cln_rect,
+            ngenshptyp,
+            ngentabrows,
             bhe,
             iclncn,
             iclnmb,
@@ -706,6 +753,12 @@ class MfUsgCln(Package):
                 print("   Reading cln_rect...")
             cln_rect = cls._read_prop(f, nrectyp)
 
+        cln_gen = None
+        if ngenshptyp > 0:
+            if model.verbose:
+                print("   Reading cln_gen...")
+            cln_gen = cls._read_cln_gen(f, ngenshptyp, ngentabrows)
+
         if model.verbose:
             print("   Reading ibound...")
         ibound = Util2d.load(f, model, (nclnnds, 1), np.int32, "ibound", ext_unit_dict)
@@ -734,13 +787,21 @@ class MfUsgCln(Package):
         # set package unit number
         # reset unit numbers
         unitnumber = MfUsgCln._defaultunit()
-        filenames = [None] * 7
+        filenames = [None] * len(unitnumber)
         if ext_unit_dict is not None:
             unitnumber[0], filenames[0] = model.get_ext_dict_attr(
                 ext_unit_dict, filetype=cls._ftype()
             )
-            file_unit_items = [iclncb, iclnhd, iclndd, iclnib, iclncn, iclnmb]
-            funcs = [abs] + [int] * 3 + [abs] * 2
+            file_unit_items = [
+                iclncb,
+                iclnhd,
+                iclndd,
+                iclnib,
+                iclncn,
+                iclnmb,
+                iclngwcb,
+            ]
+            funcs = [abs] + [int] * 3 + [abs] * 3
             for idx, (item, func) in enumerate(zip(file_unit_items, funcs)):
                 if item > 0:
                     (unitnumber[idx + 1], filenames[idx + 1]) = model.get_ext_dict_attr(
@@ -767,8 +828,13 @@ class MfUsgCln(Package):
             strt=strt,
             transient=transient,
             printiaja=printiaja,
+            processccf=processccf,
+            iclngwcb=iclngwcb,
             nrectyp=nrectyp,
             cln_rect=cln_rect,
+            ngenshptyp=ngenshptyp,
+            ngentabrows=ngentabrows,
+            cln_gen=cln_gen,
             grav=grav,
             visk=visk,
             bhe=bhe,
@@ -786,6 +852,8 @@ class MfUsgCln(Package):
         # Options
         transient = False
         printiaja = False
+        processccf = False
+        iclngwcb = 0
         line = f_obj.readline().upper()
         while line.find("#") >= 0:
             line = f_obj.readline().upper()
@@ -793,6 +861,10 @@ class MfUsgCln(Package):
             line_text = line.strip().split()
             transient = bool("TRANSIENT" in line_text)
             printiaja = bool("PRINTIAJA" in line_text)
+            processccf = bool("PROCESSCCF" in line_text)
+            if processccf:
+                idx = line_text.index("PROCESSCCF")
+                iclngwcb = int(line_text[idx + 1])
             line = f_obj.readline().upper()
 
         line_text = line.strip().split()
@@ -808,6 +880,13 @@ class MfUsgCln(Package):
         if "RECTANGULAR" in line_text:
             idx = line_text.index("RECTANGULAR")
             nrectyp = int(line_text[idx + 1])
+
+        ngenshptyp = 0
+        ngentabrows = 0
+        if "GENERAL_SEC" in line_text:
+            idx = line_text.index("GENERAL_SEC")
+            ngenshptyp = int(line_text[idx + 1])
+            ngentabrows = int(line_text[idx + 2])
 
         bhe = bool("BHEDETAIL" in line_text)
 
@@ -837,7 +916,9 @@ class MfUsgCln(Package):
                 f"   iclncb {iclncb}\n   iclnhd {iclnhd}\n",
                 f"   iclndd {iclndd}\n   iclnib {iclnib}\n",
                 f"   nclngwc {nclngwc}\n   TRANSIENT {transient}\n",
-                f"   PRINTIAJA {printiaja}\n   RECTANGULAR {nrectyp}\n",
+                f"   PRINTIAJA {printiaja}\n   PROCESSCCF {processccf}\n",
+                f"   ICLNGWCB {iclngwcb}\n   RECTANGULAR {nrectyp}\n",
+                f"   GENERAL_SEC {ngenshptyp} {ngentabrows}\n",
                 f"   BHEDETAIL {bhe}\n   SAVECLNCON {iclncn}\n",
                 f"   SAVECLNMAS {iclnmb}\n   GRAVITY {grav}\n",
                 f"   VISCOSITY {visk}",
@@ -854,8 +935,12 @@ class MfUsgCln(Package):
             iclnib,
             nclngwc,
             nconduityp,
+            processccf,
+            iclngwcb,
             nrectyp,
             cln_rect,
+            ngenshptyp,
+            ngentabrows,
             bhe,
             iclncn,
             iclnmb,
@@ -965,7 +1050,7 @@ class MfUsgCln(Package):
 
     @staticmethod
     def _defaultunit():
-        return [71, 0, 0, 0, 0, 0, 0]
+        return [71, 0, 0, 0, 0, 0, 0, 0]
 
     @staticmethod
     def _is_float(string):
@@ -978,6 +1063,60 @@ class MfUsgCln(Package):
             return False
         else:
             return True
+
+    @staticmethod
+    def _make_cln_gen(cln_gen):
+        """Normalise general-section properties.
+
+        Each entry is ``(type_id, conduitk, table)`` where table rows are
+        ``depth, area, wetted_perimeter, top_width``.
+        """
+        normalised = []
+        for entry in cln_gen:
+            if isinstance(entry, dict):
+                type_id = entry.get(
+                    "type_id",
+                    entry.get("itype", entry.get("ifno", entry.get("igenty"))),
+                )
+                conduitk = entry.get("conduitk")
+                table = entry.get("table")
+            else:
+                type_id, conduitk, table = entry
+
+            if type_id is None or conduitk is None or table is None:
+                raise ValueError(
+                    "mfcln: general-section entries need type_id, conduitk, and table"
+                )
+
+            normalised.append(
+                (int(type_id), float(conduitk), np.asarray(table, dtype=np.float32))
+            )
+        return normalised
+
+    def _write_cln_gen(self, f_cln):
+        """Write GENERAL_SEC type properties."""
+        for type_id, conduitk, table in self.cln_gen:
+            if table.shape != (self.ngentabrows, 4):
+                raise ValueError(
+                    "mfcln: general-section table shape must be "
+                    f"({self.ngentabrows}, 4)"
+                )
+            f_cln.write(f" {type_id:9d} {conduitk:16.9G}\n")
+            for row in table:
+                f_cln.write(
+                    f" {row[0]:16.9G} {row[1]:16.9G}"
+                    f" {row[2]:16.9G} {row[3]:16.9G}\n"
+                )
+
+    @classmethod
+    def _read_cln_gen(cls, f_obj, ngenshptyp, ngentabrows):
+        """Read GENERAL_SEC type properties."""
+        cln_gen = []
+        for _ in range(ngenshptyp):
+            header = cls._read_prop(f_obj, 1)[0]
+            table = cls._read_prop(f_obj, ngentabrows)
+            cln_gen.append((int(header[0]), float(header[1]), table))
+        return cln_gen
 
     @staticmethod
     def _make_recarray(array, dtype):

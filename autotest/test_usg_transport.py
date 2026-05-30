@@ -810,9 +810,9 @@ def test_usgt_rch_transport_sp_headers_roundtrip(
 def test_mfusgtib_roundtrip(function_tmpdir):
     """Round-trip a real TIB file via MfUsgTib.load + write_file.
 
-    Exercises per-SP block parsing. The test writes a synthetic minimal TIB
-    file with three SPs (inactive/activated/prescribed-head nodes) and asserts
-    body content is preserved.
+    Exercises raw-body preservation. The TIB reader uses U1DINT lists whose
+    continuation lines can contain several nodes, so the loader must not infer
+    stress-period boundaries with regexes.
     """
     from flopy.mfusg import MfUsgTib
     from flopy.modflow import ModflowDis
@@ -822,8 +822,7 @@ def test_mfusgtib_roundtrip(function_tmpdir):
         "# my TIB\n"
         " 2 1 0 0 0 0\n"
         "INTERNAL 1 (FREE) 1 INACTIVE THEN ACTIVE\n"
-        " 101\n"
-        " 102\n"
+        " 101 102\n"
         " 201 AVHEAD\n"
         " 1 0 0 0 0 0\n"
         "INTERNAL 1 (FREE) 1 INACTIVE\n"
@@ -835,7 +834,8 @@ def test_mfusgtib_roundtrip(function_tmpdir):
     ml = MfUsg(model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
     tib = MfUsgTib.load(str(tib_src), ml)
-    assert len(tib.blocks) == 3
+    assert tib.raw_body is not None
+    assert " 101 102\n" in tib.raw_body
 
     tib.fn_path = str(function_tmpdir / "out.tib")
     tib.write_file()
@@ -888,6 +888,66 @@ def test_mfusgbas_unstructured_keyword_roundtrip(function_tmpdir):
     assert line.startswith("UNSTRUCTURED")
 
 
+def test_mfusgbas_options_programmatic_roundtrip(function_tmpdir):
+    """BAS options can be authored from scratch and survive load/write."""
+    from flopy.mfusg import MfUsgBas
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    bas = MfUsgBas(
+        ml,
+        ibound=1,
+        strt=10.0,
+        structured=False,
+        ifrefm=True,
+        iprintfv=True,
+        iprinttime=True,
+        converge=True,
+        richards=True,
+        double_prec=True,
+        double_out=True,
+        double_io=True,
+        sy_all=True,
+        ishowp=True,
+        stoper=0.01,
+    )
+    bas.fn_path = str(function_tmpdir / "created.bas")
+    bas.write_file(check=False)
+
+    option_line = Path(bas.fn_path).read_text().splitlines()[1]
+    for token in (
+        "PRINTFV",
+        "CONVERGE",
+        "UNSTRUCTURED",
+        "FREE",
+        "PRINTTIME",
+        "SHOWPROGRESS",
+        "RICHARDS",
+        "DPIN",
+        "DPOUT",
+        "DPIO",
+        "SY-ALL",
+        "STOPERROR",
+    ):
+        assert token in option_line
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    bas2 = MfUsgBas.load(str(bas.fn_path), ml2, check=False)
+    assert bas2.iprintfv
+    assert bas2.iprinttime
+    assert bas2.converge
+    assert bas2.richards
+    assert bas2.double_prec
+    assert bas2.double_out
+    assert bas2.double_io
+    assert bas2.sy_all
+    assert bas2.ishowp
+    assert np.isclose(bas2.stoper, 0.01)
+    assert not bas2.structured
+
+
 # ============================================================
 # Tests for fork additions: MfUsgChd, MfUsgRiv, MfUsgEts,
 #                          MfusgTransportListBudget
@@ -922,14 +982,14 @@ def test_mfusgchd_roundtrip(function_tmpdir):
 
     sp0 = chd.stress_period_data[0]
     assert len(sp0) == 3
-    assert list(sp0["node"]) == [101, 102, 103]
+    assert list(sp0["node"]) == [100, 101, 102]
     assert np.isclose(sp0["shead"][0], 15.0, atol=0.01)
     assert np.isclose(sp0["ehead"][2], 24.5, atol=0.01)
 
     # Reuse SP copies previous data
     sp1 = chd.stress_period_data[1]
     assert len(sp1) == 3
-    assert list(sp1["node"]) == [101, 102, 103]
+    assert list(sp1["node"]) == [100, 101, 102]
 
     # Write and verify both SPs appear in output
     chd_out = function_tmpdir / "out.chd"
@@ -938,6 +998,7 @@ def test_mfusgchd_roundtrip(function_tmpdir):
     text = chd_out.read_text()
     assert "Stress Period 1" in text
     assert "Stress Period 2" in text
+    assert "\n 101" in text
 
     # Re-load and verify data survives round-trip
     ml2 = MfUsg(structured=False)
@@ -945,7 +1006,7 @@ def test_mfusgchd_roundtrip(function_tmpdir):
     chd2 = MfUsgChd.load(str(chd_out), ml2, nper=2, ext_unit_dict={})
     sp0b = chd2.stress_period_data[0]
     assert np.isclose(sp0b["shead"][0], 15.0, atol=0.01)
-    assert list(sp0b["node"]) == [101, 102, 103]
+    assert list(sp0b["node"]) == [100, 101, 102]
 
 
 def test_mfusgchd_aux_roundtrip(function_tmpdir):
@@ -1010,14 +1071,14 @@ def test_mfusgriv_roundtrip(function_tmpdir):
     assert riv.irdflag == 50
     sp0 = riv.stress_period_data[0]
     assert len(sp0) == 2
-    assert sp0["node"][0] == 101
+    assert sp0["node"][0] == 100
     assert np.isclose(sp0["stage"][0], 15.0, atol=0.01)
     assert np.isclose(sp0["rbot"][1], 17.0, atol=0.01)
 
     # Reuse SP copies previous data
     sp1 = riv.stress_period_data[1]
     assert len(sp1) == 2
-    assert sp1["node"][0] == 101
+    assert sp1["node"][0] == 100
 
     # Write and verify both SPs in output, then re-load
     riv_out = function_tmpdir / "out.riv"
@@ -1026,6 +1087,7 @@ def test_mfusgriv_roundtrip(function_tmpdir):
     text = riv_out.read_text()
     assert "Stress Period 1" in text
     assert "Stress Period 2" in text
+    assert "\n 101" in text
 
     ml2 = MfUsg(structured=False)
     ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
@@ -1125,6 +1187,500 @@ def test_mfusgets_write(function_tmpdir):
     content = ets_file.read_text()
     # netseg=2 → PXDP and PETM segment arrays must be written
     assert "pxdp" in content.lower() and "petm" in content.lower()
+
+
+def test_mfusgets_parameterized_write_fails_explicitly(function_tmpdir):
+    """Programmatic ETS parameters are not silently written as incomplete files."""
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    ets = MfUsgEts(ml, netsop=1, evtr=1.2e-4, npets=1)
+
+    with pytest.raises(NotImplementedError, match="parameter"):
+        ets.write_file()
+
+
+def test_modflow_name_file_preserves_input_external_paths(function_tmpdir):
+    """NAM writing preserves external input subdirs and rebases output files."""
+    from flopy.modflow import Modflow
+
+    ml = Modflow(modelname="nam_paths", model_ws=str(function_tmpdir))
+    ml.add_external("arrays/recharge.ref", unit=101, binflag=False, output=False)
+    ml.add_external("arrays/binary.ref", unit=102, binflag=True, output=False)
+    ml.add_external(
+        "old_external_outputs/heads.hds", unit=103, binflag=True, output=True
+    )
+    ml.add_output("old_outputs/nam_paths.cbc", unit=201, binflag=True)
+    ml.write_name_file()
+
+    entries = {}
+    for line in (function_tmpdir / "nam_paths.nam").read_text().splitlines():
+        parts = line.split()
+        if parts and parts[0].startswith("DATA"):
+            entries[int(parts[1])] = parts[2]
+
+    assert entries[101] == "arrays/recharge.ref"
+    assert entries[102] == "arrays/binary.ref"
+    assert entries[103] == "heads.hds"
+    assert entries[201] == "nam_paths.cbc"
+
+
+def test_mfusg_boundary_programmatic_creation_uses_zero_based_nodes(function_tmpdir):
+    """USG-T boundary packages can be authored from scratch with 0-based nodes."""
+    from flopy.mfusg import MfUsgChd, MfUsgDrn, MfUsgGhb, MfUsgRiv
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
+
+    chd_dtype = MfUsgChd.get_default_dtype(structured=False)
+    chd_data = {
+        0: np.array(
+            [(0, 15.0, 14.5), (4, 20.0, 19.5)],
+            dtype=chd_dtype,
+        ).view(np.recarray)
+    }
+    chd = MfUsgChd(ml, stress_period_data=chd_data)
+    chd.fn_path = str(function_tmpdir / "created.chd")
+    chd.write_file()
+    assert "\n 1   15.000000" in Path(chd.fn_path).read_text()
+    assert "\n 5   20.000000" in Path(chd.fn_path).read_text()
+
+    riv_dtype = np.dtype(
+        [
+            ("node", int),
+            ("stage", np.float64),
+            ("cond", np.float32),
+            ("rbot", np.float32),
+            ("C01", np.float32),
+            ("irch", int),
+        ]
+    )
+    riv = MfUsgRiv(
+        ml,
+        stress_period_data={
+            0: np.array(
+                [(2, 10.0, 1.0e-4, 9.0, 0.25, 7)],
+                dtype=riv_dtype,
+            ).view(np.recarray)
+        },
+        dtype=riv_dtype,
+    )
+    riv.fn_path = str(function_tmpdir / "created.riv")
+    riv.write_file()
+    riv_text = Path(riv.fn_path).read_text()
+    assert "AUX C01" in riv_text
+    assert "\n 3  10.000000" in riv_text
+    assert riv_text.splitlines()[3].split()[-1] == "7"
+
+    ghb_dtype = np.dtype(
+        [
+            ("node", int),
+            ("bhead", np.float32),
+            ("cond", np.float32),
+            ("C01", np.float32),
+        ]
+    )
+    ghb = MfUsgGhb(
+        ml,
+        stress_period_data={
+            0: np.array([(8, 5.0, 1.0e2, 0.15)], dtype=ghb_dtype).view(np.recarray)
+        },
+        dtype=ghb_dtype,
+    )
+    ghb.fn_path = str(function_tmpdir / "created.ghb")
+    ghb.write_file()
+    ghb_text = Path(ghb.fn_path).read_text()
+    assert "AUX C01" in ghb_text
+    assert "\n 9  5.000000" in ghb_text
+
+    drn_dtype = MfUsgDrn.get_default_dtype(structured=False)
+    drn = MfUsgDrn(
+        ml,
+        stress_period_data={
+            0: np.array([(10, 2.5, 1.0e1)], dtype=drn_dtype).view(np.recarray)
+        },
+    )
+    drn.fn_path = str(function_tmpdir / "created.drn")
+    drn.write_file()
+    assert "\n 11  2.500000" in Path(drn.fn_path).read_text()
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
+    created_chd = MfUsgChd.load(chd.fn_path, ml2, nper=2)
+    assert list(created_chd.stress_period_data[0]["node"]) == [0, 4]
+
+
+def test_mfusgwel_programmatic_cln_itmpcln_roundtrip(function_tmpdir):
+    """WEL authoring writes the USG-T ITMP/NP/ITMPCLN stress-period header."""
+    from flopy.mfusg import MfUsgWel
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+
+    dtype = np.dtype([("node", int), ("flux", np.float32), ("C01", np.float32)])
+    stress_period_data = {
+        0: np.array([(0, -100.0, 0.10)], dtype=dtype).view(np.recarray)
+    }
+    cln_stress_period_data = {
+        0: np.array([(2, -10.0, 0.20)], dtype=dtype).view(np.recarray),
+        1: np.array([(3, -20.0, 0.30)], dtype=dtype).view(np.recarray),
+    }
+    wel = MfUsgWel(
+        ml,
+        stress_period_data=stress_period_data,
+        cln_stress_period_data=cln_stress_period_data,
+        dtype=dtype,
+        cln_dtype=dtype,
+    )
+    wel.fn_path = str(function_tmpdir / "created.wel")
+    wel.write_file()
+
+    lines = [
+        line
+        for line in Path(wel.fn_path).read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "aux C01" in lines[0]
+    assert lines[1].split()[:3] == ["1", "0", "1"]
+    t = lines[2].split()
+    assert t[0] == "1"
+    assert np.isclose(float(t[1]), -100.0)
+    assert np.isclose(float(t[2]), 0.10)
+    t = lines[3].split()
+    assert t[0] == "3"
+    assert np.isclose(float(t[1]), -10.0)
+    assert np.isclose(float(t[2]), 0.20)
+    assert lines[4].split()[:3] == ["0", "0", "1"]
+    t = lines[5].split()
+    assert t[0] == "4"
+    assert np.isclose(float(t[1]), -20.0)
+    assert np.isclose(float(t[2]), 0.30)
+    assert lines[6].split()[:3] == ["0", "0", "0"]
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=3)
+    wel2 = MfUsgWel.load(str(wel.fn_path), ml2, nper=3, check=False)
+    assert list(wel2.stress_period_data[0]["node"]) == [0]
+    assert list(wel2.cln_stress_period_data[0]["node"]) == [2]
+    assert list(wel2.cln_stress_period_data[1]["node"]) == [3]
+    assert np.isclose(wel2.cln_stress_period_data[1]["c01"][0], 0.30)
+
+
+def test_mfusgcln_general_section_processccf_roundtrip(function_tmpdir):
+    """CLN supports USG-T PROCESSCCF, GENERAL_SEC, and ISHAPE authoring."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+
+    cln = MfUsgCln(
+        ml,
+        ncln=1,
+        iclnnds=-1,
+        nndcln=1,
+        nclngwc=1,
+        node_prop=[[1, 3, 1, 0, 10.0, -1.0, 0.0, 0, 0]],
+        cln_gwc=[[1, 1, 1, 1, 0, 0.0, 10.0, 1.0, 0]],
+        nconduityp=1,
+        cln_circ=[[1, 0.5, 100.0]],
+        processccf=True,
+        iclngwcb=902,
+        ngenshptyp=1,
+        ngentabrows=2,
+        cln_gen=[(1, 3.0, [[0.0, 0.0, 0.0, 0.0], [1.0, 2.0, 3.0, 4.0]])],
+    )
+    cln.fn_path = str(function_tmpdir / "created.cln")
+    cln.write_file()
+
+    lines = [
+        line
+        for line in Path(cln.fn_path).read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "PROCESSCCF 902" in lines[0]
+    assert "GENERAL_SEC 1 2" in lines[1]
+    assert any(line.split()[:3] == ["1", "3", "1"] for line in lines)
+
+    ml2 = MfUsg()
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    cln2 = MfUsgCln.load(str(cln.fn_path), ml2)
+    assert cln2.processccf
+    assert cln2.iclngwcb == 902
+    assert cln2.ngenshptyp == 1
+    assert cln2.ngentabrows == 2
+    assert "ishape" in cln2.node_prop.dtype.names
+    assert cln2.node_prop["ishape"][0] == 3
+    assert cln2.cln_gen[0][0] == 1
+    assert np.allclose(cln2.cln_gen[0][2], [[0, 0, 0, 0], [1, 2, 3, 4]])
+
+
+def test_mfusgdpf_programmatic_tabrich_and_sc2im_roundtrip(function_tmpdir):
+    """DPF authoring honors FRAHK, IUZONTABIM, IDPF, and conditional SC2IM."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1, steady=False)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    MfUsgBcf(
+        ml,
+        laycon=[0, 5],
+        ipakcb=0,
+        tabrich=True,
+        nuzones=1,
+        nutabrows=2,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+
+    dpf = MfUsgDpf(
+        ml,
+        frahk=True,
+        iuzontabim=[7, 8],
+        iboundim=1,
+        hnewim=2.0,
+        phif=0.1,
+        ddftr=0.01,
+        sc1im=1.0e-5,
+        sc2im=[[[0.0]], [[0.25]]],
+    )
+    assert ml.idpf == 1
+    dpf.fn_path = str(function_tmpdir / "created.dpf")
+    dpf.write_file()
+
+    text = Path(dpf.fn_path).read_text()
+    assert "FRAHK" in text.splitlines()[0]
+    assert "#iuzontabim" in text
+    assert "#sc2im layer 1" not in text
+    assert "#sc2im layer 2" in text
+
+    ml2 = MfUsg()
+    ModflowDis(ml2, nlay=2, nrow=1, ncol=1, nper=1, steady=False)
+    MfUsgBas(ml2, ibound=1, strt=1.0, richards=True)
+    MfUsgBcf(
+        ml2,
+        laycon=[0, 5],
+        ipakcb=0,
+        tabrich=True,
+        nuzones=1,
+        nutabrows=2,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+    dpf2 = MfUsgDpf.load(str(dpf.fn_path), ml2)
+    assert ml2.idpf == 1
+    assert dpf2.frahk
+    assert list(dpf2.iuzontabim.array) == [7, 8]
+    assert np.allclose(dpf2.sc2im[0].array, 0.0)
+    assert np.allclose(dpf2.sc2im[1].array, 0.25)
+
+
+def test_mfusgdpf_programmatic_richards_immobile_roundtrip(function_tmpdir):
+    """DPF writes immobile Richards arrays for LAYCON=5 when TABRICH is off."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1, steady=False)
+    MfUsgBas(ml, ibound=1, strt=1.0, richards=True)
+    MfUsgBcf(
+        ml,
+        laycon=[5],
+        ipakcb=0,
+        bubblept=True,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+
+    dpf = MfUsgDpf(
+        ml,
+        iboundim=1,
+        hnewim=2.0,
+        phif=0.1,
+        ddftr=0.01,
+        sc1im=1.0e-5,
+        sc2im=0.25,
+        alphaim=0.2,
+        betaim=4.0,
+        srim=0.1,
+        brookim=5.0,
+        bpim=-0.25,
+    )
+    dpf.fn_path = str(function_tmpdir / "richards.dpf")
+    dpf.write_file()
+
+    text = Path(dpf.fn_path).read_text()
+    assert "#alphaim layer 1" in text
+    assert "#betaim layer 1" in text
+    assert "#srim layer 1" in text
+    assert "#brookim layer 1" in text
+    assert "#bpim layer 1" in text
+
+    ml2 = MfUsg()
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1, steady=False)
+    MfUsgBas(ml2, ibound=1, strt=1.0, richards=True)
+    MfUsgBcf(
+        ml2,
+        laycon=[5],
+        ipakcb=0,
+        bubblept=True,
+        tran=1.0,
+        hy=1.0,
+        kv=1.0,
+        sf1=1.0e-5,
+        sf2=0.15,
+    )
+    dpf2 = MfUsgDpf.load(str(dpf.fn_path), ml2)
+    assert np.allclose(dpf2.alphaim[0].array, 0.2)
+    assert np.allclose(dpf2.betaim[0].array, 4.0)
+    assert np.allclose(dpf2.srim[0].array, 0.1)
+    assert np.allclose(dpf2.brookim[0].array, 5.0)
+    assert np.allclose(dpf2.bpim[0].array, -0.25)
+
+
+def test_mfusghfb_static_fortran_layout(function_tmpdir):
+    """Static non-parametric HFB writes only NHFBNP rows after the header."""
+    from flopy.mfusg import MfUsgHfb
+    from flopy.modflow import ModflowDis
+
+    dtype = MfUsgHfb.get_default_dtype(structured=False)
+    hfb_data = np.array(
+        [(0, 1, 1.0e-4), (2, 3, 2.0e-4)],
+        dtype=dtype,
+    ).view(np.recarray)
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+    hfb = MfUsgHfb(ml, hfb_data=hfb_data, transient=False)
+
+    hfb_out = function_tmpdir / "static.hfb"
+    hfb.fn_path = str(hfb_out)
+    hfb.write_file()
+
+    lines = [
+        line
+        for line in hfb_out.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert len(lines) == 3
+    assert lines[0].split()[:3] == ["0", "0", "2"]
+    assert lines[1].split()[:2] == ["1", "2"]
+    assert lines[2].split()[:2] == ["3", "4"]
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=3)
+    hfb2 = MfUsgHfb.load(str(hfb_out), ml2, nper=3, ext_unit_dict={})
+    assert list(hfb2.hfb_data["node1"]) == [0, 2]
+    assert list(hfb2.hfb_data["node2"]) == [1, 3]
+
+
+def test_mfusghfb_structured_static_fortran_layout(function_tmpdir):
+    """Structured HFB keeps k/i/j internal indices 0-based and writes 1-based."""
+    from flopy.mfusg import MfUsgHfb
+    from flopy.modflow import ModflowDis
+
+    dtype = MfUsgHfb.get_default_dtype(structured=True)
+    hfb_data = np.array(
+        [(0, 0, 0, 0, 1, 1.0e-4)],
+        dtype=dtype,
+    ).view(np.recarray)
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=2, nper=1)
+    hfb = MfUsgHfb(ml, hfb_data=hfb_data, transient=False)
+
+    hfb_out = function_tmpdir / "structured.hfb"
+    hfb.fn_path = str(hfb_out)
+    hfb.write_file()
+
+    lines = [
+        line
+        for line in hfb_out.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert lines[1].split()[:5] == ["1", "1", "1", "1", "2"]
+
+    ml2 = MfUsg(structured=True)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=2, nper=1)
+    hfb2 = MfUsgHfb.load(str(hfb_out), ml2, nper=1, ext_unit_dict={})
+    assert hfb2.hfb_data[0]["k"] == 0
+    assert hfb2.hfb_data[0]["icol2"] == 1
+
+
+def test_mfusghfb_transient_fortran_layout(function_tmpdir):
+    """Transient HFB uses IHFBRD as a flag and -1 for stress-period reuse."""
+    from flopy.mfusg import MfUsgHfb
+    from flopy.modflow import ModflowDis
+
+    dtype = MfUsgHfb.get_default_dtype(structured=False)
+    sp0 = np.array(
+        [(0, 1, 1.0e-4), (2, 3, 2.0e-4)],
+        dtype=dtype,
+    ).view(np.recarray)
+    sp1 = np.array(
+        [(4, 5, 3.0e-4), (6, 7, 4.0e-4)],
+        dtype=dtype,
+    ).view(np.recarray)
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
+    hfb = MfUsgHfb(
+        ml,
+        hfb_data=sp0,
+        transient=True,
+        stress_period_data={1: sp1},
+    )
+
+    hfb_out = function_tmpdir / "transient.hfb"
+    hfb.fn_path = str(hfb_out)
+    hfb.write_file()
+
+    lines = [
+        line
+        for line in hfb_out.read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "TRANSIENT_HFB" in lines[0]
+    assert lines[1].split() == ["1"]
+    assert lines[2].split()[:2] == ["1", "2"]
+    assert lines[4].split() == ["1"]
+    assert lines[5].split()[:2] == ["5", "6"]
+    assert lines[7].split() == ["-1"]
+
+    ml2 = MfUsg(structured=False)
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=3)
+    hfb2 = MfUsgHfb.load(str(hfb_out), ml2, nper=3, ext_unit_dict={})
+    assert hfb2.transient
+    assert set(hfb2.stress_period_data) == {0, 1}
+    assert list(hfb2.stress_period_data[0]["node1"]) == [0, 2]
+    assert list(hfb2.stress_period_data[1]["node1"]) == [4, 6]
+
+    hfb_zero = function_tmpdir / "transient_zero.hfb"
+    hfb_zero.write_text(
+        "# HFB with IHFBRD=0 reuse\n"
+        "         0         0         2  TRANSIENT_HFB\n"
+        "1\n"
+        "1 2 1.0e-4\n"
+        "3 4 2.0e-4\n"
+        "0\n"
+        "-1\n"
+    )
+    ml3 = MfUsg(structured=False)
+    ModflowDis(ml3, nlay=1, nrow=1, ncol=1, nper=3)
+    hfb3 = MfUsgHfb.load(str(hfb_zero), ml3, nper=3, ext_unit_dict={})
+    assert set(hfb3.stress_period_data) == {0}
+    assert list(hfb3.stress_period_data[0]["node1"]) == [0, 2]
 
 
 def _make_usgt_lst_old_format():
@@ -1314,7 +1870,7 @@ def test_mfusgghb_roundtrip(function_tmpdir):
 
     sp0 = ghb.stress_period_data[0]
     assert len(sp0) == 2
-    assert list(sp0["node"]) == [101, 102]
+    assert list(sp0["node"]) == [100, 101]
     assert np.isclose(sp0["bhead"][0], 5.0, atol=0.01)
     assert np.isclose(sp0["cond"][1], 50.0, atol=0.1)
 
@@ -1328,11 +1884,13 @@ def test_mfusgghb_roundtrip(function_tmpdir):
     text = ghb_out.read_text()
     assert "Stress Period 1" in text
     assert "Stress Period 2" in text
+    assert "\n 101" in text
 
     ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
     ghb2 = MfUsgGhb.load(str(ghb_out), ml2, nper=2, ext_unit_dict={})
     assert np.isclose(ghb2.stress_period_data[0]["bhead"][0], 5.0, atol=0.01)
+    assert list(ghb2.stress_period_data[0]["node"]) == [100, 101]
 
 
 def test_mfusgghb_aux_roundtrip(function_tmpdir):
@@ -1390,7 +1948,7 @@ def test_mfusgdrn_roundtrip(function_tmpdir):
 
     sp0 = drn.stress_period_data[0]
     assert len(sp0) == 3
-    assert list(sp0["node"]) == [101, 102, 103]
+    assert list(sp0["node"]) == [100, 101, 102]
     assert np.isclose(sp0["elev"][0], 2.5, atol=0.01)
     assert np.isclose(sp0["cond"][2], 5.0, atol=0.1)
 
@@ -1400,11 +1958,13 @@ def test_mfusgdrn_roundtrip(function_tmpdir):
     text = drn_out.read_text()
     assert "Stress Period 1" in text
     assert "Stress Period 2" in text
+    assert "\n 101" in text
 
     ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
     drn2 = MfUsgDrn.load(str(drn_out), ml2, nper=2, ext_unit_dict={})
     assert np.isclose(drn2.stress_period_data[0]["elev"][0], 2.5, atol=0.01)
+    assert list(drn2.stress_period_data[0]["node"]) == [100, 101, 102]
 
 
 def test_mfusgdrn_aux_roundtrip(function_tmpdir):
@@ -1436,7 +1996,7 @@ def test_mfusgdrn_aux_roundtrip(function_tmpdir):
 # ---------------------------------------------------------------------------
 
 def test_mfusgtvm_roundtrip(function_tmpdir):
-    """TVM text round-trip: load → write → reload preserves all content."""
+    """TVM semantic load/write preserves global controls and SP boundaries."""
     from flopy.modflow import ModflowDis
 
     tvm_content = (
@@ -1453,17 +2013,19 @@ def test_mfusgtvm_roundtrip(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=3)
     tvm = MfUsgTvm.load(str(tvm_in), ml, nper=3, ext_unit_dict={})
 
-    assert len(tvm.blocks) == 3
-    assert "1  -1  -1" in tvm.global_header
+    assert tvm.itvmprint == 1
+    assert tvm.tvmlogbasehk == -1.0
+    assert tvm.tvmlogbasevka == -1.0
+    assert sorted(tvm.stress_period_data) == [0, 1, 2]
 
     tvm_out = function_tmpdir / "out.tvm"
     tvm.fn_path = str(tvm_out)
     tvm.write_file()
     written = tvm_out.read_text()
-    assert "Stress Period 1" in written
-    assert "Stress Period 2" in written
-    assert "Stress Period 3" in written
-    assert "1  -1  -1" in written
+    assert "Stress period number 1 start" in written
+    assert "Stress period number 1 end" in written
+    assert "Stress period number 2" in written
+    assert "Stress period number 3" in written
 
 
 def test_mfusgtvm_missing_sp_gets_zeros(function_tmpdir):
@@ -1486,7 +2048,7 @@ def test_mfusgtvm_missing_sp_gets_zeros(function_tmpdir):
     tvm.write_file()
     written = tvm_out.read_text()
     # SP 3 must be emitted with zeros even though it wasn't in the source
-    assert "Stress Period 3" in written
+    assert "Stress period number 3" in written
 
 
 # ---------------------------------------------------------------------------

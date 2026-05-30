@@ -144,7 +144,7 @@ class MfUsgChd(ModflowChd):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)}    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node'])}"
+                        row = (f" {int(rec['node']) + 1}"
                                f"   {float(rec['shead']):.6f}"
                                f"  {float(rec['ehead']):.6f}")
                         for name in self.dtype.names[n_base:]:
@@ -231,6 +231,7 @@ class MfUsgChd(ModflowChd):
                         current[idx][name] = (
                             int(vals[j]) if kind in ("i", "u") else float(vals[j])
                         )
+                    current[idx]["node"] -= 1
                 spd[kper] = current
 
         if openfile:
