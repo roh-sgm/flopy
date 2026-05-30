@@ -2677,3 +2677,110 @@ def test_tabrich_retcrvs_shape_validation(function_tmpdir):
             sf1=1.0e-5,
             sf2=0.15,
         )
+
+
+# ---------------------------------------------------------------------------
+# Priority-2 closeout: BAS niche options, ETS NETSOP=2/IESFACTOR, HFB params
+# ---------------------------------------------------------------------------
+
+def test_mfusgbas_richards_hp_and_ihm_roundtrip(function_tmpdir):
+    """BAS RICHARDS_HP and IHM [IUIHM] options author and round-trip."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    bas = MfUsgBas(ml, ibound=1, strt=1.0, richards_hp=True, ihm=True, iuihm=44)
+    # RICHARDS_HP implies Richards mode for dependent packages (BCF/LPF LAYTYP=5)
+    assert bas.richards is True
+    bas.fn_path = str(function_tmpdir / "rhp.bas")
+    bas.write_file(check=False)
+    opt_line = next(ln for ln in Path(bas.fn_path).read_text().splitlines()
+                    if "RICHARDS" in ln)
+    assert "RICHARDS_HP" in opt_line
+    assert "IHM 44" in opt_line
+
+    ml2 = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=1)
+    bas2 = MfUsgBas.load(bas.fn_path, ml2, check=False)
+    assert bas2.richards_hp is True
+    assert bas2.richards is True  # effective Richards mode preserved
+    assert bas2.ihm is True
+    assert bas2.iuihm == 44
+
+
+def test_mfusgets_netsop2_authoring_roundtrip(function_tmpdir):
+    """ETS NETSOP=2 (layer-indicator IEVT) authors and round-trips."""
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=2, ncol=2, nper=1)
+    ets = MfUsgEts(ml, netsop=2, evtr=1.2e-4, netseg=1, ievt=1)
+    ml.write_input()
+
+    content = Path(ets.fn_path).read_text()
+    # Item 2a: NETSOP IETSCB NPETS NETSEG IESFACTOR -> NETSOP field is 2
+    assert content.splitlines()[1].split()[0] == "2"
+
+    ml2 = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=2, nrow=2, ncol=2, nper=1)
+    ets2 = MfUsgEts.load(ets.fn_path, ml2, nper=1, ext_unit_dict={})
+    assert ets2.netsop == 2
+
+
+def test_mfusgets_iesfactor_authoring(function_tmpdir):
+    """ETS IESFACTOR=1 writes the transport ESFACTOR record when transport is on."""
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    # Emulate an active transport simulation (BCT would set these).
+    ml.itrnsp = 1
+    ml.mcomp = 1
+    ets = MfUsgEts(
+        ml, netsop=1, evtr=1.2e-4, netseg=1, iesfactor=1, esfactor=[2.5]
+    )
+    ets.fn_path = str(function_tmpdir / "ies.ets")
+    ets.write_file()
+    content = Path(ets.fn_path).read_text()
+    # Item 2a IESFACTOR field is 1; ESFACTOR(MCOMP) record written
+    assert content.splitlines()[1].split()[4] == "1"
+    assert "2.500000" in content
+
+
+def test_mfusghfb_parameterized_fails_explicitly(function_tmpdir):
+    """Parameterized HFB (NPHFB>0) fails explicitly on load rather than partial."""
+    from flopy.mfusg import MfUsgHfb
+    from flopy.modflow import ModflowDis
+
+    # Header: NPHFB MXFB NHFBNP -> NPHFB=1 (named parameters), unsupported
+    hfb_param = function_tmpdir / "param.hfb"
+    hfb_param.write_text(
+        "# parameterized HFB\n"
+        "         1         1         0\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    with pytest.raises(NotImplementedError):
+        MfUsgHfb.load(str(hfb_param), ml, ext_unit_dict={})
+
+
+def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
+    """DPT immobile-domain air-water adsorption (A-W_ADSORBIM) fails explicitly.
+
+    The sub-mode reads extra function indices and arrays; without support it
+    would silently shift all later reads, so load raises instead.
+    """
+    from flopy.mfusg import MfUsgDpt
+    from flopy.modflow import ModflowDis
+
+    dpt_file = function_tmpdir / "aw.dpt"
+    dpt_file.write_text(
+        "# DPT with immobile air-water adsorption\n"
+        " 0 0 0 0 0 0 0 A-W_ADSORBIM\n"
+    )
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    with pytest.raises(NotImplementedError):
+        MfUsgDpt.load(str(dpt_file), ml, ext_unit_dict={})

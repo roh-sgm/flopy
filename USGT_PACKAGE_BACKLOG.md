@@ -323,7 +323,8 @@ FloPy class: `MfUsgEts`
 Fortran: `gwf2ets8u1.f`
 
 Status: expanded valid write for parameterized input; semantic for
-non-parametric ETS.
+non-parametric ETS. **Authoring tests added** (2026-05-30): NETSEG=1,
+NETSEG>1, NETSOP=2, IESFACTOR, and explicit `npets>0` write failure.
 
 Problem:
 
@@ -360,7 +361,8 @@ FloPy class: `MfUsgHfb`
 Fortran: `gwf2hfb7u1.f`
 
 Status: semantic for non-parametric static/transient HFB; partial for
-parameterized HFB.
+parameterized HFB. **Tests cover** (2026-05-30): static, structured static,
+transient `IHFBRD=>0/0/-1`, and explicit `NPHFB>0` load failure.
 
 Problem:
 
@@ -392,7 +394,8 @@ FloPy class: `MfUsgBas`
 
 Fortran: `glo2basu1.f`
 
-Status: mostly covered for common USG-T options; niche options remain.
+Status: **DONE** (2026-05-30). `RICHARDS_HP` and `IHM [IUIHM]` implemented and
+tested; option-line cleaner keeps `_`. Common options already covered.
 
 Problem:
 
@@ -422,12 +425,15 @@ FloPy class: `MfUsgDpt`
 
 Fortran: `gwt2dptu1.f`, `dpt2aw_adsorb.f`
 
-Status: partial.
+Status: **Reviewed** (2026-05-30). DLIM requires `IDPF/=0 AND IDISPIM/=0`; the
+immobile air-water adsorption option `A-W_ADSORBIM` now fails explicitly on
+load instead of silently shifting reads.
 
 Problem:
 
 - `DLIM` condition was corrected, but air-water interface adsorption for the
-  immobile domain needs audit.
+  immobile domain needs audit. (Audited: `A-W_ADSORBIM` reads extra function
+  indices/arrays via `dpt2aw_adsorb.f`; unsupported -> explicit load failure.)
 
 Tasks:
 
@@ -453,7 +459,9 @@ FloPy class: `MfUsgTib`
 
 Fortran: `glo2basu1.f`
 
-Status: raw/text round-trip.
+Status: raw/text round-trip — **decision: keep raw/text for v1**. The raw-body
+round-trip already preserves multi-node `U1DINT` continuation lines (tested);
+a semantic constructor is deferred. Status is honest (no semantic authoring API).
 
 Problem:
 

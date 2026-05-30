@@ -30,6 +30,19 @@ all in `autotest/test_usg_transport.py`):
 Shared helpers: `flopy/mfusg/_usgt_returnflow.py` (DRT/QRT recipient-node
 `U1DINT` lists) and `flopy/mfusg/_tabrich.py` (BCF/LPF 1c/1d).
 
+### Priority-2 closeout (2026-05-30)
+
+| File | What changed |
+|---|---|
+| `flopy/mfusg/mfusgbas.py` | `RICHARDS_HP` (Richards mode with pressure-head initial values; implies effective Richards mode for BCF/LPF) and `IHM [IUIHM]` (integrated-hydrologic-model coupling flag + debug unit) are now authored/loaded/written. The option-line cleaner keeps `_` so `RICHARDS_HP` is one token. Gap §1 resolved. |
+| `flopy/mfusg/mfusgdpt.py` | `MfUsgDpt.load` raises `NotImplementedError` for the immobile air-water adsorption option `A-W_ADSORBIM` instead of silently shifting subsequent reads. Gap §6. |
+| `autotest/test_usg_transport.py` | Added authoring tests for BAS `RICHARDS_HP`/`IHM`, ETS `NETSOP=2` and `IESFACTOR`, explicit-failure tests for HFB `NPHFB>0` (load) and DPT `A-W_ADSORBIM` (load). ETS `npets>0`, HFB transient `IHFBRD=>0/0/-1`, and TIB multi-node `U1DINT` raw round-trip were already covered. |
+
+ETS, HFB, and DPT remain classified Partial on purpose: parameter-syntax
+preservation (ETS), parameterized barriers (HFB `NPHFB>0`), and the DPT
+air-water adsorption sub-mode are intentionally out of scope and fail
+explicitly rather than producing incomplete or mis-parsed files.
+
 ### Round-trip fixes (original five)
 
 | Branch | What it does |

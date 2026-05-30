@@ -481,6 +481,16 @@ class MfUsgDpt(Package):
         else:
             kwargs["inputsat"] = 0
 
+        # Immobile-domain air-water interface adsorption (A-W_ADSORBIM) reads
+        # additional function-index values and arrays (gwt2dptu1.f / dpt2aw_adsorb.f)
+        # that are not modeled here. Fail explicitly rather than silently shift
+        # all subsequent item reads.
+        if "A-W_ADSORBIM" in t:
+            raise NotImplementedError(
+                "MfUsgDpt does not support the immobile-domain air-water "
+                "interface adsorption option (A-W_ADSORBIM)."
+            )
+
         # item 1b
         if kwargs["icbndimflg"] == 0:
             kwargs["icbundim"] = cls._load_prop_arrays(

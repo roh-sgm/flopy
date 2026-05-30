@@ -31,7 +31,7 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 
 | Package | CUNIT | FloPy class | Status | Fortran file | Notes |
 |---------|-------|-------------|--------|--------------|-------|
-| BAS6 | `BAS6` | `MfUsgBas` | ⚠️ Partial | `gwf2basu1.f` | Standard USG-T options load/write tested, including UNSTRUCTURED, PRINTTIME, SHOWPROGRESS, DPIN/DPOUT/DPIO, SY-ALL. See Gap §1 for remaining niche options. **Verified** |
+| BAS6 | `BAS6` | `MfUsgBas` | ✅ Full | `gwf2basu1.f` | All USG-T options load/write tested: UNSTRUCTURED, PRINTTIME, SHOWPROGRESS, DPIN/DPOUT/DPIO, SY-ALL, CONVERGE, plus `RICHARDS_HP` (implies Richards mode) and `IHM [IUIHM]` (Gap §1 resolved). **Verified** |
 | DIS | `DIS` | `MfUsgDis` | ✅ | `mfusg.f` | Structured grid discretization |
 | DISU | `DISU` | `MfUsgDisU` | ✅ | `mfusg.f` | Unstructured. `free_format_npl=10` default prevents buffer overflow for large grids. **Verified** |
 | BCF6 | `BCF6` | `MfUsgBcf` | ✅ Full | `gwf2bcf-lpf-u1.f` | TABRICH items 1c (`IUZONTAB`) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = caphead/saturation/relperm) now authored/loaded/written; incomplete TABRICH write fails explicitly. See Gap §2 (resolved). **Verified** |
@@ -45,8 +45,8 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | GHB | `GHB` | `MfUsgGhb` | ✅ Full | `gwf2ghb7u1.f` | Node-based, internal nodes 0-based, file I/O 1-based, AUX transport concentrations. Programmatic authoring tested. **Verified** |
 | RCH | `RCH` | `MfUsgRch` | ✅ Full | `gwf2rch8u1.f` | INRCHZONES crash bug fixed (2026-05-20). INCONC/INIRCH spacing fixed. **Verified** |
 | EVT | `EVT` | `MfUsgEvt` | ✅ | `gwf2evt8u1.f` | **Verified** |
-| ETS | `ETS` | `MfUsgEts` | ⚠️ Partial | `gwf2ets8u1.f` | NETSEG>1 segment arrays, IESFACTOR transport flag. Parameterized files load as expanded non-parametric arrays (`NPETS=0` on write); parameter syntax preservation is not supported. **Verified** |
-| HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static and `TRANSIENT_HFB` IHFBRD semantics implemented. `NPHFB>0` is not supported. **Verified** |
+| ETS | `ETS` | `MfUsgEts` | ⚠️ Partial | `gwf2ets8u1.f` | Authoring tested for NETSEG=1, NETSEG>1 (PXDP/PETM), NETSOP=2 (IEVT), and IESFACTOR transport flag. Parameterized files load as expanded non-parametric arrays (`NPETS=0` on write); programmatic `npets>0` fails explicitly. Parameter-syntax preservation intentionally not supported (Expanded valid write). **Verified** |
+| HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static, structured static, and `TRANSIENT_HFB` IHFBRD = >0/0/-1 semantics implemented and tested. `NPHFB>0` (named parameters) fails explicitly on load/write. **Verified** |
 | GNC | `GNC` | `MfUsgGnc` | ✅ | `disu2gncn1.f` | **Verified** |
 | LAK | `LAK` | `MfUsgLak` | ✅ | `gwf2lak7u1.f` | TABLEINPUT and TRANSPORTBOUNDARY options; lake transport coupling. **Verified (header)** |
 | CLN | `CLN` | `MfUsgCln` | ✅ | `cln2basu1.f`, `cln2props1.f` | `PROCESSCCF`/`ICLNGWCB`, `ISHAPE` node records, and `GENERAL_SEC` tabular shape authoring/load/write tested. **Verified** |
@@ -55,7 +55,7 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | PCB | `PCB` | `MfUsgPcb` | ✅ | — | **Verified (field order)** |
 | MDT | `MDT` | `MfUsgMdt` | ✅ | — | Not independently verified against Fortran source |
 | DPF | `DPF` | `MfUsgDpf` | ✅ | `gwf2dpf1u1.f` | `FRAHK`, `IUZONTABIM`, conditional `SC2IM`, immobile Richards arrays, and programmatic `model.idpf` covered by focused tests. f_obj bug fixed 2026-05-20. **Verified** |
-| DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition fixed 2026-05-20 (now checks both IDPF and IDISPIM). See Gap §6 for remaining items. **Verified** |
+| DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition checks both IDPF and IDISPIM. Immobile-domain air-water adsorption (`A-W_ADSORBIM`) now fails explicitly on load instead of silently shifting reads (Gap §6). **Verified** |
 | TIB | `TIB` | `MfUsgTib` | ✅ | `glo2basu1.f` | Raw-body text round-tripper; avoids parsing `U1DINT` node-list continuation lines. Sufficient for load/write of existing files |
 | TVM | `TVM` | `MfUsgTvm` | ✅ Full | `tvmu2.f` | Full semantic implementation (2026-05-20). HK/VKA/SS/SY/DDFTR/POR; transport-aware field counts; nper+1 boundaries; 20 autotests pass. **Verified** |
 | GSF | `GSF` | `MfUsgGsf` | ✅ | — | Text round-trip. `to_grid()` delegates to `UnstructuredGrid.from_gridspec()` |
@@ -99,18 +99,20 @@ FloPy class.
 
 ## Known gaps within implemented packages
 
-### Gap §1 — BAS6: remaining niche options
+### Gap §1 — BAS6: niche options — RESOLVED
 
-Resolved for the standard options previously at risk: `UNSTRUCTURED`, `PRINTFV`,
-`CONVERGE`, `FREE`, `PRINTTIME`, `SHOWPROGRESS`, `RICHARDS`, `DPIN`, `DPOUT`,
-`DPIO`, `SY-ALL`, and `STOPERROR` are covered by programmatic write + load tests.
+All previously-at-risk options are covered by programmatic write + load tests:
+`UNSTRUCTURED`, `PRINTFV`, `CONVERGE`, `FREE`, `PRINTTIME`, `SHOWPROGRESS`,
+`RICHARDS`, `DPIN`, `DPOUT`, `DPIO`, `SY-ALL`, and `STOPERROR`.
 
-Remaining niche options to model explicitly if needed:
+The two remaining niche options are now implemented (2026-05-30):
 
-- `RICHARDS_HP`: Fortran variant of Richards mode where starting values are
-  pressure heads.
-- `IHM [IUIHM]`: runtime coupling/debug option for integrated hydrologic model
-  workflows.
+- `RICHARDS_HP`: Richards mode with pressure-head initial values. Implemented
+  as `richards_hp=True`; it sets the effective Richards mode so BCF/LPF
+  `LAYTYP=5` dependencies still hold. The BAS option-line cleaner now keeps
+  `_` so `RICHARDS_HP` is not split into `RICHARDS HP`.
+- `IHM [IUIHM]`: integrated-hydrologic-model coupling flag plus debug unit.
+  Implemented as `ihm=True, iuihm=<unit>`.
 
 The LPF Richards bug (LAYTYP=5 condition always False due to `Util2d.__eq__`) was
 fixed (2026-05-20) — see `USGT_improvements.md`.
@@ -178,9 +180,12 @@ Focused tests cover from-scratch authoring, file output, and reload.
 ### Gap §6 — DPT: air-water interface adsorption immobile domain
 
 `dpt2aw_adsorb.f` implements air-water interface adsorption for the immobile
-domain. The physics is activated via a BCT option (`A-W_ADSORB`), but DPT may
-need complementary parameters that have not been validated. Low priority —
-`A-W_ADSORB` models are very uncommon.
+domain, enabled by the DPT option `A-W_ADSORBIM` (which reads extra function
+indices and arrays). This sub-mode is not modeled. To prevent silently
+shifting all subsequent item reads, `MfUsgDpt.load` now **fails explicitly**
+with `NotImplementedError` when `A-W_ADSORBIM` is present. Low priority —
+these models are very uncommon. The DLIM conditional read correctly requires
+both `IDPF/=0` and `IDISPIM/=0`.
 
 ### Gap §7 — DRT: USG-T 2.7 transport extensions — RESOLVED
 

@@ -107,10 +107,12 @@ class MfUsgBas(Package):
         structured=True,
         converge=False,
         richards=False,
+        richards_hp=False,
         double_prec=False,
         double_out=False,
         double_io=False,
-        ihm=0,
+        ihm=False,
+        iuihm=0,
         sy_all=False,
         ishowp=False,
         hnoflo=-999.99,
@@ -160,11 +162,15 @@ class MfUsgBas(Package):
         self.iprintfv = iprintfv
         self.iprinttime = iprinttime
         self.converge = converge
-        self.richards = richards
+        # RICHARDS_HP is a Richards variant with pressure-head initial values;
+        # it implies Richards mode for dependent packages (BCF/LPF LAYTYP=5).
+        self.richards_hp = richards_hp
+        self.richards = richards or richards_hp
         self.double_prec = double_prec
         self.double_out = double_out
         self.double_io = double_io
         self.ihm = ihm
+        self.iuihm = iuihm
         self.sy_all = sy_all
         self.ishowp = ishowp
         self.stoper = stoper
@@ -272,7 +278,9 @@ class MfUsgBas(Package):
             opts.append("PRINTTIME")
         if self.ishowp:
             opts.append("SHOWPROGRESS")
-        if self.richards:
+        if self.richards_hp:
+            opts.append("RICHARDS_HP")
+        elif self.richards:
             opts.append("RICHARDS")
         if self.double_prec:
             opts.append("DPIN")
@@ -282,6 +290,8 @@ class MfUsgBas(Package):
             opts.append("DPIO")
         if self.sy_all:
             opts.append("SY-ALL")
+        if self.ihm:
+            opts.append(f"IHM {self.iuihm}")
         if self.stoper is not None:
             opts.append(f"STOPERROR {self.stoper}")
         self.options = " ".join(opts)
@@ -370,8 +380,9 @@ class MfUsgBas(Package):
             if line[0] != "#":
                 break
         # dataset 1 -- options
-        # only accept alphanumeric characters, as well as '+', '-' and '.'
-        line = re.sub(r"[^A-Z0-9\.\-\+]", " ", line.upper())
+        # only accept alphanumeric characters, as well as '+', '-', '.' and
+        # '_' (the latter so 'RICHARDS_HP' stays one token, not 'RICHARDS HP')
+        line = re.sub(r"[^A-Z0-9\.\-\+_]", " ", line.upper())
         opts = line.strip().split()
         ixsec = "XSECTION" in opts
         ichflg = "CHTOCH" in opts
@@ -383,11 +394,14 @@ class MfUsgBas(Package):
         iprintfv = "PRINTFV" in opts
         structured = "UNSTRUCTURED" not in opts
         converge = "CONVERGE" in opts
-        richards = "RICHARDS" in opts
+        richards = "RICHARDS" in opts  # list membership: RICHARDS_HP excluded
+        richards_hp = "RICHARDS_HP" in opts
         double_prec = "DPIN" in opts
         double_out = "DPOUT" in opts
         double_io = "DPIO" in opts
-        ihm = 0  # todo: ask sorab
+        # IHM [IUIHM]: integrated-hydrologic-model coupling flag + debug unit
+        ihm = "IHM" in opts
+        iuihm = int(opts[opts.index("IHM") + 1]) if ihm else 0
         sy_all = "SY-ALL" in opts
         ####
 
@@ -440,6 +454,9 @@ class MfUsgBas(Package):
             ishowp=ishowp,
             converge=converge,
             richards=richards,
+            richards_hp=richards_hp,
+            ihm=ihm,
+            iuihm=iuihm,
             double_prec=double_prec,
             double_out=double_out,
             double_io=double_io,
