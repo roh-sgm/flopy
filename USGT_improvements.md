@@ -50,6 +50,13 @@ honest, upstream-ready USG-T 2.7 story.
   tables / per-lake transport boundary) is deferred given LAK's size (largest
   MODFLOW package) and that GUIs normally generate it. Rationale recorded in the
   backlog; a dedicated card would be opened if a target model needs it.
+- **Card 6 — base-class compatibility (SFR/STR/GAGE/FHB/SUB/SWT):** all six
+  classified **Compatibility-only** in the roadmap (base MODFLOW-2005 classes;
+  CLN is the project's coupling). Usage scan: only **FHB and GAGE** appear in a
+  target/example model (the Ex8 lake model), where they load via the base class
+  and round-trip is exercised; SFR/STR/SUB/SWT are used by no target model and
+  are out of scope. No USG-T-specific semantics added; a dedicated per-package
+  card would be opened only if a real model requires it.
 
 ### Phase 2 hardening (2026-05-30)
 
