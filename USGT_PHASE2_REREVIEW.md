@@ -2,10 +2,11 @@
 
 Date: 2026-05-31
 
-Review target: `31a4075f..248fbdc8` on `develop`.
+Review target (re-review): `31a4075f..248fbdc8` on `develop`. This re-review is
+resolved by the polish pass `248fbdc8..476a7297` (see Resolution status below).
 
 Scope note: ignore `8fddfe9a` and the MF6-TID files that appear in the raw diff
-because that commit sits between the two review endpoints.
+for the re-review range, because that commit sits between those two endpoints.
 
 Primary reference:
 
@@ -24,7 +25,16 @@ Verification: `python -m pytest autotest/test_usg_transport.py -q` → **95 pass
 (92 + 3 polish-pass tests). No raw filesystem/parse error for quoted
 `OPEN/CLOSE`; `EXTERNAL` via `ext_unit_dict` is covered in default CI.
 
-## High-Level Summary
+## Current status
+
+The polish pass is **complete** and this re-review is **closed** (suite: 95
+passed; resolved in `248fbdc8..476a7297`). Everything below this line is the
+**original re-review (pre-polish)**, preserved for history; its findings are
+resolved per the resolution table above and must not be read as still open.
+
+---
+
+## High-Level Summary (original re-review, pre-polish)
 
 The five Phase 2 findings are substantially closed. The main authoring/round-trip
 contracts are better now: structured `MfUsgDrt` no longer crashes silently, the
@@ -37,7 +47,10 @@ blocker, but one valid `OPEN/CLOSE` syntax still fails, and a few test/doc gaps
 make the "all closed" story slightly too broad. Treat this as a polish pass
 before calling Phase 2 fully upstream-ready.
 
-## Verification Run
+## Verification Run (original re-review, pre-polish baseline)
+
+> Pre-polish baseline only. After the polish pass the suite passes **95** — see
+> "Current status" above.
 
 Command run:
 
@@ -51,15 +64,19 @@ Result:
 92 passed, 4 warnings in 42.39s
 ```
 
-Additional manual probes:
+Additional manual probes (pre-polish):
 
 - `EXTERNAL` with a resolvable `ext_unit_dict` was manually checked for SGB,
   QRT, and DRT; all three loaded and applied expected node/scale semantics.
 - `OPEN/CLOSE rows.dat` works.
-- `OPEN/CLOSE 'rows.dat'` fails with `FileNotFoundError` because the helper does
-  not strip quotes before joining the path.
+- `OPEN/CLOSE 'rows.dat'` failed with `FileNotFoundError` because the helper did
+  not strip quotes before joining the path. *(Fixed in the polish pass: quoted
+  names — including single-quoted names with spaces — are now parsed.)*
 
-## Findings
+## Original Findings (pre-polish)
+
+> All findings below are **resolved** — see the resolution table at the top of
+> this file. They are retained verbatim for historical context.
 
 ### P1 - Quoted `OPEN/CLOSE` filenames are not parsed like Fortran/FloPy
 
@@ -204,4 +221,3 @@ Acceptance:
 3. Add the DRT omitted-recipient regression test.
 4. Clean up `USGT_PHASE2_REVIEW.md` so it is internally consistent.
 5. Run `python -m pytest autotest/test_usg_transport.py -q`.
-
