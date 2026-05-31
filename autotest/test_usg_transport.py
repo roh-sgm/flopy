@@ -3129,3 +3129,102 @@ def test_tabrich_node_count_contract(function_tmpdir):
     ml3 = MfUsg(structured=False, model_ws=str(function_tmpdir))
     with pytest.raises(ValueError, match="node count"):
         node_count(ml3)
+
+
+# ===========================================================================
+# Phase 2 polish pass (USGT_PHASE2_REREVIEW.md)
+# ===========================================================================
+
+def test_usgt_list_open_close_quoted_filenames(function_tmpdir):
+    """OPEN/CLOSE accepts single/double quotes and single-quoted names w/ spaces."""
+    # SGB: single-quoted name
+    (function_tmpdir / "rows.dat").write_text(" 201   2.000000e-02\n")
+    p = function_tmpdir / "q.sgb"
+    p.write_text("# sgb\n         1 0\n 1 0 SP1\n OPEN/CLOSE 'rows.dat'\n")
+    sgb = MfUsgSgb.load(str(p), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    assert list(sgb.stress_period_data[0]["node"]) == [200]
+    # expanded write emits inline rows; it must not preserve OPEN/CLOSE
+    out = function_tmpdir / "out.sgb"
+    sgb.fn_path = str(out)
+    sgb.write_file()
+    text = out.read_text()
+    assert "OPEN/CLOSE" not in text
+    assert "\n 201  2.000000e-02" in text
+
+    # DRT: single-quoted name WITH SPACES, with a recipient
+    (function_tmpdir / "rows with spaces.dat").write_text(
+        " 1  5.000000e+00  1.000000e+01  9  7.000000e-01\n"
+    )
+    p2 = function_tmpdir / "sp.drt"
+    p2.write_text(
+        "# drt\n         1 0 0 0 RETURNFLOW\n 1 SP1\n"
+        " OPEN/CLOSE 'rows with spaces.dat'\n"
+    )
+    drt = MfUsgDrt.load(str(p2), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    assert list(drt.stress_period_data[0]["node"]) == [0]
+    assert drt.recipient_nodes[0][0] == [8]
+
+    # SGB: double-quoted name
+    p3 = function_tmpdir / "dq.sgb"
+    p3.write_text('# sgb\n         1 0\n 1 0 SP1\n OPEN/CLOSE "rows.dat"\n')
+    sgb3 = MfUsgSgb.load(str(p3), _usgt_unstructured_model(function_tmpdir),
+                         nper=1, ext_unit_dict={})
+    assert list(sgb3.stress_period_data[0]["node"]) == [200]
+
+
+def test_usgt_list_external_positive_with_ext_unit_dict(function_tmpdir):
+    """EXTERNAL via ext_unit_dict loads for SGB/QRT/DRT (one file begins with SFAC)."""
+    from flopy.utils.mfreadnam import NamData
+
+    def eud(unit, fname):
+        # Minimal NAM entry: only filename/filetype are consulted on this path.
+        return {unit: NamData("DATA", fname, None, {})}
+
+    # SGB: external file begins with SFAC (inert on the SGB gradient).
+    (function_tmpdir / "s_ext.dat").write_text(" SFAC 5.0\n 101   1.000000e-02\n")
+    p = function_tmpdir / "e.sgb"
+    p.write_text("# sgb\n         1 0\n 1 0 SP1\n EXTERNAL 77\n")
+    sgb = MfUsgSgb.load(str(p), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict=eud(77, "s_ext.dat"))
+    assert list(sgb.stress_period_data[0]["node"]) == [100]
+    assert np.isclose(sgb.stress_period_data[0]["gradient"][0], 0.01)
+
+    # QRT: external file begins with SFAC (scales Q: -50 * 2 = -100) + recipients.
+    (function_tmpdir / "q_ext.dat").write_text(
+        " SFAC 2.0\n 5  -5.000000e+01  1  8.000000e-01\n"
+        "INTERNAL  1  (FREE)  -1\n 10\n"
+    )
+    p = function_tmpdir / "e.qrt"
+    p.write_text("# qrt\n        1         1 0 0 0 RETURNFLOW\n 1 SP1\n EXTERNAL 78\n")
+    qrt = MfUsgQrt.load(str(p), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict=eud(78, "q_ext.dat"))
+    assert np.isclose(qrt.stress_period_data[0]["q"][0], -100.0)
+    assert qrt.recipient_nodes[0][0] == [9]
+
+    # DRT: external file with a spreading (NR<0) U1DINT block.
+    (function_tmpdir / "d_ext.dat").write_text(
+        " 1  5.000000e+00  1.000000e+01  -2  7.000000e-01\n"
+        "INTERNAL  1  (FREE)  -1\n 11 12\n"
+    )
+    p = function_tmpdir / "e.drt"
+    p.write_text("# drt\n         1 0 0 0 RETURNFLOW\n 1 SP1\n EXTERNAL 79\n")
+    drt = MfUsgDrt.load(str(p), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict=eud(79, "d_ext.dat"))
+    assert drt.recipient_nodes[0][0] == [10, 11]
+
+
+def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
+    """DRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
+    ml = _usgt_unstructured_model(function_tmpdir)
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
+    spd = {0: np.array([(0, 5.0, 100.0, 0.0), (4, 4.0, 50.0, 0.0)],
+                       dtype=dtype).view(np.recarray)}
+    drt = MfUsgDrt(ml, stress_period_data=spd, options=["RETURNFLOW"])
+    drt.fn_path = str(function_tmpdir / "zero.drt")
+    drt.write_file()  # must not raise
+
+    drt2 = MfUsgDrt.load(drt.fn_path, _usgt_unstructured_model(function_tmpdir),
+                         nper=1, ext_unit_dict={})
+    assert drt2.recipient_nodes[0] == [[], []]

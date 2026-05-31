@@ -21,11 +21,24 @@ Primary reference:
 | P2 — TABRICH node-count contract | **Fixed** | `_tabrich.node_count` now: structured → `nlay*nrow*ncol`; unstructured+DISU → `disu.nodes`; unstructured+DIS → grid-product fallback; otherwise a clear `ValueError`. Test covers all four. |
 
 Verification: `python -m pytest autotest/test_usg_transport.py -q` → **92 passed**
-(80 prior + 12 Phase 2 regression tests). No raw `ValueError`/`IndexError` for
-valid USG-T list-control / option syntax; unsupported syntax raises
-`NotImplementedError`.
+at the time of this resolution (80 prior + 12 Phase 2 regression tests). No raw
+`ValueError`/`IndexError` for valid USG-T list-control / option syntax;
+unsupported syntax raises `NotImplementedError`.
 
-## High-Level Summary
+## Current status
+
+Phase 2 is **closed**. A follow-up polish pass (`USGT_PHASE2_REREVIEW.md`)
+closed the remaining narrow items — quoted `OPEN/CLOSE` filenames, positive
+`EXTERNAL` pytest coverage, the DRT zero-recipient regression test, and this
+document's cleanup. The suite now passes **95** (92 + 3 polish tests).
+
+Everything below this line is the **original pre-fix review**, preserved for
+history. Its findings are resolved per the resolution table above and should
+**not** be read as still open.
+
+---
+
+## High-Level Summary (original, pre-fix)
 
 The implementation is directionally strong for the main USG-T authoring goal:
 new packages can be created from Python inputs, basic 0-based internal indexing
@@ -44,7 +57,10 @@ Phase 2 should focus on correctness and contract clarity, not new package
 surface area. The immediate goal is to make the implementation match the status
 claims, or demote the affected package status honestly until support is added.
 
-## Verification Run
+## Verification Run (original, pre-fix baseline)
+
+> Pre-fix baseline only. After the Phase 2 fixes the suite passed 92, and after
+> the polish pass it passes 95. See "Current status" above.
 
 Command run:
 
@@ -66,7 +82,10 @@ Additional probes found failures not covered by the current suite:
 - SGB/QRT/DRT load of a stress-period list beginning with `SFAC` raises
   `ValueError` while the Fortran accepts that list-control syntax.
 
-## Phase 2 Findings
+## Original Findings (pre-fix)
+
+> All five findings below are **resolved** — see the resolution table at the top
+> of this file. They are retained verbatim for historical context.
 
 ### P0 - Structured DRT authoring is broken
 
@@ -304,4 +323,3 @@ Before Phase 2 can be called complete:
 - Package status labels do not overclaim beyond implemented and tested support.
 - Programmatic authoring tests exist for every fixed behavior.
 - Round-trip or expanded-write tests exist for every fixed reader behavior.
-

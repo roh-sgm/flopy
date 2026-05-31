@@ -21,6 +21,25 @@ produced on output.
 import os
 
 
+def _open_close_filename(line):
+    """Extract the filename from an ``OPEN/CLOSE`` control line.
+
+    Supports an unquoted token or a single/double-quoted name (which may itself
+    contain spaces), mirroring the MODFLOW ``URWORD`` quoted-word convention and
+    FloPy's quote-stripping for ``OPEN/CLOSE`` array records.
+    """
+    parts = line.split(None, 1)  # ["OPEN/CLOSE", "<remainder>"]
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if rest[:1] in ("'", '"'):
+        quote = rest[0]
+        end = rest.find(quote, 1)
+        if end != -1:
+            return rest[1:end]
+        return rest[1:].strip()  # unmatched quote: best effort
+    tokens = rest.split()
+    return tokens[0] if tokens else ""
+
+
 def _resolve_external_filename(model, ext_unit_dict, unit):
     """Best-effort filename for an EXTERNAL unit via ext_unit_dict."""
     if ext_unit_dict and unit in ext_unit_dict:
@@ -78,7 +97,7 @@ def begin_list_block(f, model=None, ext_unit_dict=None, package="list"):
         tok = line.split()
         kw = tok[0].upper() if tok else ""
     elif kw == "OPEN/CLOSE":
-        fname = tok[1]
+        fname = _open_close_filename(line)
         if model is not None and not os.path.isabs(fname):
             fname = os.path.join(model.model_ws, fname)
         source = open(fname, "r")

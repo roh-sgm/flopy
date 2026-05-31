@@ -50,9 +50,11 @@ pass before they should be treated as upstream-ready. See
 `USGT_PHASE2_REVIEW.md` for the detailed reviewer brief and the
 per-finding resolution table.
 
-**Phase 2 status: all five reopened items are now RESOLVED** (commit on
-`develop`; `python -m pytest autotest/test_usg_transport.py -q` → 92 passed,
-12 new regression tests). Summary of closures:
+**Phase 2 status: all five reopened items are RESOLVED**, plus a follow-up
+polish pass (`USGT_PHASE2_REREVIEW.md`: quoted `OPEN/CLOSE`, positive
+`EXTERNAL` tests, DRT zero-recipient test, doc cleanup). On `develop`;
+`python -m pytest autotest/test_usg_transport.py -q` → **95 passed**.
+Summary of closures:
 
 - **P0 - DRT structured authoring:** RESOLVED. `MfUsgDrt` is now unstructured
   USG-T DRT8 only; structured construction raises `NotImplementedError` (use

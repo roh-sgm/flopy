@@ -17,9 +17,13 @@ upstream flopy. They live here while testing continues.
 ### Phase 2 hardening (2026-05-30)
 
 Post-implementation critical review (`USGT_PHASE2_REVIEW.md`) found five
-correctness/robustness gaps in the Priority-1 work; all are now closed with
-regression tests that fail before the fix and pass after
-(`autotest/test_usg_transport.py` → 92 passed):
+correctness/robustness gaps in the Priority-1 work; all are closed with
+regression tests that fail before the fix and pass after. A follow-up
+re-review (`USGT_PHASE2_REREVIEW.md`) added a polish pass — quote-aware
+`OPEN/CLOSE` filenames (incl. single-quoted names with spaces) in
+`_usgt_list`, positive `EXTERNAL` tests via `ext_unit_dict` for SGB/QRT/DRT,
+a DRT omitted-recipient zero test, and review-doc cleanup. Suite:
+`autotest/test_usg_transport.py` → **95 passed**.
 
 | File | Fix |
 |---|---|
