@@ -47,7 +47,8 @@ The main USG-T authoring path is now strong. The default focused suite is:
 python -m pytest autotest/test_usg_transport.py -q
 ```
 
-Current expected result after Phase 2 + polish: **95 passed**.
+Current expected result: **101 passed** (after Stage 3). The earlier
+**95 passed** figure was the Phase 2 + polish baseline and is now historical.
 
 Known local repo state: generated USG-T transport `.CBB` outputs are ignored
 for the `Ex3_CLN_Conduit/Dispersion` validation folder because they are too
@@ -93,7 +94,8 @@ Tasks:
 Acceptance:
 
 - `git status --short` shows only intended source/doc changes.
-- The 95-test USG-T suite remains green after every card.
+- The USG-T focused suite remains green after every card (101 passed after
+  Stage 3; 95 was the Phase 2 + polish baseline).
 
 ### 1. Package Status Audit
 
@@ -421,4 +423,3 @@ Recommended order:
 Rationale: upstream reviewers will care first that status claims are honest,
 tests are clear, and unsupported modes fail predictably. Full support for rare
 packages is less persuasive than a clean, reproducible, well-tested core.
-

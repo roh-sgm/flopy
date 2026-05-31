@@ -7,17 +7,17 @@ outputs. They are intentionally kept out of the default focused suite
 (`autotest/test_usg_transport.py`, which stays light) and only run when the
 executable is available.
 
-Executable selection:
+Executable selection (single contract for the whole executable tier):
 
-- Set the ``USGT_EXE`` environment variable to the USG-T 2.7 executable
-  (name on PATH or absolute path). If unset, it defaults to ``mfusg_gsi``.
-- ``@requires_exe`` skips every test here cleanly when the executable cannot be
-  resolved, so default CI is unaffected.
+- Set ``USGT_EXE`` to a **USG-Transport 2.7** executable (a name on ``PATH`` or
+  an absolute path). If unset, it defaults to ``mfusg_gsi``.
+- ``@requires_exe(USGT_EXE)`` skips every test here cleanly when the executable
+  cannot be resolved, so the default suite is unaffected.
 
-Note: the nine real-model ``Ex1..Ex9`` tests in `test_usg_transport.py` already
-load + write + **run** real USG-T models (including the Ex7 multi-species
-transport model) under the same `@requires_exe` gate; this file adds the
-complementary *from-scratch authoring → execution* direction.
+The real-model ``Ex1..Ex9`` run tests in `test_usg_transport.py` use the **same**
+``USGT_EXE`` contract (they ``load + write + run`` real USG-T models, including
+the Ex7 multi-species transport model). This file adds the complementary
+*from-scratch authoring → execution* direction.
 """
 
 import os
@@ -78,8 +78,12 @@ def test_usgt_exe_minimal_flow_from_scratch(function_tmpdir):
 
 @requires_exe(USGT_EXE)
 def test_usgt_exe_minimal_transport_from_scratch(function_tmpdir):
-    """A from-scratch BCT transport model with a PCB concentration source runs
-    and produces a concentration file with physically bounded values."""
+    """A from-scratch BCT transport model with a PCB concentration source runs,
+    produces a concentration (`.con`) output file, and closes the
+    species-isolated transport mass budget.
+
+    (Concentration *values* are not asserted here — the `.con` is USG node-based
+    binary; per-value comparison is covered by the real Ex transport models.)"""
     ml = MfUsg(
         modelname="tran",
         model_ws=str(function_tmpdir),

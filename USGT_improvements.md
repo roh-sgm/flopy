@@ -83,12 +83,14 @@ honest, upstream-ready USG-T 2.7 story.
   `[8, 6.5, 5, 3.5, 2]` with a closed `.list` budget (note: `linmeth=1`/PCGU —
   the default `linmeth=2`/XMD does not converge this trivial system), and a
   BCT+PCB transport model runs, emits a `.con`, and closes the species-isolated
-  mass budget (`MfusgTransportListBudget`). Complements the nine real-model
-  `Ex1..Ex9` run tests (incl. Ex7 multi-species) already gated by `@requires_exe`.
+  mass budget (`MfusgTransportListBudget`). The real-model `Ex1..Ex9` run tests
+  (incl. Ex7 multi-species) share the **same** `USGT_EXE` contract (Stage 3
+  follow-up), so the whole executable tier is selected by one env var.
 - **Card 10 — upstream infrastructure track:** wrote `USGT_UPSTREAM_INFRA.md`.
   Verified the current reality (`get-modflow` installs `MODFLOW-ORG/executables`
   bundles; USG-Transport `mfusg_gsi` is a separate GSI build not in any
-  FloPy-installable distribution; `@requires_exe` only gates on PATH). Proposes
+  FloPy-installable distribution; `@requires_exe` resolves a name on PATH or an
+  absolute path). Proposes
   the path to satisfy the Nov-2024 criteria: a tagged USG-T source release with
   its own build CI + smoke tests, executable autotests living with that source,
   and only then an *optional* FloPy dependency via `USGT_EXE`/`get-modflow`.

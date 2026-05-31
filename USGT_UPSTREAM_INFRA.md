@@ -23,12 +23,15 @@ ad-hoc zip of unknown provenance.
   invoked as `mfusg_gsi`, version 2.7.0) is a **distinct program from a
   separate source tree** (`USGT_V_2-7-0_Source_Code`). It is **not** in the
   `MODFLOW-ORG/executables` bundle and is **not** installable via `get-modflow`.
-- FloPy/`modflow_devtools` `@requires_exe` resolves an executable only by name
-  on `PATH` (or via `flopy.which`). The USG-T tests here
-  (`test_usg_transport_exe.py` and the `Ex1..Ex9` run tests) are gated this way
-  and skip unless the exe is present — so there is currently **no reproducible,
-  CI-installable USG-T executable**; it must be supplied locally
-  (`USGT_EXE`, default `mfusg_gsi`).
+- FloPy/`modflow_devtools` `@requires_exe` resolves an executable by name on
+  `PATH` **or by absolute path**. Both the from-scratch
+  `test_usg_transport_exe.py` tests and the real-model `Ex1..Ex9` run tests in
+  `test_usg_transport.py` share one contract — `@requires_exe(USGT_EXE)` with
+  `USGT_EXE = os.environ.get("USGT_EXE", "mfusg_gsi")` — and skip cleanly unless
+  the executable resolves. There is currently **no reproducible,
+  CI-installable USG-T executable**; it must be supplied locally via `USGT_EXE`
+  (a name on `PATH` or an absolute path; default `mfusg_gsi`), and must be
+  **USG-Transport 2.7**.
 
 ## 2. The gap
 

@@ -71,35 +71,36 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 
 ---
 
-## Stage 3 status audit (2026-05-31)
+## Stage 3 status audit (2026-05-31) — final state
 
-Honest classification of every package that is not already a tested
-`✅ Full`. "Decision" is the Stage 3 disposition; "Target" is the intended end
-state. Cards refer to `USGT_STAGE3_COMPLETION_PLAN.md`.
+Final, post-Stage-3 classification of every package that is not a straightforward
+tested `✅ Full`. This is the resolved disposition (all Stage 3 cards have
+landed), consistent with the coverage table above.
 
-| Package | Current | Decision | Target | Card |
-|---------|---------|----------|--------|------|
-| DIS | ✅ | finish now | Full semantic (foundational; exercised by all tests) | 8 |
-| DISU | ✅ | finish now | Full semantic (protect large-grid `free_format_npl` formatting) | 8 |
-| OC | ✅ | finish now | Full semantic (ATS / BOOTSTRAPPING authoring tests) | 8 |
-| EVT | ✅ | finish now | Full semantic (transport-concentration array authoring) | 8 |
-| CLN | ✅ | finish now | Full semantic (circular/rect/general-sec/PROCESSCCF tested) | 8 |
-| DPF | ✅ | finish now | Full semantic (FRAHK/IUZONTABIM/SC2IM/immobile Richards tested) | 8 |
-| PCB | ✅ | finish now | Full semantic (verify dataset order vs Fortran) | 8 |
-| MDT | ✅ (unverified) | verify or demote | Full semantic *or* honest demotion | 8 |
-| GNC | ✅ | keep | ✅ (GNC unstructured helper; verified) | — |
-| LAK | ✅ | explicitly defer | `✅ not Full` — Ex8-validated; from-scratch authoring deferred | 5 |
-| TIB | ✅ Raw/text | explicitly defer | Raw/text round-trip (no semantic constructor by design) | 4 |
-| GSF | ✅ Raw/text | explicitly defer | Raw/text round-trip (+ `to_grid()`) | — |
-| ETS | ⚠️ Partial | keep | Expanded valid write (param preservation deferred) | 2 |
-| HFB | ⚠️ Partial | keep | Partial (non-param Full; `NPHFB>0` deferred) | 2 |
-| DPT | ⚠️ Partial | keep | Partial (`A-W_ADSORBIM` explicit-unsupported) | 3 |
-| SFR/STR/GAGE/FHB/SUB/SWT | ⚠️ Partial | compatibility-only | Compatibility-only (base FloPy classes; CLN preferred) | 6 |
+| Package | Final state | Basis |
+|---------|-------------|-------|
+| DIS | ✅ Full | Foundational structured grid; authored across the suite, loaded in structured Ex* models. |
+| DISU | ✅ Full | Unstructured grid; authored/loaded across the suite; large-grid `free_format_npl` formatting round-trip tested (`test_usg.py`). |
+| CLN | ✅ Full | Circular/rect/`GENERAL_SEC`/`PROCESSCCF`/`ISHAPE` authoring + round-trip tests; Ex3 conduit models. |
+| DPF | ✅ Full | `FRAHK`/`IUZONTABIM`/conditional `SC2IM`/immobile-Richards authoring + round-trip tests. |
+| PCB | ✅ Full | `(node, iSpec, conc)` authoring + round-trip; dataset order verified vs Fortran; exercised via Ex transport models. |
+| OC | ✅ (intentionally not Full) | `ATSA` authoring + round-trip tested; `BOOTSTRAPPING` parsed on load; full output-block round-trip not exhaustively tested. |
+| EVT | ✅ (intentionally not Full) | Transport `IETFACTOR`/`ETFACTOR` authoring tested; full per-`NEVTOP` array authoring not exhaustively tested. |
+| MDT | ✅ (intentionally not Full) | Round-trip validated via the three Ex7 Matrix-Diffusion real models; field order not yet independently Fortran-audited. |
+| LAK | ✅ (intentionally not Full) | `TABLEINPUT`/`TRANSPORTBOUNDARY` parsed; load/write validated via Ex8; from-scratch authoring deferred (size/rarity). |
+| GNC | ✅ | GNC unstructured ghost-node helper; verified. |
+| TIB | Raw/text round-trip | Raw-body preservation (multi-node `U1DINT` lines); no semantic constructor by design. |
+| GSF | Raw/text round-trip | Text round-trip + `to_grid()`; no semantic editing API by design. |
+| ETS | Expanded valid write | Array parameters expand to concrete arrays + `NPETS=0` on write; programmatic `npets>0` fails explicitly. |
+| HFB | Partial | Non-parametric static/transient is Full-quality; `NPHFB>0` (parameters) fails explicitly. |
+| DPT | Partial | `A-W_ADSORBIM` immobile air-water adsorption explicitly unsupported (fails before any shifted read); `DLIM` conditional correct. |
+| SFR / STR / GAGE / FHB / SUB / SWT | Compatibility-only | Base MODFLOW-2005 classes; CLN is the project coupling. FHB/GAGE load via base in Ex8; SFR/STR/SUB/SWT used by no target model. |
 
-Rule applied: no package is labeled `Full semantic` without a Fortran-derived
-spec, from-scratch authoring tests, round-trip tests, and explicit failure for
-unsupported modes. Plain `✅` rows above are honest "loads/writes, not yet
-promoted" markers until their Card lands.
+Rule applied throughout: a package is labeled `✅ Full` only with a
+Fortran-derived spec, from-scratch authoring tests, round-trip tests, and
+explicit failure for unsupported modes. The `✅ (intentionally not Full)` rows
+load/write correctly and are tested as noted, but are deliberately not promoted
+(documented reason in the coverage table). No row is a pending TODO.
 
 ---
 

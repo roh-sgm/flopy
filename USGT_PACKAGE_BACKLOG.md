@@ -859,9 +859,10 @@ tiers are in place:
    round-trip tests in `test_usg_transport.py`) plus the `Ex1..Ex9` real-model
    **load+write** round-trips. Catches layout/API regressions in under a minute.
 2. **Executable end-to-end (opt-in via `USGT_EXE`):** the `Ex1..Ex9` tests and
-   the new `autotest/test_usg_transport_exe.py` from-scratch tests are gated by
-   `@requires_exe`. When the USG-T 2.7 executable is resolvable (env var
-   `USGT_EXE`, default `mfusg_gsi`) they **run** the models and check outputs —
+   the new `autotest/test_usg_transport_exe.py` from-scratch tests share one
+   contract — `@requires_exe(USGT_EXE)`, `USGT_EXE` defaulting to `mfusg_gsi`
+   (a name on `PATH` or an absolute path; must be **USG-Transport 2.7**). When
+   the executable resolves they **run** the models and check outputs —
    from-scratch flow (analytical heads + closed `.list` budget) and transport
    (`.con` produced + closed species-isolated mass budget), plus the nine real
    models (incl. Ex7 multi-species). They skip cleanly when the exe is absent.
