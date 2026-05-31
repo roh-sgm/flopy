@@ -56,9 +56,9 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | MDT | `MDT` | `MfUsgMdt` | ✅ | — | Not independently verified against Fortran source |
 | DPF | `DPF` | `MfUsgDpf` | ✅ | `gwf2dpf1u1.f` | `FRAHK`, `IUZONTABIM`, conditional `SC2IM`, immobile Richards arrays, and programmatic `model.idpf` covered by focused tests. f_obj bug fixed 2026-05-20. **Verified** |
 | DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition checks both IDPF and IDISPIM. Immobile-domain air-water adsorption (`A-W_ADSORBIM`) now fails explicitly on load instead of silently shifting reads (Gap §6). **Verified** |
-| TIB | `TIB` | `MfUsgTib` | ✅ | `glo2basu1.f` | Raw-body text round-tripper; avoids parsing `U1DINT` node-list continuation lines. Sufficient for load/write of existing files |
+| TIB | `TIB` | `MfUsgTib` | ✅ Raw/text round-trip | `glo2basu1.f` | Raw-body text round-tripper; avoids parsing `U1DINT` node-list continuation lines. Sufficient for load/write of existing files. **No semantic constructor** — not authoring-ready by design (see Stage 3 audit / Card 4). |
 | TVM | `TVM` | `MfUsgTvm` | ✅ Full | `tvmu2.f` | Full semantic implementation (2026-05-20). HK/VKA/SS/SY/DDFTR/POR; transport-aware field counts; nper+1 boundaries; 20 autotests pass. **Verified** |
-| GSF | `GSF` | `MfUsgGsf` | ✅ | — | Text round-trip. `to_grid()` delegates to `UnstructuredGrid.from_gridspec()` |
+| GSF | `GSF` | `MfUsgGsf` | ✅ Raw/text round-trip | — | Text round-trip (stores raw lines). `to_grid()` delegates to `UnstructuredGrid.from_gridspec()`. No semantic editing API by design. |
 | SFR | `SFR` | base `ModflowSfr2` | ⚠️ Partial | `gwf2sfr7u1.f` | Base class used. Unstructured node-indexed items not independently validated in USG-T context |
 | STR | `STR` | base `ModflowStr` | ⚠️ Partial | `gwf2str7u1.f` | Base class used. Unstructured format not validated |
 | GAG | `GAGE` | base `ModflowGage` | ⚠️ Partial | `gwf2gag7u1.f` | Base class used. Depends on SFR/LAK; not independently validated |
@@ -68,6 +68,38 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | SWT | `SWT` | base `ModflowSwt` | ⚠️ Partial | — | Base class used. Unstructured format not validated |
 | SGB | `SGB` | `MfUsgSgb` | ✅ Full (authoring) / Expanded valid write (list controls) | `glo2sgbu1.f` | Specified Gradient Boundary. Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse; 0-based internal / 1-based file. Reads `SFAC` (inert on gradient per Fortran ISCLOC), `OPEN-CLOSE`, `EXTERNAL` list controls (expanded inline on write). `NPSGB>0` fails explicitly. Registered in `MfUsg.load()`. **Verified (Phase 2)** |
 | QRT | `QRT` | `MfUsgQrt` | ✅ Full (authoring) / Expanded valid write (list controls) | `gwf2QRT8u.f` | Sink with Return Flow. Node-based `(node, q, rfprop)` + variable-length recipient-node lists (`NodQRT` via U1DINT), `CHANGEC`/`IQCHNGTYP` transport, AUX, `ITMP/-1` reuse. Reads `SFAC` (scales Q)/`OPEN-CLOSE`/`EXTERNAL` (expanded inline on write); `recipient_nodes` validated against the stress list. `AUTOFLOWREDUCE` preserved. `NPQRT>0` and `TRANSIENTQ` fail explicitly. Registered in `MfUsg.load()`. **Verified (Phase 2)** |
+
+---
+
+## Stage 3 status audit (2026-05-31)
+
+Honest classification of every package that is not already a tested
+`✅ Full`. "Decision" is the Stage 3 disposition; "Target" is the intended end
+state. Cards refer to `USGT_STAGE3_COMPLETION_PLAN.md`.
+
+| Package | Current | Decision | Target | Card |
+|---------|---------|----------|--------|------|
+| DIS | ✅ | finish now | Full semantic (foundational; exercised by all tests) | 8 |
+| DISU | ✅ | finish now | Full semantic (protect large-grid `free_format_npl` formatting) | 8 |
+| OC | ✅ | finish now | Full semantic (ATS / BOOTSTRAPPING authoring tests) | 8 |
+| EVT | ✅ | finish now | Full semantic (transport-concentration array authoring) | 8 |
+| CLN | ✅ | finish now | Full semantic (circular/rect/general-sec/PROCESSCCF tested) | 8 |
+| DPF | ✅ | finish now | Full semantic (FRAHK/IUZONTABIM/SC2IM/immobile Richards tested) | 8 |
+| PCB | ✅ | finish now | Full semantic (verify dataset order vs Fortran) | 8 |
+| MDT | ✅ (unverified) | verify or demote | Full semantic *or* honest demotion | 8 |
+| GNC | ✅ | keep | ✅ (GNC unstructured helper; verified) | — |
+| LAK | ✅ | explicitly defer | `✅ not Full` — Ex8-validated; from-scratch authoring deferred | 5 |
+| TIB | ✅ Raw/text | explicitly defer | Raw/text round-trip (no semantic constructor by design) | 4 |
+| GSF | ✅ Raw/text | explicitly defer | Raw/text round-trip (+ `to_grid()`) | — |
+| ETS | ⚠️ Partial | keep | Expanded valid write (param preservation deferred) | 2 |
+| HFB | ⚠️ Partial | keep | Partial (non-param Full; `NPHFB>0` deferred) | 2 |
+| DPT | ⚠️ Partial | keep | Partial (`A-W_ADSORBIM` explicit-unsupported) | 3 |
+| SFR/STR/GAGE/FHB/SUB/SWT | ⚠️ Partial | compatibility-only | Compatibility-only (base FloPy classes; CLN preferred) | 6 |
+
+Rule applied: no package is labeled `Full semantic` without a Fortran-derived
+spec, from-scratch authoring tests, round-trip tests, and explicit failure for
+unsupported modes. Plain `✅` rows above are honest "loads/writes, not yet
+promoted" markers until their Card lands.
 
 ---
 
