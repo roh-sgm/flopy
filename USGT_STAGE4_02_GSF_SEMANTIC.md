@@ -150,3 +150,41 @@ Constraints:
 - Do not touch MF6-TID or unrelated packages.
 - Do not promote GSF to Full unless semantic constructor, writer, load/reload, and tests are complete.
 ```
+
+## Stage 4.2 resolution — done
+
+`MfUsgGsf` was promoted from `Raw/text round-trip` to **`Full (authoring)`**.
+
+Key finding: **GSF is not read by the USG-T solver.** A grep of the USG-T 2.7
+source found no `.gsf` / GRIDSPEC reader — GSF is produced by gridgen-style
+tools and consumed by post-processors (FloPy's
+`UnstructuredGrid.from_gridspec`). So there is no Fortran reader to audit and an
+executable smoke test is not meaningful; correctness is validated via
+`from_gridspec`/`to_grid` and semantic write/reload.
+
+Implemented:
+
+- Semantic constructor `MfUsgGsf(model, vertices=[(x,y,z),...], node_data=[{node,
+  xc, yc, zc, layer, vertices}], header=..., nlay=..., extra_header=...)`.
+- `parse=True` loader (`_parse_semantic`) recovering the same structure, with
+  raw fallback on any unparseable/inconsistent file.
+- Semantic writer producing valid GSF with **1-based** node/vertex/layer ids
+  from **0-based** Python data.
+- `from_grid(model, grid, zverts)` — builds from an `UnstructuredGrid`; requires
+  per-vertex `zverts` because the grid does not retain vertex z (collapsed into
+  per-cell top/botm), failing explicitly rather than inventing elevations.
+- `to_grid()` unchanged (delegates to `from_gridspec`).
+- Mutually-exclusive modes: raw `lines` vs semantic `vertices`+`node_data`
+  (judged by explicit presence, matching the `write_file` branch test); raw
+  round-trip kept as the `load` default.
+- Line-2 trailing gridgen integers preserved verbatim on load, default `(1, 1)`
+  on authoring (the grid consumer ignores them).
+
+Tests added in `autotest/test_usg_transport.py`:
+`test_mfusggsf_semantic_load`, `test_mfusggsf_authoring_from_scratch`,
+`test_mfusggsf_write_reload_roundtrip`,
+`test_mfusggsf_rejects_invalid_and_mixed_modes`, `test_mfusggsf_from_grid`
+(the three existing raw `lines`/`to_grid` tests remain green).
+
+Validation: focused **114 passed**, exe **3 passed**, combined **117 passed**
+under the USG-T 2.7 ARM binary; `git diff --check` clean.

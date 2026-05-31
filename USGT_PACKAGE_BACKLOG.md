@@ -35,8 +35,9 @@ All priority tiers below have been worked through. Commits on `develop`:
   TIB (raw/text in P2; promoted to **Full (authoring)** in Stage 4.1).
 - **P3 — review:** BCT (1-species/IDISP=2/multi-species) and DDF (NONLINEAR
   table) from-scratch authoring tests added; other Full packages reviewed.
-- **P4 — base-class packages:** GSF sufficient; LAK validated via Ex8 (authoring
-  deferred); SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented).
+- **P4 — base-class packages:** GSF text round-trip in P4, promoted to **Full
+  (authoring)** in Stage 4.2; LAK validated via Ex8 (authoring deferred);
+  SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented).
 - **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
   real-model run-validation is a documented manual tier (Ex* loads in CI).
 
@@ -831,24 +832,42 @@ Acceptance:
 
 Class: `MfUsgGsf`
 
-Status: **Done** — text round-trip plus `to_grid()` helper. **Decision:** text
-round-trip is sufficient; no semantic editing API is needed. Covered by
-`test_mfusggsf_load_stores_lines`, `test_mfusggsf_text_roundtrip`, and
-`test_mfusggsf_to_grid` (smoke test).
+Status: ✅ **Full (authoring)** — **done in Stage 4.2** (supersedes the earlier
+"text round-trip is sufficient" decision). `MfUsgGsf` gained a semantic
+`vertices` + `node_data` constructor, a `parse=True` loader, a semantic writer,
+and `from_grid(model, grid, zverts)`, while keeping the raw `lines` round-trip
+as the `load` default and parse fallback.
 
-Tasks:
+GSF is a grid-specification file produced by gridgen-style tools and consumed by
+post-processors (FloPy's `UnstructuredGrid.from_gridspec`); it is **not** read by
+the MODFLOW-USG / USG-T solver (confirmed: no `.gsf`/GRIDSPEC reader in the USG-T
+source), so there is no Fortran reader to audit and no executable smoke test —
+correctness is validated through `from_gridspec` and semantic write/reload.
 
-- Decide whether text round-trip is sufficient. (Yes.)
-- If semantic editing is needed, define a separate API. (Not needed.)
+Semantic model (0-based internal, 1-based file): header (`UNSTRUCTURED [GWF]`),
+`nnodes`, `nlay`, `vertices` as `(nverts, 3)` `(x, y, z)`, and per-node records
+`{node, xc, yc, zc, layer, vertices}`. `from_gridspec` reads only `NNODES` from
+line 2 and derives the layer count from the per-node `LAY` column, so the
+trailing line-2 gridgen integers are preserved verbatim on load and default to
+`(1, 1)` when authoring. `from_grid` requires per-vertex `zverts` because
+`UnstructuredGrid` does not retain vertex z (it is collapsed into per-cell
+top/botm) — it fails explicitly rather than inventing elevations.
 
-Required tests:
+Tests (in `autotest/test_usg_transport.py`):
 
-- Raw round-trip.
-- `to_grid()` smoke test.
+- existing raw round-trip + `to_grid()` smoke (`test_mfusggsf_load_stores_lines`,
+  `test_mfusggsf_text_roundtrip`, `test_mfusggsf_to_grid`) — unchanged;
+- semantic load (`test_mfusggsf_semantic_load`);
+- from-scratch authoring + `to_grid` (`test_mfusggsf_authoring_from_scratch`);
+- write/reload byte-stable, 0-based preserved (`test_mfusggsf_write_reload_roundtrip`);
+- invalid vertex refs + ambiguous/mixed modes
+  (`test_mfusggsf_rejects_invalid_and_mixed_modes`);
+- `from_grid` round-trip incl. the missing-z failure (`test_mfusggsf_from_grid`).
 
 Acceptance:
 
-- Status remains honest: text wrapper unless semantic editing is added.
+- From-scratch authoring works without first loading a `.gsf`; `load` defaults
+  to the safe raw round-trip; status is honest (Full for authoring).
 
 ---
 

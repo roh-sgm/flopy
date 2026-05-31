@@ -2415,6 +2415,150 @@ def test_mfusggsf_to_grid(function_tmpdir):
     assert np.isclose(grid.ycellcenters[0], 0.333, atol=1e-3)
 
 
+# Semantic equivalent of _MINIMAL_GSF_LINES (0-based vertex/node references).
+_MINIMAL_GSF_VERTICES = [(0.0, 0.0, 10.0), (1.0, 0.0, 10.0), (0.5, 1.0, 10.0)]
+_MINIMAL_GSF_NODES = [
+    {"node": 0, "xc": 0.5, "yc": 0.333, "zc": 5.0, "layer": 0, "vertices": [0, 1, 2]}
+]
+
+
+def test_mfusggsf_semantic_load(function_tmpdir):
+    """load(parse=True) parses a minimal GSF into 0-based semantic data."""
+    from flopy.modflow import ModflowDis
+
+    gsf_in = function_tmpdir / "in.gsf"
+    gsf_in.write_text("".join(_MINIMAL_GSF_LINES))
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(gsf_in), ml, ext_unit_dict={}, parse=True)
+
+    assert gsf.lines is None  # parsed, not raw
+    assert gsf.nnodes == 1 and gsf.nlay == 1
+    # file vertex ids 1,2,3 -> internal 0,1,2
+    assert gsf.node_data[0]["vertices"] == [0, 1, 2]
+    # file node 1 -> internal 0; file layer 1 -> internal 0
+    assert gsf.node_data[0]["node"] == 0
+    assert gsf.node_data[0]["layer"] == 0
+    assert np.allclose(gsf.vertices, _MINIMAL_GSF_VERTICES)
+
+
+def test_mfusggsf_authoring_from_scratch(function_tmpdir):
+    """Build a GSF from Python data (no file loaded); file ids are 1-based."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf(
+        ml, vertices=_MINIMAL_GSF_VERTICES, node_data=_MINIMAL_GSF_NODES
+    )
+    gsf.fn_path = str(function_tmpdir / "scratch.gsf")
+    gsf.write_file()
+
+    lines = [
+        ln for ln in Path(gsf.fn_path).read_text().splitlines() if ln.strip()
+    ]
+    assert lines[0].upper().startswith("UNSTRUCTURED")
+    assert lines[1].split()[:2] == ["1", "1"]  # nnodes nlay
+    assert lines[2].split()[0] == "3"  # nverts
+    node_line = lines[-1].split()
+    assert node_line[0] == "1"  # internal node 0 -> file 1
+    assert node_line[4] == "1"  # internal layer 0 -> file 1
+    assert node_line[5] == "3"  # nvert
+    assert node_line[6:9] == ["1", "2", "3"]  # internal verts 0,1,2 -> file 1,2,3
+
+    # The authored file parses back to a real UnstructuredGrid.
+    grid = gsf.to_grid()
+    assert isinstance(grid, UnstructuredGrid)
+    assert len(grid.xcellcenters) == 1
+    assert np.isclose(grid.xcellcenters[0], 0.5, atol=1e-6)
+
+
+def test_mfusggsf_write_reload_roundtrip(function_tmpdir):
+    """Author -> write -> load(parse=True) preserves semantics and 0-based ids."""
+    from flopy.modflow import ModflowDis
+
+    def ml(name):
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    gsf = MfUsgGsf(
+        ml("w"), vertices=_MINIMAL_GSF_VERTICES, node_data=_MINIMAL_GSF_NODES
+    )
+    gsf.fn_path = str(function_tmpdir / "rt.gsf")
+    gsf.write_file()
+
+    re = MfUsgGsf.load(gsf.fn_path, ml("w2"), parse=True)
+    assert np.allclose(re.vertices, _MINIMAL_GSF_VERTICES)
+    assert re.node_data[0]["vertices"] == [0, 1, 2]
+    assert re.node_data[0]["layer"] == 0
+
+    # Second write is byte-identical (stable round-trip).
+    first = Path(gsf.fn_path).read_text()
+    re.fn_path = str(function_tmpdir / "rt_again.gsf")
+    re.write_file()
+    assert Path(re.fn_path).read_text() == first
+
+
+def test_mfusggsf_rejects_invalid_and_mixed_modes(function_tmpdir):
+    """Invalid vertex refs and ambiguous input modes fail explicitly."""
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    # vertex reference out of range
+    with pytest.raises(ValueError, match="out of range"):
+        MfUsgGsf(
+            ml(),
+            vertices=_MINIMAL_GSF_VERTICES,
+            node_data=[{"xc": 0.5, "yc": 0.3, "layer": 0, "vertices": [0, 1, 9]}],
+        )
+
+    # raw lines + semantic data together (no silent precedence)
+    with pytest.raises(ValueError, match="not both"):
+        MfUsgGsf(
+            ml(),
+            lines=["UNSTRUCTURED\n"],
+            vertices=_MINIMAL_GSF_VERTICES,
+            node_data=_MINIMAL_GSF_NODES,
+        )
+
+    # semantic mode needs both vertices and node_data
+    with pytest.raises(ValueError, match="requires both"):
+        MfUsgGsf(ml(), vertices=_MINIMAL_GSF_VERTICES)
+
+
+def test_mfusggsf_from_grid(function_tmpdir):
+    """from_grid builds a GSF from an UnstructuredGrid (requires per-vertex z)."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    gsf_in = function_tmpdir / "src.gsf"
+    gsf_in.write_text("".join(_MINIMAL_GSF_LINES))
+    grid = UnstructuredGrid.from_gridspec(str(gsf_in), split_vertices=True)
+
+    # UnstructuredGrid drops per-vertex z, so from_grid must demand it.
+    with pytest.raises(ValueError, match="zverts"):
+        MfUsgGsf.from_grid(ml(), grid)
+
+    gsf = MfUsgGsf.from_grid(ml(), grid, zverts=[10.0, 10.0, 10.0])
+    assert gsf.nnodes == 1 and gsf.nlay == 1
+    assert gsf.node_data[0]["vertices"] == [0, 1, 2]  # grid iverts are 0-based
+    gsf.fn_path = str(function_tmpdir / "from_grid.gsf")
+    gsf.write_file()
+    assert isinstance(gsf.to_grid(), UnstructuredGrid)
+
+
 # ---------------------------------------------------------------------------
 # MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
 # ---------------------------------------------------------------------------

@@ -55,6 +55,25 @@ can be built from Python/numpy without first loading an existing model.
     a single explicitly-empty mode is valid, but mixing it with another mode
     raises. Regression cases added; focused suite **109 passed**, combined
     **112 passed** under the ARM binary.
+- **Stage 4.2 — GSF semantic support (2026-05-31):** promoted `MfUsgGsf` from
+  `Raw/text round-trip` to **`Full (authoring)`**. Added a semantic
+  `vertices` + `node_data` constructor, a `parse=True` loader, a semantic writer,
+  and `from_grid(model, grid, zverts)`, covering the GSF grid spec: header
+  (`UNSTRUCTURED [GWF]`), `nnodes`/`nlay`, vertex `(x, y, z)`, and per-node
+  `(node, xc, yc, zc, layer, vertices)`. Nodes/vertices/layers are 0-based in the
+  Python API and 1-based in the file. GSF is **not** read by the USG-T solver
+  (no Fortran reader — it is consumed by `UnstructuredGrid.from_gridspec`), so
+  correctness is validated through `from_gridspec`/`to_grid` and semantic
+  write/reload rather than an executable smoke test. `from_grid` requires
+  per-vertex `zverts` because `UnstructuredGrid` does not retain vertex z
+  (collapsed into per-cell top/botm) — it fails explicitly rather than inventing
+  elevations. `MfUsgGsf.load` still **defaults to the byte-faithful raw `lines`
+  round-trip** (what `MfUsg.load` uses), with raw fallback when `parse=True`
+  meets an unparseable file; raw `lines` and semantic data are mutually
+  exclusive. Five new tests (semantic load, from-scratch authoring, write/reload,
+  invalid-ref + mixed-mode rejection, `from_grid`) join the three existing raw
+  tests. Focused suite **114 passed**, exe suite **3 passed**, combined
+  **117 passed** under the USG-T 2.7 ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 
