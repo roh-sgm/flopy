@@ -31,6 +31,13 @@ honest, upstream-ready USG-T 2.7 story.
   `mfparbc` (ETS/EVT array params). Tests: a new parameterized-ETS
   load→expand→`NPETS=0` test plus the existing explicit-failure tests for all
   four list-parameter packages. Nothing writes incomplete parametric syntax.
+- **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
+  (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
+  option triggers a cascade of conditional arrays (zone map, tabular area
+  functions, Langmuir isotherm arrays); too large and rare to model in v1.
+  `MfUsgDpt.load` raises `NotImplementedError` at the option line before any
+  extra read; test covers both the bare keyword and the `IAREA_FNIM IKAWI_FNIM`
+  form. Spec recorded in roadmap Gap §6.
 
 ### Phase 2 hardening (2026-05-30)
 

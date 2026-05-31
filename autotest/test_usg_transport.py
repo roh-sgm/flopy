@@ -2775,15 +2775,20 @@ def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
     from flopy.mfusg import MfUsgDpt
     from flopy.modflow import ModflowDis
 
-    dpt_file = function_tmpdir / "aw.dpt"
-    dpt_file.write_text(
-        "# DPT with immobile air-water adsorption\n"
-        " 0 0 0 0 0 0 0 A-W_ADSORBIM\n"
-    )
-    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
-    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-    with pytest.raises(NotImplementedError):
-        MfUsgDpt.load(str(dpt_file), ml, ext_unit_dict={})
+    # Two option-line forms: the bare keyword and the form with function
+    # indices (IAREA_FNIM=5, IKAWI_FNIM=4 = tabular, which would otherwise read
+    # a zone map + tabular area arrays). Both must raise at the option line,
+    # before any extra array read, so nothing downstream shifts.
+    for header in (
+        " 0 0 0 0 0 0 0 A-W_ADSORBIM\n",
+        " 0 0 0 0 0 0 0 A-W_ADSORBIM 5 4\n",
+    ):
+        dpt_file = function_tmpdir / "aw.dpt"
+        dpt_file.write_text("# DPT immobile air-water adsorption\n" + header)
+        ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+        with pytest.raises(NotImplementedError, match="A-W_ADSORBIM"):
+            MfUsgDpt.load(str(dpt_file), ml, ext_unit_dict={})
 
 
 # ---------------------------------------------------------------------------

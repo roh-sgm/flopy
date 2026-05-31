@@ -209,15 +209,29 @@ DPF now matches the key conditional reads in `gwf2dpf1u1.f`:
 
 Focused tests cover from-scratch authoring, file output, and reload.
 
-### Gap §6 — DPT: air-water interface adsorption immobile domain
+### Gap §6 — DPT: air-water interface adsorption immobile domain (Stage 3 Card 3)
 
-`dpt2aw_adsorb.f` implements air-water interface adsorption for the immobile
-domain, enabled by the DPT option `A-W_ADSORBIM` (which reads extra function
-indices and arrays). This sub-mode is not modeled. To prevent silently
-shifting all subsequent item reads, `MfUsgDpt.load` now **fails explicitly**
-with `NotImplementedError` when `A-W_ADSORBIM` is present. Low priority —
-these models are very uncommon. The DLIM conditional read correctly requires
-both `IDPF/=0` and `IDISPIM/=0`.
+**Decision: explicitly unsupported (deferred); rare PFAS-type sub-mode.**
+
+Fortran-derived spec (`gwt2dptu1.f` option block + `dpt2aw_adsorb.f`
+`AW_ADSORBIM1AL/RP1/RP2`): the DPT option line carries
+`A-W_ADSORBIM IAREA_FNIM IKAWI_FNIM`, then a cascade of conditional reads:
+
+- If `IAREA_FNIM==5` or `IKAWI_FNIM==4` (tabular): `NAZONESIM NATABROWSIM`, a
+  per-node zone map `IAWIZONMAPIM` (`U1DINT`, NODES), and a tabular area array
+  `AWI_AREA_TABIM(2, NATABROWSIM, NAZONESIM)`.
+- `IAREA_FNIM==1/3`: `AWAMAXIM(NODES)`; `==4`: `AWAREA_X2IM/X1IM/X0IM(NODES)`;
+  else a `ROG_SIGMAIM` constant.
+- Langmuir isotherm arrays `ALANGAWIM(NODES,MCOMP)`, `BLANGAWIM(NODES,MCOMP)`,
+  plus per-stress-period reads (`AW_ADSORBIM1RP1/RP2`).
+
+This many conditional arrays make it a substantial, rarely-used sub-mode, so it
+is **not** modeled in v1. To prevent silently shifting every subsequent read,
+`MfUsgDpt.load` **fails explicitly** with `NotImplementedError` the moment the
+`A-W_ADSORBIM` token is seen on the option line — before any of the extra reads
+above — for both the bare keyword and the `IAREA_FNIM IKAWI_FNIM` form (tested).
+The DLIM conditional read correctly requires both `IDPF/=0` and `IDISPIM/=0`,
+and is independent of this option.
 
 ### Gap §7 — DRT: USG-T 2.7 transport extensions — RESOLVED
 
