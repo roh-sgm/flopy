@@ -586,12 +586,19 @@ Acceptance:
 
 Stage 4.1 review follow-up (resolved): (1) the three input modes
 (`stress_period_data`/`blocks`/`raw_body`) are now mutually exclusive — supplying
-more than one non-empty mode raises `ValueError` instead of `write_file`
-silently preferring `raw_body`; (2) `parse=True` now raises on a premature EOF
-(file with fewer headers than `nper`) and `load` falls back to the raw body
-rather than expanding the file with synthetic no-op stress periods. Two tests
-added (`test_mfusgtib_rejects_mixed_input_modes`,
+more than one raises `ValueError` instead of `write_file` silently preferring
+`raw_body`; (2) `parse=True` now raises on a premature EOF (file with fewer
+headers than `nper`) and `load` falls back to the raw body rather than expanding
+the file with synthetic no-op stress periods. Two tests added
+(`test_mfusgtib_rejects_mixed_input_modes`,
 `test_mfusgtib_parse_rejects_truncated_file`). Status unchanged: Full (authoring).
+
+Polish: mode-exclusivity now counts a mode as supplied by **explicit presence**
+(`is not None`) — the same test `write_file` uses to choose a branch — so an
+explicitly-passed but empty mode (`raw_body=""`, `stress_period_data={}`,
+`blocks={}`) also counts and can no longer slip past validation into a silent
+`write_file` branch. A single explicitly-empty mode stays valid; mixing still
+raises. Regression cases added to `test_mfusgtib_rejects_mixed_input_modes`.
 
 ---
 

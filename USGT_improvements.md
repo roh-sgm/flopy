@@ -41,12 +41,20 @@ can be built from Python/numpy without first loading an existing model.
   USG-T 2.7 ARM binary.
   - **Review follow-up (resolved):** made the three input modes
     (`stress_period_data`/`blocks`/`raw_body`) mutually exclusive — more than one
-    non-empty mode now raises `ValueError` instead of `write_file` silently
-    preferring `raw_body`; and `parse=True` now raises on a premature EOF (fewer
-    headers than `nper`) so `load` falls back to the raw body rather than padding
-    the file with synthetic no-op stress periods. Two tests added; focused suite
+    mode now raises `ValueError` instead of `write_file` silently preferring
+    `raw_body`; and `parse=True` now raises on a premature EOF (fewer headers
+    than `nper`) so `load` falls back to the raw body rather than padding the
+    file with synthetic no-op stress periods. Two tests added; focused suite
     **109 passed**, combined **112 passed** under the ARM binary. TIB stays
     `Full (authoring)`.
+  - **Polish (resolved):** the mode-exclusivity check counted modes with a
+    truthiness test while `write_file` branched on `is not None`, so an
+    explicitly-empty mode (`raw_body=""`, `stress_period_data={}`, `blocks={}`)
+    could slip past validation and still steer the writer into a silent branch.
+    Validation now uses explicit presence (`is not None`) to match the writer:
+    a single explicitly-empty mode is valid, but mixing it with another mode
+    raises. Regression cases added; focused suite **109 passed**, combined
+    **112 passed** under the ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

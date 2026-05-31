@@ -95,11 +95,14 @@ class MfUsgTib(Package):
 
     Notes
     -----
-    Provide at most one of ``stress_period_data``, ``blocks``, or ``raw_body``;
-    supplying more than one non-empty mode raises ``ValueError`` (the modes are
-    mutually exclusive, so the writer never silently prefers one). With none of
-    them the package writes an all-zero header for every stress period (a valid
-    no-op TIB).
+    Provide at most one of ``stress_period_data``, ``blocks``, or ``raw_body``.
+    A mode counts as supplied when it is passed explicitly (``is not None``),
+    even if its content is empty (e.g. ``raw_body=""`` or
+    ``stress_period_data={}``); supplying more than one raises ``ValueError``.
+    The modes are mutually exclusive — matching the test ``write_file`` uses to
+    select a branch — so the writer never silently prefers one over another.
+    With none of them the package writes an all-zero header for every stress
+    period (a valid no-op TIB).
     """
 
     def __init__(
@@ -118,9 +121,12 @@ class MfUsgTib(Package):
         )
         assert isinstance(model, MfUsg), msg
 
-        # Mutually exclusive input modes: at most one of the three may be
-        # non-empty, so write_file never has to silently prefer one over
-        # another. Zero modes is allowed (writes a no-op all-zero TIB).
+        # Mutually exclusive input modes. "Provided" means explicitly passed
+        # (``is not None``) -- the same test ``write_file`` uses to pick a
+        # branch -- so validation and the writer always agree and no mode is
+        # silently ignored. An explicitly-passed but empty mode (e.g.
+        # ``raw_body=""`` or ``stress_period_data={}``) still counts. Zero modes
+        # is allowed and writes a no-op all-zero TIB.
         provided = [
             name
             for name, val in (
@@ -128,14 +134,13 @@ class MfUsgTib(Package):
                 ("blocks", blocks),
                 ("raw_body", raw_body),
             )
-            if val
+            if val is not None
         ]
         if len(provided) > 1:
             raise ValueError(
                 "MfUsgTib accepts only one input mode at a time; received "
-                f"non-empty {provided}. Provide exactly one of "
-                "'stress_period_data', 'blocks', or 'raw_body' (or none for a "
-                "no-op TIB)."
+                f"{provided}. Provide exactly one of 'stress_period_data', "
+                "'blocks', or 'raw_body' (or none for a no-op TIB)."
             )
 
         if unitnumber is None:

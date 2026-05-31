@@ -1086,11 +1086,23 @@ def test_mfusgtib_rejects_mixed_input_modes(function_tmpdir):
     with pytest.raises(ValueError, match="only one input mode"):
         MfUsgTib(ml(), raw_body=raw, blocks=blk)
 
-    # Zero modes (no-op TIB) and each single mode are accepted.
+    # An explicitly-passed but *empty* mode still counts (validation uses the
+    # same is-not-None test write_file uses to pick a branch), so these mixes
+    # must raise rather than letting write_file silently ignore one side.
+    with pytest.raises(ValueError, match="only one input mode"):
+        MfUsgTib(ml(), stress_period_data={0: {"ib0": [0]}}, raw_body="")
+    with pytest.raises(ValueError, match="only one input mode"):
+        MfUsgTib(ml(), stress_period_data={}, blocks={0: " 0 0 0\n"})
+
+    # Zero modes (no-op TIB) and each single mode are accepted -- including a
+    # single explicitly-empty mode.
     MfUsgTib(ml())
     MfUsgTib(ml(), stress_period_data=spd)
     MfUsgTib(ml(), raw_body=raw)
     MfUsgTib(ml(), blocks=blk)
+    MfUsgTib(ml(), stress_period_data={})
+    MfUsgTib(ml(), raw_body="")
+    MfUsgTib(ml(), blocks={})
 
 
 def test_mfusgtib_parse_rejects_truncated_file(function_tmpdir):

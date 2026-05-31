@@ -186,3 +186,17 @@ Tests added in `autotest/test_usg_transport.py`:
 
 Validation: focused **109 passed**, exe **3 passed**, combined **112 passed**
 under the USG-T 2.7 ARM binary; `git diff --check` clean.
+
+### Polish — explicit-empty modes closed
+
+The first fix counted modes with a truthiness test (`if val`) while `write_file`
+branches on `is not None`. That let an explicitly-empty mode slip past
+validation and still steer the writer into a silent branch — e.g.
+`stress_period_data={..}, raw_body=""` (writer would take the empty raw branch)
+or `stress_period_data={}, blocks={..}` (writer would take the empty semantic
+branch). Validation now counts a mode as supplied by **explicit presence**
+(`is not None`), matching `write_file`, so a single explicitly-empty mode is
+valid but any mix raises `ValueError`. Regression cases added to
+`test_mfusgtib_rejects_mixed_input_modes`. TIB stays `Full (authoring)`;
+focused **109 passed**, exe **3 passed**, combined **112 passed** under the ARM
+binary.
