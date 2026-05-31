@@ -44,6 +44,12 @@ honest, upstream-ready USG-T 2.7 story.
   recorded in the backlog. The raw round-trip preserves multi-node `U1DINT`
   continuation lines (tested) and round-trips Model A bit-for-bit; semantic
   authoring deferred until a target model needs it.
+- **Card 5 — LAK:** decision is **keep `✅` not Full**. `MfUsgLak` already
+  parses/preserves `TABLEINPUT` and the `transportboundary` flag and round-trips
+  the Ex8 real model; from-scratch authoring (full lake connectivity / bathymetry
+  tables / per-lake transport boundary) is deferred given LAK's size (largest
+  MODFLOW package) and that GUIs normally generate it. Rationale recorded in the
+  backlog; a dedicated card would be opened if a target model needs it.
 
 ### Phase 2 hardening (2026-05-30)
 

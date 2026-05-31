@@ -741,12 +741,22 @@ Class: `MfUsgLak`
 
 Fortran: `gwf2lak7u1.f`
 
-Status: **Decision (2026-05-30)** — current support is sufficient for project
-use. LAK load/write is exercised by the `Ex8_Lake` real-model round-trip test
-(`TABLEINPUT` / `TRANSPORTBOUNDARY` headers verified). From-scratch
-programmatic authoring of those options is **deferred** (LAK is rarely authored
-by hand in this project; the real-model round-trip covers the I/O). Status kept
-as `✅` (not `Full`) to reflect that there is no from-scratch authoring test.
+Status: **Decision confirmed (Stage 3 Card 5): keep `✅` not Full.** Current
+support is sufficient for project use; from-scratch authoring deferred.
+
+Audit (`gwf2lak7u1.f`, ≈4630 lines — the largest MODFLOW package): the option
+line is parsed at `GWF2LAK7U1AR` (L83 `TABLEINPUT`, L89 `TRANSPORTBOUNDARY`);
+the per-SP geometry/connectivity/gage data is read across `GWF2LAK7U1RP/RPS/RPU`.
+`MfUsgLak` already parses and preserves the `TABLEINPUT` option and the
+`transportboundary` flag, and load/write round-trips the `Ex8_Lake` real model.
+
+Why deferred: a from-scratch authoring test must build complete lake
+connectivity, bathymetry/stage tables, and (with transport) per-lake boundary
+concentrations — a large surface for a package GUIs normally generate. Per the
+Stage 3 priority guidance ("a clean, well-tested core beats full support for
+rare packages"), this is **deferred**, not blocked. If a target model needs
+from-scratch LAK authoring, open a dedicated card to add a minimal synthetic
+lake plus a round-trip test and only then promote toward `Full`.
 
 Tasks:
 
