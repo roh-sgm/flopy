@@ -2857,3 +2857,275 @@ def test_mfusgddf_nonlinear_table_authoring_roundtrip(function_tmpdir):
     assert ddf2.nonlinear
     assert len(ddf2.density_table) == 3
     assert np.isclose(ddf2.density_table[1][1], 1012.5, atol=1e-3)
+
+
+# ===========================================================================
+# Phase 2 hardening (USGT_PHASE2_REVIEW.md)
+# ===========================================================================
+
+# --- P0: MfUsgDrt structured authoring contract ---------------------------
+
+def test_mfusgdrt_structured_construction_raises(function_tmpdir):
+    """MfUsgDrt is unstructured-only; structured construction fails clearly."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    with pytest.raises(NotImplementedError, match="unstructured"):
+        MfUsgDrt(ml, stress_period_data={0: [(0, 5.0, 100.0)]})
+
+
+def test_modflowdrt_structured_authoring_from_scratch(function_tmpdir):
+    """Classic structured DRT (base ModflowDrt) authors a valid file from scratch."""
+    from flopy.modflow import ModflowDis, ModflowDrt
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    dtype = ModflowDrt.get_default_dtype(structured=True)
+    spd = {0: np.array([(0, 0, 0, 5.0, 100.0, 0, 0, 0, 0.0)],
+                       dtype=dtype).view(np.recarray)}
+    drt = ModflowDrt(ml, stress_period_data=spd)
+    drt.fn_path = str(function_tmpdir / "classic.drt")
+    drt.write_file()
+    assert Path(drt.fn_path).read_text().strip() != ""
+
+
+def test_mfusgdrt_load_structured_delegates_to_base(function_tmpdir):
+    """Loading a structured DRT via the registry class returns a base object."""
+    from flopy.modflow import ModflowDis, ModflowDrt
+
+    drt_in = function_tmpdir / "classic.drt"
+    drt_in.write_text(
+        "# classic structured DRT\n"
+        "         1         0\n"
+        " 1 0    Stress Period 1\n"
+        " 1 1 1  5.000000  1.000000e+02\n"
+    )
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    drt = MfUsgDrt.load(str(drt_in), ml, nper=1, ext_unit_dict={})
+    # Delegation yields a base ModflowDrt, not the unstructured MfUsgDrt
+    assert isinstance(drt, ModflowDrt)
+    assert not isinstance(drt, MfUsgDrt)
+
+
+# --- P0: SGB/QRT/DRT main-list controls (SFAC / OPEN-CLOSE / EXTERNAL) ------
+
+def _usgt_unstructured_model(ws, nper=1):
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(ws))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=nper)
+    return ml
+
+
+def test_mfusgsgb_sfac_and_open_close(function_tmpdir):
+    """SGB honors SFAC (inert on gradient per Fortran) and OPEN/CLOSE rows."""
+    # SFAC: USG-T scales an internal dummy column for SGB, not the gradient.
+    sfac_file = function_tmpdir / "sfac.sgb"
+    sfac_file.write_text(
+        "# sgb sfac\n         1 0\n 1 0    SP1\n SFAC 5.0\n 101   1.000000e-02\n"
+    )
+    sgb = MfUsgSgb.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    assert np.isclose(sgb.stress_period_data[0]["gradient"][0], 0.01)
+
+    # OPEN/CLOSE: rows live in a separate file resolved against model_ws.
+    (function_tmpdir / "sgb_rows.dat").write_text(
+        " 201   2.000000e-02\n 202   3.000000e-02\n"
+    )
+    oc_file = function_tmpdir / "oc.sgb"
+    oc_file.write_text(
+        "# sgb open/close\n         2 0\n 2 0    SP1\n OPEN/CLOSE sgb_rows.dat\n"
+    )
+    sgb2 = MfUsgSgb.load(str(oc_file), _usgt_unstructured_model(function_tmpdir),
+                         nper=1, ext_unit_dict={})
+    assert list(sgb2.stress_period_data[0]["node"]) == [200, 201]
+
+
+def test_mfusgqrt_sfac_with_recipients_expanded_write(function_tmpdir):
+    """QRT SFAC scales Q, keeps recipients, and writes expanded (no SFAC)."""
+    sfac_file = function_tmpdir / "sfac.qrt"
+    sfac_file.write_text(
+        "# qrt sfac\n        1         1 0 0 0 RETURNFLOW\n 1    SP1\n"
+        " SFAC 2.0\n 5  -5.000000e+01  1  8.000000e-01\nINTERNAL  1  (FREE)  -1\n 10\n"
+    )
+    qrt = MfUsgQrt.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    rec = qrt.stress_period_data[0]
+    assert np.isclose(rec["q"][0], -100.0)  # -50 * SFAC 2.0
+    assert qrt.recipient_nodes[0][0] == [9]
+
+    out = function_tmpdir / "out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    text = out.read_text()
+    assert "SFAC" not in text  # expanded valid write
+    qrt2 = MfUsgQrt.load(str(out), _usgt_unstructured_model(function_tmpdir),
+                         nper=1, ext_unit_dict={})
+    assert np.isclose(qrt2.stress_period_data[0]["q"][0], -100.0)
+    assert qrt2.recipient_nodes[0][0] == [9]
+
+
+def test_mfusgdrt_sfac_single_and_spread(function_tmpdir):
+    """DRT SFAC scales COND for both inline-single and spreading recipients."""
+    sfac_file = function_tmpdir / "sfac.drt"
+    sfac_file.write_text(
+        "# drt sfac\n         2 0 0 0 RETURNFLOW\n 2    SP1\n SFAC 3.0\n"
+        " 1  5.000000e+00  1.000000e+01  9  7.000000e-01\n"
+        " 2  4.000000e+00  2.000000e+01  -2  5.000000e-01\n"
+        "INTERNAL  1  (FREE)  -1\n 11 12\n"
+    )
+    drt = MfUsgDrt.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    rec = drt.stress_period_data[0]
+    assert np.isclose(rec["cond"][0], 30.0)  # 10 * 3.0
+    assert np.isclose(rec["cond"][1], 60.0)  # 20 * 3.0
+    assert drt.recipient_nodes[0][0] == [8]        # inline single (NR=9 -> 8)
+    assert drt.recipient_nodes[0][1] == [10, 11]   # spreading (NR=-2 -> nodes 11,12)
+
+
+def test_usgt_list_external_without_dict_fails(function_tmpdir):
+    """EXTERNAL list input fails explicitly (NotImplementedError) when the
+    unit cannot be resolved, for each list-package family."""
+    cases = [
+        (MfUsgSgb, "ext.sgb", "# sgb\n         1 0\n 1 0    SP1\n EXTERNAL 77\n"),
+        (MfUsgQrt, "ext.qrt",
+         "# qrt\n        1         0 0 0 0\n 1    SP1\n EXTERNAL 77\n"),
+        (MfUsgDrt, "ext.drt", "# drt\n         1 0 0 0\n 1    SP1\n EXTERNAL 77\n"),
+    ]
+    for cls, name, text in cases:
+        p = function_tmpdir / name
+        p.write_text(text)
+        with pytest.raises(NotImplementedError, match="EXTERNAL"):
+            cls.load(str(p), _usgt_unstructured_model(function_tmpdir),
+                     nper=1, ext_unit_dict={})
+
+
+# --- P1: BAS IHM optional integer parsing ---------------------------------
+
+def test_mfusgbas_ihm_optional_unit_parsing(function_tmpdir):
+    """BAS IHM loads with or without the optional IUIHM unit (no IndexError)."""
+    from flopy.modflow import ModflowDis
+
+    def _write_bas(optline, name):
+        p = function_tmpdir / name
+        p.write_text(
+            f"# test\n{optline}\nCONSTANT          1\n"
+            f"        -999.99\nCONSTANT       1.0\n"
+        )
+        return p
+
+    def _model():
+        ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+        return ml
+
+    # bare IHM -> iuihm=0
+    b = MfUsgBas.load(str(_write_bas("FREE IHM", "bare.bas")), _model(), check=False)
+    assert b.ihm is True and b.iuihm == 0
+
+    # IHM <int> -> iuihm=int
+    b = MfUsgBas.load(str(_write_bas("FREE IHM 123", "unit.bas")), _model(),
+                      check=False)
+    assert b.ihm is True and b.iuihm == 123
+
+    # IHM followed by another option -> iuihm=0, the other option still parsed
+    b = MfUsgBas.load(str(_write_bas("FREE IHM SY-ALL", "opt.bas")), _model(),
+                      check=False)
+    assert b.ihm is True and b.iuihm == 0 and b.sy_all is True
+
+    # programmatic write normalizes to "IHM <iuihm>" and round-trips
+    for iuihm in (0, 99):
+        ml = _model()
+        bas = MfUsgBas(ml, ibound=1, strt=1.0, ihm=True, iuihm=iuihm)
+        bas.fn_path = str(function_tmpdir / f"prog_{iuihm}.bas")
+        bas.write_file(check=False)
+        assert f"IHM {iuihm}" in Path(bas.fn_path).read_text()
+        bas2 = MfUsgBas.load(bas.fn_path, _model(), check=False)
+        assert bas2.ihm is True and bas2.iuihm == iuihm
+
+
+# --- P1: QRT/DRT recipient_nodes validation -------------------------------
+
+def test_mfusgqrt_recipient_count_mismatch_fails(function_tmpdir):
+    """QRT recipient_nodes shorter/longer than the sink list fails on write."""
+    ml = _usgt_unstructured_model(function_tmpdir)
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True)
+    spd = {0: np.array([(0, -100.0, 0.5), (4, -50.0, 0.5)],
+                       dtype=dtype).view(np.recarray)}
+
+    too_short = MfUsgQrt(ml, stress_period_data=spd,
+                         recipient_nodes={0: [[9]]}, options=["RETURNFLOW"])
+    too_short.fn_path = str(function_tmpdir / "short.qrt")
+    with pytest.raises(ValueError, match="recipient_nodes"):
+        too_short.write_file()
+
+    ml2 = _usgt_unstructured_model(function_tmpdir)
+    too_long = MfUsgQrt(ml2, stress_period_data=spd,
+                        recipient_nodes={0: [[9], [10], [11]]},
+                        options=["RETURNFLOW"])
+    too_long.fn_path = str(function_tmpdir / "long.qrt")
+    with pytest.raises(ValueError, match="recipient_nodes"):
+        too_long.write_file()
+
+
+def test_mfusgdrt_recipient_count_mismatch_fails(function_tmpdir):
+    """DRT recipient_nodes shorter/longer than the drain list fails on write."""
+    ml = _usgt_unstructured_model(function_tmpdir)
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
+    spd = {0: np.array([(0, 5.0, 100.0, 0.5), (4, 4.0, 50.0, 0.5)],
+                       dtype=dtype).view(np.recarray)}
+
+    too_short = MfUsgDrt(ml, stress_period_data=spd,
+                         recipient_nodes={0: [[9]]}, options=["RETURNFLOW"])
+    too_short.fn_path = str(function_tmpdir / "short.drt")
+    with pytest.raises(ValueError, match="recipient_nodes"):
+        too_short.write_file()
+
+    ml2 = _usgt_unstructured_model(function_tmpdir)
+    too_long = MfUsgDrt(ml2, stress_period_data=spd,
+                        recipient_nodes={0: [[9], [10], [11]]},
+                        options=["RETURNFLOW"])
+    too_long.fn_path = str(function_tmpdir / "long.drt")
+    with pytest.raises(ValueError, match="recipient_nodes"):
+        too_long.write_file()
+
+
+def test_mfusgqrt_zero_recipients_when_omitted(function_tmpdir):
+    """QRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
+    ml = _usgt_unstructured_model(function_tmpdir)
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True)
+    spd = {0: np.array([(0, -100.0, 0.0), (4, -50.0, 0.0)],
+                       dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(ml, stress_period_data=spd, options=["RETURNFLOW"])
+    qrt.fn_path = str(function_tmpdir / "zero.qrt")
+    qrt.write_file()  # must not raise
+
+    qrt2 = MfUsgQrt.load(qrt.fn_path, _usgt_unstructured_model(function_tmpdir),
+                         nper=1, ext_unit_dict={})
+    assert qrt2.recipient_nodes[0] == [[], []]
+
+
+# --- P2: TABRICH node-count contract --------------------------------------
+
+def test_tabrich_node_count_contract(function_tmpdir):
+    """_tabrich.node_count: structured product, DISU nodes, DIS fallback, error."""
+    from flopy.mfusg._tabrich import node_count
+    from flopy.modflow import ModflowDis
+
+    # structured DIS -> nlay*nrow*ncol
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=3, nper=1)
+    assert node_count(ml) == 6
+
+    # structured=False with a classic DIS -> fallback to grid product
+    # (previously raised AttributeError assuming DISU)
+    ml2 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=2, nper=1)
+    assert node_count(ml2) == 2
+
+    # neither DISU nor DIS -> explicit, actionable error
+    ml3 = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    with pytest.raises(ValueError, match="node count"):
+        node_count(ml3)

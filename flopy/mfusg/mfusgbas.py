@@ -399,9 +399,18 @@ class MfUsgBas(Package):
         double_prec = "DPIN" in opts
         double_out = "DPOUT" in opts
         double_io = "DPIO" in opts
-        # IHM [IUIHM]: integrated-hydrologic-model coupling flag + debug unit
+        # IHM [IUIHM]: integrated-hydrologic-model coupling flag + optional
+        # debug unit. The IUIHM integer is optional; a bare IHM (or IHM followed
+        # by another option keyword) means iuihm=0 (matches glo2basu1.f).
         ihm = "IHM" in opts
-        iuihm = int(opts[opts.index("IHM") + 1]) if ihm else 0
+        iuihm = 0
+        if ihm:
+            _i = opts.index("IHM")
+            if _i + 1 < len(opts):
+                try:
+                    iuihm = int(opts[_i + 1])
+                except ValueError:
+                    iuihm = 0  # next token is another option, not IUIHM
         sy_all = "SY-ALL" in opts
         ####
 

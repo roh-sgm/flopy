@@ -32,9 +32,11 @@ equivalent for a single node, so spreading-of-one normalizes to inline.
 Notes
 -----
 The USG-T transport extensions (RETURNFLOW recipient nodes, ``CHANGEC`` /
-``IDCHNGTYP``, ``SPREAD``) are implemented for **unstructured** grids. For
-structured (DIS) models this class delegates to the base
-:class:`flopy.modflow.ModflowDrt`, which does not carry the USG-T extensions.
+``IDCHNGTYP``, ``SPREAD``) are implemented for **unstructured** grids only.
+Constructing ``MfUsgDrt`` on a structured (DIS) model raises
+``NotImplementedError`` — use :class:`flopy.modflow.ModflowDrt` for classic
+structured DRT. (On load, ``MfUsgDrt.load`` delegates structured files to
+``ModflowDrt.load``, which returns a base-class object.)
 
 Not supported (explicit failure rather than partial write):
 
@@ -46,6 +48,7 @@ import numpy as np
 
 from ..modflow.mfdrt import ModflowDrt
 from ..pakbase import Package
+from ._usgt_list import begin_list_block
 from ._usgt_returnflow import read_u1dint_list, write_u1dint_list
 from .mfusg import MfUsg
 
@@ -100,6 +103,16 @@ class MfUsgDrt(ModflowDrt):
             "Model object must be of type flopy.mfusg.MfUsg\n"
             f"but received type: {type(model)}."
         )
+
+        # MfUsgDrt implements the *unstructured* USG-T DRT8 format only. For
+        # structured (DIS) grids the classic MODFLOW DRT has no USG-T return-flow
+        # extensions, so authoring goes through the base class instead. (On
+        # load, MfUsgDrt.load delegates structured files to ModflowDrt.load.)
+        if model.structured:
+            raise NotImplementedError(
+                "MfUsgDrt implements the unstructured USG-T DRT8 format; for "
+                "structured (DIS) grids use flopy.modflow.ModflowDrt instead."
+            )
 
         if unitnumber is None:
             unitnumber = ModflowDrt._defaultunit()
@@ -213,12 +226,34 @@ class MfUsgDrt(ModflowDrt):
     # write_file
     # ------------------------------------------------------------------
 
-    def write_file(self):
-        """Write the package file in MODFLOW-USG-T DRT8 format."""
-        if self.parent.structured:
-            ModflowDrt.write_file(self)
-            return
+    def _validated_recipients(self, kper, nrec):
+        """Recipient lists for a stress period, validated against its records.
 
+        With RETURNFLOW active there must be exactly one recipient list per
+        drain record. Omitting ``recipient_nodes`` for a period means every
+        record has zero recipients. Mismatched lengths raise so spreading /
+        return-flow metadata cannot be silently dropped or shifted on write.
+        """
+        if not self.returnflow:
+            return [[] for _ in range(nrec)]
+        recips = self.recipient_nodes.get(kper)
+        if recips is None:
+            return [[] for _ in range(nrec)]
+        if len(recips) != nrec:
+            raise ValueError(
+                f"MfUsgDrt: recipient_nodes[{kper}] has {len(recips)} entries "
+                f"but stress_period_data[{kper}] has {nrec} records; provide "
+                "exactly one recipient list per record (or omit the period for "
+                "all-zero recipients)."
+            )
+        return recips
+
+    def write_file(self):
+        """Write the package file in MODFLOW-USG-T DRT8 format.
+
+        Unstructured only; ``__init__`` rejects structured models, so there is
+        no structured-delegation path here.
+        """
         nper = self.parent.nper
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
@@ -242,11 +277,10 @@ class MfUsgDrt(ModflowDrt):
                     f.write(f" -1    Stress Period {kper + 1}\n")
                     continue
                 recarray = self.stress_period_data[kper]
-                recips = self.recipient_nodes.get(kper, [[]] * len(recarray))
+                recips = self._validated_recipients(kper, len(recarray))
                 f.write(f" {len(recarray)} 0    Stress Period {kper + 1}\n")
                 for i, rec in enumerate(recarray):
-                    rnodes = recips[i] if i < len(recips) else []
-                    self._write_drain_line(f, rec, rnodes, has_aux, aux_names)
+                    self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
 
     def _max_spread_nodes(self):
         """Max total spreading-recipient nodes in any stress period."""
@@ -331,17 +365,32 @@ class MfUsgDrt(ModflowDrt):
                     recipient_nodes[kper] = [list(r) for r in prev_recips]
                 continue
 
+            # Honor leading SFAC / EXTERNAL / OPEN-CLOSE list controls; drain
+            # rows and their interleaved spreading U1DINT blocks are read from
+            # the (possibly redirected) source. SFAC scales COND (Fortran
+            # ISCLOC=5).
+            source, sfac, first_line, to_close = (f, 1.0, None, None)
+            if itmp > 0:
+                source, sfac, first_line, to_close = begin_list_block(
+                    f, model, ext_unit_dict, package="DRT"
+                )
+
             records = []
             recip_lists = []
-            for _ in range(itmp):
-                toks = f.readline().split()
+            for idx in range(itmp):
+                row = first_line if idx == 0 else source.readline()
                 rec, recips = cls._parse_drain_tokens(
-                    toks, returnflow, changec, naux, f
+                    row.split(), returnflow, changec, naux, source
                 )
                 records.append(rec)
                 recip_lists.append(recips)
 
+            if to_close is not None:
+                source.close()
+
             recarray = np.array(records, dtype=dtype).view(np.recarray)
+            if sfac != 1.0 and len(recarray) > 0:
+                recarray["cond"] = recarray["cond"] * sfac
             spd[kper] = recarray
             recipient_nodes[kper] = recip_lists
             prev_recarray = recarray

@@ -34,6 +34,7 @@ Not supported in this version (explicit failure rather than partial write):
 import numpy as np
 
 from ..pakbase import Package
+from ._usgt_list import begin_list_block
 from ._usgt_returnflow import read_u1dint_list, write_u1dint_list
 from .mfusg import MfUsg
 
@@ -179,6 +180,28 @@ class MfUsgQrt(Package):
     # write_file
     # ------------------------------------------------------------------
 
+    def _validated_recipients(self, kper, nrec):
+        """Return the recipient lists for a stress period, validated against it.
+
+        With RETURNFLOW active there must be exactly one recipient list per
+        stress record. Omitting ``recipient_nodes`` for a period is allowed and
+        means every record has zero recipients. Mismatched lengths raise so
+        return-flow metadata cannot be silently dropped or shifted on write.
+        """
+        if not self.returnflow:
+            return [[] for _ in range(nrec)]
+        recips = self.recipient_nodes.get(kper)
+        if recips is None:
+            return [[] for _ in range(nrec)]
+        if len(recips) != nrec:
+            raise ValueError(
+                f"MfUsgQrt: recipient_nodes[{kper}] has {len(recips)} entries "
+                f"but stress_period_data[{kper}] has {nrec} records; provide "
+                "exactly one recipient list per record (or omit the period for "
+                "all-zero recipients)."
+            )
+        return recips
+
     def write_file(self):
         """Write the package file in MODFLOW-USG-T QRT format."""
         nper = self.parent.nper
@@ -205,15 +228,15 @@ class MfUsgQrt(Package):
                     f.write(f" -1    Stress Period {kper + 1}\n")
                     continue
                 recarray = self.stress_period_data[kper]
-                recips = self.recipient_nodes.get(kper, [[]] * len(recarray))
+                recips = self._validated_recipients(kper, len(recarray))
                 f.write(f" {len(recarray)} 0    Stress Period {kper + 1}\n")
                 for i, rec in enumerate(recarray):
-                    rnodes = recips[i] if i < len(recips) else []
+                    rnodes = recips[i]
                     self._write_sink_line(f, rec, len(rnodes), has_aux, aux_names)
                 # Recipient-node U1DINT blocks, in sink order, skipping NumRT==0
                 if self.returnflow:
                     for i in range(len(recarray)):
-                        rnodes = recips[i] if i < len(recips) else []
+                        rnodes = recips[i]
                         if len(rnodes) > 0:
                             write_u1dint_list(f, [int(n) + 1 for n in rnodes])
 
@@ -272,12 +295,21 @@ class MfUsgQrt(Package):
                     recipient_nodes[kper] = [list(r) for r in prev_recips]
                 continue
 
+            # Honor leading SFAC / EXTERNAL / OPEN-CLOSE list controls; rows and
+            # recipient U1DINT blocks are read from the (possibly redirected)
+            # source. SFAC scales Q (Fortran ISCLOC=4).
+            source, sfac, first_line, to_close = (f, 1.0, None, None)
+            if itmp > 0:
+                source, sfac, first_line, to_close = begin_list_block(
+                    f, model, ext_unit_dict, package="QRT"
+                )
+
             records = []
             numrt_list = []
-            for _ in range(itmp):
-                toks = f.readline().split()
+            for idx in range(itmp):
+                row = first_line if idx == 0 else source.readline()
                 rec, numrt = cls._parse_sink_tokens(
-                    toks, returnflow, changec, naux
+                    row.split(), returnflow, changec, naux
                 )
                 records.append(rec)
                 numrt_list.append(numrt)
@@ -285,12 +317,17 @@ class MfUsgQrt(Package):
             recip_lists = []
             for i in range(itmp):
                 if returnflow and numrt_list[i] > 0:
-                    nodes_1based = read_u1dint_list(f, numrt_list[i])
+                    nodes_1based = read_u1dint_list(source, numrt_list[i])
                     recip_lists.append([n - 1 for n in nodes_1based])
                 else:
                     recip_lists.append([])
 
+            if to_close is not None:
+                source.close()
+
             recarray = np.array(records, dtype=dtype).view(np.recarray)
+            if sfac != 1.0 and len(recarray) > 0:
+                recarray["q"] = recarray["q"] * sfac
             spd[kper] = recarray
             recipient_nodes[kper] = recip_lists
             prev_recarray = recarray

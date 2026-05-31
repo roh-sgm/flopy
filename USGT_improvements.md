@@ -14,6 +14,25 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Phase 2 hardening (2026-05-30)
+
+Post-implementation critical review (`USGT_PHASE2_REVIEW.md`) found five
+correctness/robustness gaps in the Priority-1 work; all are now closed with
+regression tests that fail before the fix and pass after
+(`autotest/test_usg_transport.py` → 92 passed):
+
+| File | Fix |
+|---|---|
+| `flopy/mfusg/mfusgdrt.py` | `MfUsgDrt` is unstructured-only: structured construction raises `NotImplementedError` (use `ModflowDrt`); the dead structured `write_file` delegation was removed; structured `load` still delegates to `ModflowDrt.load`. (Previously structured authoring crashed with `AttributeError`.) |
+| `flopy/mfusg/_usgt_list.py` (new) | Shared reader `begin_list_block` for the SGB/QRT/DRT main lists: consumes `SFAC` (scales Q for QRT, COND for DRT; inert on SGB gradient per Fortran ISCLOC), `OPEN/CLOSE`, and `EXTERNAL` (via `ext_unit_dict`) before row parsing; unresolved `EXTERNAL` raises `NotImplementedError`. Writes emit expanded inline rows (`Expanded valid write`). (Previously a leading `SFAC` raised a raw `ValueError`.) |
+| `flopy/mfusg/mfusgbas.py` | `IHM` now takes an optional `IUIHM`: bare `IHM` or `IHM <option>` → `iuihm=0`; `IHM <int>` → that unit. (Previously a bare `IHM` raised `IndexError`.) |
+| `flopy/mfusg/mfusgqrt.py`, `mfusgdrt.py` | `write_file` validates `recipient_nodes` against the stress list when `RETURNFLOW` is active: exactly one recipient list per record (omitted ⇒ all-zero); a length mismatch raises `ValueError` instead of silently dropping/shifting return-flow metadata. |
+| `flopy/mfusg/_tabrich.py` | `node_count` falls back to DIS grid dimensions for `structured=False` models without a DISU package, and raises a clear `ValueError` if neither DISU nor DIS is present (was an opaque `AttributeError`). |
+
+Status impact: SGB/QRT/DRT list-control *input* is classified
+`Expanded valid write` (controls are read and expanded to inline rows on
+output). The from-scratch authoring paths remain `Full semantic`.
+
 ### USG-T 2.7 Priority-1 packages (2026-05-30)
 
 The four highest-value coverage gaps against the USG-T 2.7 Fortran source are

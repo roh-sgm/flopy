@@ -22,12 +22,27 @@ from ..utils import Util2d
 
 
 def node_count(model):
-    """Total number of nodes for the IUZONTAB zone-map array."""
+    """Total number of nodes for the IUZONTAB zone-map array.
+
+    Contract: structured models use ``nlay*nrow*ncol``; unstructured models use
+    the DISU node count. As a fallback, an unstructured model carrying a classic
+    DIS package (a lightweight pattern used in some tests) uses
+    ``nlay*nrow*ncol``. If neither discretization is present, raise a clear
+    error rather than an opaque ``AttributeError``.
+    """
     if model.structured:
         nrow, ncol, nlay, _ = model.nrow_ncol_nlay_nper
         return nlay * nrow * ncol
-    dis = model.get_package("DISU")
-    return int(dis.nodes)
+    disu = model.get_package("DISU")
+    if disu is not None:
+        return int(disu.nodes)
+    if model.get_package("DIS") is not None:
+        nrow, ncol, nlay, _ = model.nrow_ncol_nlay_nper
+        return nlay * nrow * ncol
+    raise ValueError(
+        "TABRICH (IUZONTAB) needs a node count: attach a DISU package "
+        "(unstructured) or a DIS package before authoring/loading TABRICH."
+    )
 
 
 def make_iuzontab(model, iuzontab):

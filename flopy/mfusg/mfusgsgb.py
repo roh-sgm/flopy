@@ -25,6 +25,7 @@ import numpy as np
 from ..pakbase import Package
 from ..utils import MfList
 from ..utils.recarray_utils import create_empty_recarray
+from ._usgt_list import begin_list_block
 from .mfusg import MfUsg
 
 
@@ -241,14 +242,26 @@ class MfUsgSgb(Package):
                     spd[kper] = current.copy()
             else:
                 current = create_empty_recarray(itmp, dtype, default_value=0.0)
-                for idx in range(itmp):
-                    vals = f.readline().split()
-                    for j, name in enumerate(dtype.names):
-                        kind = dtype[name].kind
-                        current[idx][name] = (
-                            int(vals[j]) if kind in ("i", "u") else float(vals[j])
-                        )
-                    current[idx]["node"] -= 1
+                if itmp > 0:
+                    # Honor leading SFAC / EXTERNAL / OPEN-CLOSE list controls.
+                    # (For SGB, SFAC scales an internal dummy column in the
+                    # Fortran, ISCLOC=2, not the gradient, so it is not applied
+                    # to the data here.)
+                    source, _sfac, first_line, to_close = begin_list_block(
+                        f, model, ext_unit_dict, package="SGB"
+                    )
+                    for idx in range(itmp):
+                        row = first_line if idx == 0 else source.readline()
+                        vals = row.split()
+                        for j, name in enumerate(dtype.names):
+                            kind = dtype[name].kind
+                            current[idx][name] = (
+                                int(vals[j]) if kind in ("i", "u")
+                                else float(vals[j])
+                            )
+                        current[idx]["node"] -= 1
+                    if to_close is not None:
+                        source.close()
                 spd[kper] = current
 
         if openfile:

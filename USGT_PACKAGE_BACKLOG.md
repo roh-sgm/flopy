@@ -43,6 +43,38 @@ All priority tiers below have been worked through. Commits on `develop`:
 Test status: **80 tests pass** in `autotest/test_usg_transport.py` (synthetic
 authoring/round-trip + `Ex1..Ex9` real-model load+write), ~40 s.
 
+## Critical review addendum (2026-05-30)
+
+Follow-up review found that several closeout claims needed a Phase 2 hardening
+pass before they should be treated as upstream-ready. See
+`USGT_PHASE2_REVIEW.md` for the detailed reviewer brief and the
+per-finding resolution table.
+
+**Phase 2 status: all five reopened items are now RESOLVED** (commit on
+`develop`; `python -m pytest autotest/test_usg_transport.py -q` → 92 passed,
+12 new regression tests). Summary of closures:
+
+- **P0 - DRT structured authoring:** RESOLVED. `MfUsgDrt` is now unstructured
+  USG-T DRT8 only; structured construction raises `NotImplementedError` (use
+  `ModflowDrt`), `load` delegates structured files to the base class.
+- **P0 - SGB/QRT/DRT list controls:** RESOLVED (Expanded valid write). Shared
+  `_usgt_list.begin_list_block` handles `SFAC`, `OPEN/CLOSE`, and `EXTERNAL`
+  (via `ext_unit_dict`) on the main lists; unresolved `EXTERNAL` raises
+  `NotImplementedError`; writes emit expanded inline rows.
+- **P1 - BAS `IHM`:** RESOLVED. `IHM` parses an optional `IUIHM`; bare `IHM`
+  (or `IHM` before another option) yields `iuihm=0`. No `IndexError`.
+- **P1 - QRT/DRT recipient validation:** RESOLVED. `write_file` requires one
+  `recipient_nodes` list per record when `RETURNFLOW` is active (omitted ⇒
+  all-zero); mismatches raise `ValueError`.
+- **P2 - TABRICH node count contract:** RESOLVED. `_tabrich.node_count` falls
+  back to DIS grid dimensions for `structured=False` models without DISU and
+  raises a clear `ValueError` if neither is present.
+
+Resulting status labels: SGB/QRT/DRT list-control input is **Expanded valid
+write** (controls read, expanded inline on output). The from-scratch authoring
+paths (inline rows, recipients, TABRICH) remain `Full semantic` where parser +
+writer + authoring + round-trip tests all exist.
+
 ---
 
 ## Non-Negotiable Design Rules
@@ -903,4 +935,3 @@ Deliverables:
 Do not:
 
 - Implement fixes unless explicitly assigned after review.
-
