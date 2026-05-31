@@ -119,3 +119,6 @@ _scratch/
 bin/
 mfsim.*
 test.gsf
+
+# Generated USG-T transport validation output; too large for the repo
+examples/data/mfusg_transport/Ex3_CLN_Conduit/Dispersion/*.CBB
