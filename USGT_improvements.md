@@ -64,6 +64,16 @@ honest, upstream-ready USG-T 2.7 story.
   node); keep `EXTERNAL`/`OPEN/CLOSE` recipient lists as a documented
   `NotImplementedError` (rare-within-rare). Main-list controls
   (`SFAC`/`OPEN-CLOSE`/`EXTERNAL`) remain fully handled by `_usgt_list`.
+- **Card 8 — plain-`✅` hardening:** promoted to `✅ Full` (authoring +
+  round-trip + Fortran-verified): **CLN** (PROCESSCCF/ISHAPE/GENERAL_SEC),
+  **DPF** (FRAHK/IUZONTABIM/SC2IM/immobile Richards), **DIS**/**DISU**
+  (foundational; DISU large-grid `free_format_npl` formatting protected by
+  `test_usg.py`), and **PCB** (new node/iSpec/conc authoring + round-trip
+  test). Kept honest `✅` (not Full) with strengthened coverage/notes:
+  **OC** (new `ATSA` authoring round-trip; `BOOTSTRAPPING` parsed on load),
+  **EVT** (new transport `IETFACTOR`/`ETFACTOR` authoring test), and **MDT**
+  (round-trip validated via the three Ex7 Matrix-Diffusion real models; field
+  order not yet independently Fortran-audited).
 
 ### Phase 2 hardening (2026-05-30)
 

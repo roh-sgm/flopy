@@ -3307,3 +3307,63 @@ def test_mfusg_recipient_external_u1dint_unsupported(function_tmpdir):
     with pytest.raises(NotImplementedError, match="recipient"):
         MfUsgDrt.load(str(drt_ext), _usgt_unstructured_model(function_tmpdir),
                       nper=1, ext_unit_dict={})
+
+
+# --- Stage 3 Card 8: plain-checkmark hardening (PCB, EVT transport) --------
+
+def test_mfusgpcb_authoring_roundtrip(function_tmpdir):
+    """PCB (Prescribed Concentration Boundary) authored from scratch: 0-based
+    nodes internal, 1-based in the file, species + concentration preserved."""
+    from flopy.mfusg import MfUsgPcb
+
+    ml = _usgt_unstructured_model(function_tmpdir)
+    dtype = MfUsgPcb.get_default_dtype(structured=False)  # (node, iSpec, conc)
+    spd = {0: np.array([(4, 1, 0.25), (9, 1, 0.5)], dtype=dtype).view(np.recarray)}
+    pcb = MfUsgPcb(ml, stress_period_data=spd)
+    pcb.fn_path = str(function_tmpdir / "created.pcb")
+    pcb.write_file()
+    text = Path(pcb.fn_path).read_text()
+    assert "\n         5         1" in text  # node 4 -> 5 (1-based)
+    assert "\n        10         1" in text  # node 9 -> 10
+
+    ml2 = _usgt_unstructured_model(function_tmpdir)
+    pcb2 = MfUsgPcb.load(pcb.fn_path, ml2, nper=1)
+    assert list(pcb2.stress_period_data[0]["node"]) == [4, 9]
+    assert np.isclose(pcb2.stress_period_data[0]["conc"][1], 0.5)
+
+
+def test_mfusgevt_transport_etfactor_authoring(function_tmpdir):
+    """EVT transport ET factor (IETFACTOR/ETFACTOR) authors when transport is on."""
+    from flopy.mfusg import MfUsgEvt
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    ml.itrnsp = 1   # emulate active transport (BCT would set this)
+    ml.mcomp = 1
+    evt = MfUsgEvt(ml, nevtop=1, evtr=1.0e-4, ietfactor=1, etfactor=[2.5])
+    evt.fn_path = str(function_tmpdir / "transport.evt")
+    evt.write_file()
+    content = Path(evt.fn_path).read_text()
+    assert "2.5" in content  # ETFACTOR(MCOMP) record written
+    assert evt.ietfactor == 1
+
+
+def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
+    """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
+    from flopy.mfusg import MfUsgOc
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1, nstp=1)
+    MfUsgBas(ml, ibound=1, strt=1.0)
+    oc = MfUsgOc(ml, atsa=1, stress_period_data={(0, 0): ["save head"]})
+    oc.fn_path = str(function_tmpdir / "ats.oc")
+    oc.write_file()
+    assert "ATSA" in Path(oc.fn_path).read_text().splitlines()[1]
+
+    ml2 = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=2, ncol=2, nper=1, nstp=1)
+    MfUsgBas(ml2, ibound=1, strt=1.0)
+    oc2 = MfUsgOc.load(oc.fn_path, ml2, nper=1)
+    assert oc2.atsa == 1
