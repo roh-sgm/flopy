@@ -18,6 +18,27 @@ Primary USG-T source reference:
 
 `/Users/roh.sgm/Documents/SGM Co/GDM/01_Software/GSI/USG-Transport 2.7.0 (2026.03.21)/USGT_V_2-7-0_Source_Code`
 
+## Stage 3 status: COMPLETE (2026-05-31)
+
+All ten cards are done (commits on `develop`, pushed to `origin`). Default
+focused suite `python -m pytest autotest/test_usg_transport.py -q` →
+**101 passed**; opt-in `autotest/test_usg_transport_exe.py` runs end-to-end
+under `USGT_EXE` (default `mfusg_gsi`). Outcomes:
+
+- **C1 audit:** per-package decision table in `USGT_roadmap.md`; TIB/GSF
+  relabeled Raw/text.
+- **C2 parameters:** Expanded valid write (ETS) / explicit fail (NP* list
+  params); ETS expand test added.
+- **C3 DPT A-W_ADSORBIM:** spec'd; kept explicit-unsupported (rare).
+- **C4 TIB:** grammar recorded; kept Raw/text v1.
+- **C5 LAK:** kept `✅` not Full (Ex8-validated; authoring deferred).
+- **C6 base-class:** SFR/STR/GAGE/FHB/SUB/SWT = Compatibility-only (FHB/GAGE
+  exercised via Ex8).
+- **C7 recipient U1DINT:** INTERNAL/CONSTANT supported; external = explicit fail.
+- **C8 plain-`✅`:** promoted CLN/DPF/DIS/DISU/PCB to Full; OC/EVT/MDT honest `✅`.
+- **C9 executable:** `USGT_EXE`-gated from-scratch flow+transport e2e tests.
+- **C10 upstream:** `USGT_UPSTREAM_INFRA.md` proposal.
+
 ## Current Baseline
 
 The main USG-T authoring path is now strong. The default focused suite is:
