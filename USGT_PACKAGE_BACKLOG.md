@@ -860,9 +860,11 @@ Acceptance:
 Status: **Decision (2026-05-30; executable tier added Stage 3 Card 9).** Three
 tiers are in place:
 
-1. **Default CI (fast):** the synthetic suite (101 from-scratch authoring /
-   round-trip tests in `test_usg_transport.py`) plus the `Ex1..Ex9` real-model
-   **load+write** round-trips. Catches layout/API regressions in under a minute.
+1. **Default CI (fast):** `test_usg_transport.py` has 101 tests — 85
+   synthetic from-scratch authoring / round-trip tests that always run, plus 16
+   `Ex1..Ex9` real-model run tests gated by `@requires_exe(USGT_EXE)`. With a
+   USG-T executable that is **101 passed**; without one it is **85 passed, 16
+   skipped**. Catches layout/API regressions in well under a minute.
 2. **Executable end-to-end (opt-in via `USGT_EXE`):** the `Ex1..Ex9` tests and
    the new `autotest/test_usg_transport_exe.py` from-scratch tests share one
    contract — `@requires_exe(USGT_EXE)`, `USGT_EXE` defaulting to `mfusg_gsi`

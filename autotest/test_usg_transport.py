@@ -1,5 +1,6 @@
 import io
 import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -381,14 +382,21 @@ def test_usg_load_Ex3_CLN_Conduit_Nest(
 def test_usg_load_Ex4_Dual_Domain(
     function_tmpdir, mfusg_transport_Ex4_Dual_Domain_model_path
 ):
-    print("testing mfusg transport model loading: Conduit.nam")
+    print("testing mfusg transport model loading: DualDomain.nam")
 
-    fname = mfusg_transport_Ex4_Dual_Domain_model_path / "DualDomain.nam"
+    # Copy the whole model into the temp workspace and load/run from the copy,
+    # so the executable never writes back into the tracked examples tree.
+    # DualDomain.CIM is a DATA(BINARY) immobile-concentration input/output
+    # (unit 33); without the copy the run would overwrite the committed file.
+    model_ws = function_tmpdir / "Ex4_Dual_Domain"
+    shutil.copytree(mfusg_transport_Ex4_Dual_Domain_model_path, model_ws)
+
+    fname = model_ws / "DualDomain.nam"
     assert os.path.isfile(fname), f"nam file not found {fname}"
 
     # Create the model
     m = MfUsg.load(
-        fname, exe_name=USGT_EXE, verbose=True, model_ws=function_tmpdir, check=True
+        fname, exe_name=USGT_EXE, verbose=True, model_ws=model_ws, check=True
     )
 
     # assert disu, lpf, bas packages have been loaded
