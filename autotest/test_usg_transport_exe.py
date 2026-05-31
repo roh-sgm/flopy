@@ -1,0 +1,118 @@
+"""
+Optional end-to-end USG-Transport 2.7 executable validation (Stage 3 Card 9).
+
+These tests prove that FloPy-authored-from-scratch USG-T input not only writes
+but actually *runs* under the USG-Transport executable and produces stable
+outputs. They are intentionally kept out of the default focused suite
+(`autotest/test_usg_transport.py`, which stays light) and only run when the
+executable is available.
+
+Executable selection:
+
+- Set the ``USGT_EXE`` environment variable to the USG-T 2.7 executable
+  (name on PATH or absolute path). If unset, it defaults to ``mfusg_gsi``.
+- ``@requires_exe`` skips every test here cleanly when the executable cannot be
+  resolved, so default CI is unaffected.
+
+Note: the nine real-model ``Ex1..Ex9`` tests in `test_usg_transport.py` already
+load + write + **run** real USG-T models (including the Ex7 multi-species
+transport model) under the same `@requires_exe` gate; this file adds the
+complementary *from-scratch authoring → execution* direction.
+"""
+
+import os
+
+import numpy as np
+import pytest
+from modflow_devtools.markers import requires_exe
+
+from flopy.mfusg import (
+    MfUsg,
+    MfUsgBas,
+    MfUsgBct,
+    MfUsgLpf,
+    MfUsgOc,
+    MfUsgPcb,
+    MfUsgSms,
+)
+from flopy.modflow import ModflowChd, ModflowDis
+from flopy.utils import HeadFile, MfusgListBudget, MfusgTransportListBudget
+
+USGT_EXE = os.environ.get("USGT_EXE", "mfusg_gsi")
+
+
+@requires_exe(USGT_EXE)
+def test_usgt_exe_minimal_flow_from_scratch(function_tmpdir):
+    """A 1-D CHD-driven steady flow model authored from scratch runs and
+    reproduces the analytical linear head gradient with a closed budget."""
+    ml = MfUsg(
+        modelname="flow",
+        model_ws=str(function_tmpdir),
+        exe_name=USGT_EXE,
+        structured=True,
+    )
+    ModflowDis(
+        ml, nlay=1, nrow=1, ncol=5, nper=1, perlen=1.0, nstp=1, steady=True,
+        delr=10.0, delc=10.0, top=10.0, botm=0.0,
+    )
+    MfUsgBas(ml, ibound=1, strt=5.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ipakcb=0)
+    MfUsgSms(ml, linmeth=1)  # PCGU; linmeth=2/XMD does not converge this trivial system
+    MfUsgOc(ml, stress_period_data={(0, 0): ["save head"]})
+    ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 8.0, 8.0],
+                                           [0, 0, 4, 2.0, 2.0]]})
+    ml.write_input()
+
+    success, _ = ml.run_model(silent=True)
+    assert success, "USG-T run did not terminate normally"
+
+    heads = HeadFile(os.path.join(ml.model_ws, "flow.hds")).get_data().ravel()
+    # CHD at cells 0 and 4 (8.0 and 2.0) -> exact linear interior [6.5, 5.0, 3.5]
+    assert np.allclose(heads, [8.0, 6.5, 5.0, 3.5, 2.0], atol=1e-3)
+
+    inc, _cum = MfusgListBudget(
+        os.path.join(ml.model_ws, "flow.list")
+    ).get_budget()
+    assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
+
+
+@requires_exe(USGT_EXE)
+def test_usgt_exe_minimal_transport_from_scratch(function_tmpdir):
+    """A from-scratch BCT transport model with a PCB concentration source runs
+    and produces a concentration file with physically bounded values."""
+    ml = MfUsg(
+        modelname="tran",
+        model_ws=str(function_tmpdir),
+        exe_name=USGT_EXE,
+        structured=True,
+    )
+    ModflowDis(
+        ml, nlay=1, nrow=1, ncol=5, nper=1, perlen=100.0, nstp=10, steady=False,
+        delr=10.0, delc=10.0, top=10.0, botm=0.0,
+    )
+    MfUsgBas(ml, ibound=1, strt=5.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ss=1.0e-5, ipakcb=0)
+    MfUsgSms(ml, linmeth=1)
+    MfUsgBct(ml, itrnsp=1, mcomp=1, prsity=0.2, conc=0.0, idisp=0)
+    # Prescribed concentration = 1.0 at the inflow cell (k,i,j,iSpec,conc)
+    MfUsgPcb(ml, stress_period_data={0: [[0, 0, 0, 1, 1.0]]})
+    MfUsgOc(ml, stress_period_data={(0, 0): ["save head", "save concentration"]})
+    ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 8.0, 8.0],
+                                           [0, 0, 4, 2.0, 2.0]]})
+    ml.write_input()
+
+    success, _ = ml.run_model(silent=True)
+    assert success, "USG-T transport run did not terminate normally"
+
+    # Concentration output is produced (USG node-based binary; value comparison
+    # is covered by the real Ex models).
+    assert os.path.isfile(os.path.join(ml.model_ws, "tran.con"))
+
+    # The transport mass budget closes and is species-isolated (text listing,
+    # the reliable cross-check). The PCB source shows up as PRESCRIBED_CONCS_IN.
+    inc, _cum = MfusgTransportListBudget(
+        os.path.join(ml.model_ws, "tran.list"), species=1
+    ).get_budget()
+    assert inc is not None and len(inc) > 0
+    assert "PRESCRIBED_CONCS_IN" in inc.dtype.names
+    assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1

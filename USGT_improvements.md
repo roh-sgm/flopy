@@ -74,6 +74,17 @@ honest, upstream-ready USG-T 2.7 story.
   **EVT** (new transport `IETFACTOR`/`ETFACTOR` authoring test), and **MDT**
   (round-trip validated via the three Ex7 Matrix-Diffusion real models; field
   order not yet independently Fortran-audited).
+- **Card 9 — executable end-to-end validation:** new opt-in suite
+  `autotest/test_usg_transport_exe.py`, gated by `@requires_exe` on the
+  `USGT_EXE` environment variable (default `mfusg_gsi`), so it skips cleanly
+  when the executable is absent and is excluded from the default focused
+  command. It authors models **from scratch**, runs them under USG-T 2.7, and
+  checks outputs: a 1-D CHD flow model reproduces the analytical head gradient
+  `[8, 6.5, 5, 3.5, 2]` with a closed `.list` budget (note: `linmeth=1`/PCGU —
+  the default `linmeth=2`/XMD does not converge this trivial system), and a
+  BCT+PCB transport model runs, emits a `.con`, and closes the species-isolated
+  mass budget (`MfusgTransportListBudget`). Complements the nine real-model
+  `Ex1..Ex9` run tests (incl. Ex7 multi-species) already gated by `@requires_exe`.
 
 ### Phase 2 hardening (2026-05-30)
 

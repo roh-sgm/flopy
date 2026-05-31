@@ -852,27 +852,29 @@ Acceptance:
 
 ### Slow real-model validation
 
-Status: **Decision (2026-05-30).** Two tiers are in place:
+Status: **Decision (2026-05-30; executable tier added Stage 3 Card 9).** Three
+tiers are in place:
 
-1. **Default CI (fast):** the synthetic suite (~60 from-scratch authoring /
-   round-trip tests) plus the `Ex1..Ex9` real-model **load+write** round-trips
-   bundled under `examples/data/mfusg_transport/`. These catch layout/API
-   regressions and run in well under a minute.
-2. **Manual run-validation (slow, out of CI):** executing USG-T on the
-   full real-world models and comparing `LST`, `HDS`, `CON`, `CBB` against the
-   Vistas reference outputs. Those models are large and proprietary, so they
-   are **not** bundled in the repo or CI; the procedure and bit-for-bit
-   results are recorded in the Validation section of `USGT_improvements.md`
+1. **Default CI (fast):** the synthetic suite (101 from-scratch authoring /
+   round-trip tests in `test_usg_transport.py`) plus the `Ex1..Ex9` real-model
+   **load+write** round-trips. Catches layout/API regressions in under a minute.
+2. **Executable end-to-end (opt-in via `USGT_EXE`):** the `Ex1..Ex9` tests and
+   the new `autotest/test_usg_transport_exe.py` from-scratch tests are gated by
+   `@requires_exe`. When the USG-T 2.7 executable is resolvable (env var
+   `USGT_EXE`, default `mfusg_gsi`) they **run** the models and check outputs —
+   from-scratch flow (analytical heads + closed `.list` budget) and transport
+   (`.con` produced + closed species-isolated mass budget), plus the nine real
+   models (incl. Ex7 multi-species). They skip cleanly when the exe is absent.
+3. **Manual run-validation (slow, out of CI):** executing USG-T on the full
+   real-world Vistas models and comparing `LST`/`HDS`/`CON`/`CBB` bit-for-bit
    (Model A: BCT+CLN+TIB, ~112k nodes; Model B: BCT IDISP=2 + DDF, ~19k nodes,
-   4322 time steps — all outputs `max|diff| = 0`).
-
-A `@pytest.mark.slow` marker is intentionally not added because the reference
-models cannot be committed; the manual procedure above is the slow tier.
+   4322 time steps — all `max|diff| = 0`). Those models are large/proprietary
+   and not bundled; results are recorded in `USGT_improvements.md`.
 
 Tasks:
 
 - Keep real-world models out of default CI. (Done — only load+write Ex* tests.)
-- Create a slow marker or manual script. (Manual procedure documented.)
+- Create a slow/optional executable tier. (Done — `USGT_EXE`-gated suite.)
 - Validate run outputs against reference outputs. (Done — see improvements.md.)
 
 ---
