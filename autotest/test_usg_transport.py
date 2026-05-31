@@ -3228,3 +3228,43 @@ def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
     drt2 = MfUsgDrt.load(drt.fn_path, _usgt_unstructured_model(function_tmpdir),
                          nper=1, ext_unit_dict={})
     assert drt2.recipient_nodes[0] == [[], []]
+
+
+# --- Stage 3 Card 2: parameter strategy (Expanded valid write for ETS) ----
+
+def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
+    """A parameterized ETS file loads, expands the parameter to a concrete
+    ETSR array, and writes valid non-parametric input (NPETS=0, no PARAMETER).
+
+    This is the documented `Expanded valid write` policy: ETS reads MODFLOW
+    array-parameter syntax but does not preserve it on output.
+    """
+    from flopy.mfusg import MfUsgEts
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    param_ets = function_tmpdir / "param.ets"
+    param_ets.write_text(
+        "# parameterized ETS (NPETS=1)\n"
+        "PARAMETER 1\n"
+        "1 0 1 1 0\n"            # NETSOP IETSCB NPETS NETSEG IESFACTOR
+        "etsrate ets 5.0E-4 1\n"  # param: name type value nclu
+        "NONE ALL\n"             # cluster: no multiplier, all cells
+        "0 1 0\n"                 # SP1: INSURF INETSR INEXDP (INETSR=1 param)
+        "CONSTANT 10.0\n"        # ETSS surface
+        "etsrate\n"              # ETSR via parameter "etsrate"
+        "CONSTANT 5.0\n"         # ETSX extinction depth
+    )
+    ets = MfUsgEts.load(str(param_ets), ml, nper=1)
+    # Parameter expanded on load -> NPETS reset to 0, ETSR filled with parval.
+    assert ets.npets == 0
+    assert np.allclose(ets.evtr[0].array, 5.0e-4)
+
+    out = function_tmpdir / "expanded.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    content = out.read_text()
+    assert "PARAMETER" not in content
+    item2a = [ln for ln in content.splitlines() if not ln.startswith("#")][0]
+    assert item2a.split()[2] == "0"  # NPETS field expanded to 0

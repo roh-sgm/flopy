@@ -14,6 +14,24 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 3 — upstream-readiness pass (2026-05-31)
+
+Guided by `USGT_STAGE3_COMPLETION_PLAN.md`. Card-by-card hardening toward an
+honest, upstream-ready USG-T 2.7 story.
+
+- **Card 1 — status audit:** added a per-package decision table to
+  `USGT_roadmap.md`; relabeled `TIB` and `GSF` as `Raw/text round-trip` (no
+  semantic constructor by design) rather than a bare checkmark.
+- **Card 2 — parameter strategy (ETS/HFB/SGB/QRT/DRT):** decision is to keep
+  `Expanded valid write` (ETS array parameters expand to concrete arrays and
+  write `NPETS=0`) and explicit `NotImplementedError` for list parameters
+  (`NPSGB`/`NPQRT`/`NPDRT` via `UPARLSTAL`, `NPHFB`). Parameter *preservation*
+  is deferred by design (no real target model needs it). Fortran audit:
+  `parutl7.f` (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB` list params) and
+  `mfparbc` (ETS/EVT array params). Tests: a new parameterized-ETS
+  load→expand→`NPETS=0` test plus the existing explicit-failure tests for all
+  four list-parameter packages. Nothing writes incomplete parametric syntax.
+
 ### Phase 2 hardening (2026-05-30)
 
 Post-implementation critical review (`USGT_PHASE2_REVIEW.md`) found five
