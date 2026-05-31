@@ -57,6 +57,13 @@ honest, upstream-ready USG-T 2.7 story.
   and round-trip is exercised; SFR/STR/SUB/SWT are used by no target model and
   are out of scope. No USG-T-specific semantics added; a dedicated per-package
   card would be opened only if a real model requires it.
+- **Card 7 — QRT/DRT recipient `U1DINT` controls:** the Fortran `U1DINT`
+  technically accepts `EXTERNAL`/`OPEN/CLOSE` for recipient-node lists, but
+  these are short inline blocks in practice. Decision: support `INTERNAL` and
+  `CONSTANT` (both tested — a CONSTANT spreading list expands to the repeated
+  node); keep `EXTERNAL`/`OPEN/CLOSE` recipient lists as a documented
+  `NotImplementedError` (rare-within-rare). Main-list controls
+  (`SFAC`/`OPEN-CLOSE`/`EXTERNAL`) remain fully handled by `_usgt_list`.
 
 ### Phase 2 hardening (2026-05-30)
 

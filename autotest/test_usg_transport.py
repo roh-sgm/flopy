@@ -3273,3 +3273,37 @@ def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
     assert "PARAMETER" not in content
     item2a = [ln for ln in content.splitlines() if not ln.startswith("#")][0]
     assert item2a.split()[2] == "0"  # NPETS field expanded to 0
+
+
+# --- Stage 3 Card 7: recipient-node U1DINT controls (INTERNAL/CONSTANT) -----
+
+def test_mfusgdrt_recipient_constant_u1dint(function_tmpdir):
+    """A spreading recipient list written as CONSTANT expands to that node."""
+    drt_in = function_tmpdir / "const.drt"
+    drt_in.write_text(
+        "# drt CONSTANT recipients\n"
+        "         1 0 0 0 RETURNFLOW\n 1 SP1\n"
+        " 1  5.000000e+00  1.000000e+01  -3  7.000000e-01\n"
+        "CONSTANT 5\n"  # 3 recipients, all node 5 (1-based) -> node 4 (0-based)
+    )
+    drt = MfUsgDrt.load(str(drt_in), _usgt_unstructured_model(function_tmpdir),
+                        nper=1, ext_unit_dict={})
+    assert drt.recipient_nodes[0][0] == [4, 4, 4]
+
+
+def test_mfusg_recipient_external_u1dint_unsupported(function_tmpdir):
+    """EXTERNAL/OPEN-CLOSE recipient U1DINT lists fail explicitly (rare; deferred).
+
+    The Fortran U1DINT technically accepts these controls, but recipient lists
+    are short inline blocks in practice, so they are documented unsupported.
+    """
+    drt_ext = function_tmpdir / "ext.drt"
+    drt_ext.write_text(
+        "# drt EXTERNAL recipients\n"
+        "         1 0 0 0 RETURNFLOW\n 1 SP1\n"
+        " 1  5.000000e+00  1.000000e+01  -2  7.000000e-01\n"
+        "EXTERNAL 88\n"
+    )
+    with pytest.raises(NotImplementedError, match="recipient"):
+        MfUsgDrt.load(str(drt_ext), _usgt_unstructured_model(function_tmpdir),
+                      nper=1, ext_unit_dict={})
