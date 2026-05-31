@@ -164,3 +164,25 @@ Constraints:
 - Do not touch MF6-TID or unrelated packages.
 - Do not promote TIB to Full unless semantic parser, writer, authoring tests, and round-trip tests are all present.
 ```
+
+## Stage 4.1 review follow-up — resolved
+
+Two P2 findings from the Stage 4.1 review were fixed (TIB status unchanged,
+still `Full (authoring)`):
+
+1. **Ambiguous input modes.** `MfUsgTib.__init__` now treats
+   `stress_period_data`, `blocks`, and `raw_body` as mutually exclusive: zero
+   non-empty modes is allowed (no-op all-zero TIB), but two or more raise
+   `ValueError`, so `write_file` never silently prefers `raw_body`.
+2. **Premature EOF under `parse=True`.** `_parse_semantic` now raises if the
+   file ends before all `nper` stress-period headers are read (instead of
+   returning partial data). `load(parse=True)` catches it and falls back to the
+   raw round-trip, so a short file is never rewritten with synthetic no-op
+   stress periods.
+
+Tests added in `autotest/test_usg_transport.py`:
+`test_mfusgtib_rejects_mixed_input_modes`,
+`test_mfusgtib_parse_rejects_truncated_file`.
+
+Validation: focused **109 passed**, exe **3 passed**, combined **112 passed**
+under the USG-T 2.7 ARM binary; `git diff --check` clean.

@@ -1065,6 +1065,65 @@ def test_mfusgtib_authoring_rejects_invalid(function_tmpdir):
         MfUsgTib(ml, stress_period_data={0: {"icb1": [(1, [0.5])]}})
 
 
+def test_mfusgtib_rejects_mixed_input_modes(function_tmpdir):
+    """The three input modes are mutually exclusive (no silent precedence)."""
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=5, nper=1)
+        return m
+
+    spd = {0: {"ib0": [0]}}
+    raw = " 0 0 0\n"
+    blk = {0: " 1 0 0\n"}
+
+    with pytest.raises(ValueError, match="only one input mode"):
+        MfUsgTib(ml(), stress_period_data=spd, raw_body=raw)
+    with pytest.raises(ValueError, match="only one input mode"):
+        MfUsgTib(ml(), stress_period_data=spd, blocks=blk)
+    with pytest.raises(ValueError, match="only one input mode"):
+        MfUsgTib(ml(), raw_body=raw, blocks=blk)
+
+    # Zero modes (no-op TIB) and each single mode are accepted.
+    MfUsgTib(ml())
+    MfUsgTib(ml(), stress_period_data=spd)
+    MfUsgTib(ml(), raw_body=raw)
+    MfUsgTib(ml(), blocks=blk)
+
+
+def test_mfusgtib_parse_rejects_truncated_file(function_tmpdir):
+    """parse=True on a file with fewer headers than nper falls back to raw.
+
+    A premature EOF must not be expanded into synthetic no-op stress periods:
+    the parser raises, load keeps the raw body, and write_file rewrites only the
+    original (one) header rather than inventing a second.
+    """
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    src = function_tmpdir / "short.tib"
+    src.write_text("# short tib\n 0 0 0\n")  # one header, but nper=2
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=5, nper=2)
+
+    tib = MfUsgTib.load(str(src), ml, parse=True)
+    assert tib.stress_period_data is None  # parse failed -> raw fallback
+    assert tib.raw_body is not None and "0 0 0" in tib.raw_body
+
+    tib.fn_path = str(function_tmpdir / "short_out.tib")
+    tib.write_file()
+    body = [
+        ln
+        for ln in Path(tib.fn_path).read_text().splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    # exactly the original single header, NOT expanded to two
+    assert body == [" 0 0 0"]
+
+
 def test_mfusgbas_unstructured_keyword_roundtrip(function_tmpdir):
     """MfUsgBas must emit UNSTRUCTURED when the parent model is unstructured.
 

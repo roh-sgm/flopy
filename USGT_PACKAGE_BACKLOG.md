@@ -584,6 +584,15 @@ Acceptance:
 - From-scratch authoring works without first loading a `.tib`; status is honest
   (raw round-trip remains the safe default and documented fallback).
 
+Stage 4.1 review follow-up (resolved): (1) the three input modes
+(`stress_period_data`/`blocks`/`raw_body`) are now mutually exclusive — supplying
+more than one non-empty mode raises `ValueError` instead of `write_file`
+silently preferring `raw_body`; (2) `parse=True` now raises on a premature EOF
+(file with fewer headers than `nper`) and `load` falls back to the raw body
+rather than expanding the file with synthetic no-op stress periods. Two tests
+added (`test_mfusgtib_rejects_mixed_input_modes`,
+`test_mfusgtib_parse_rejects_truncated_file`). Status unchanged: Full (authoring).
+
 ---
 
 ## Priority 3 - Review Existing "Full" Or Near-Full Packages

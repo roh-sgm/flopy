@@ -39,6 +39,14 @@ can be built from Python/numpy without first loading an existing model.
   TIB `NIBM1`+`HEAD` record actually bends the head solution when run. Focused
   suite **107 passed**, exe suite **3 passed**, combined **110 passed** under the
   USG-T 2.7 ARM binary.
+  - **Review follow-up (resolved):** made the three input modes
+    (`stress_period_data`/`blocks`/`raw_body`) mutually exclusive — more than one
+    non-empty mode now raises `ValueError` instead of `write_file` silently
+    preferring `raw_body`; and `parse=True` now raises on a premature EOF (fewer
+    headers than `nper`) so `load` falls back to the raw body rather than padding
+    the file with synthetic no-op stress periods. Two tests added; focused suite
+    **109 passed**, combined **112 passed** under the ARM binary. TIB stays
+    `Full (authoring)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

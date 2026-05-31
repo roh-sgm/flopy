@@ -95,9 +95,11 @@ class MfUsgTib(Package):
 
     Notes
     -----
-    Provide exactly one of ``stress_period_data``, ``blocks``, or ``raw_body``.
-    With none of them the package writes an all-zero header for every stress
-    period (a valid no-op TIB).
+    Provide at most one of ``stress_period_data``, ``blocks``, or ``raw_body``;
+    supplying more than one non-empty mode raises ``ValueError`` (the modes are
+    mutually exclusive, so the writer never silently prefers one). With none of
+    them the package writes an all-zero header for every stress period (a valid
+    no-op TIB).
     """
 
     def __init__(
@@ -115,6 +117,26 @@ class MfUsgTib(Package):
             f"but received type: {type(model)}."
         )
         assert isinstance(model, MfUsg), msg
+
+        # Mutually exclusive input modes: at most one of the three may be
+        # non-empty, so write_file never has to silently prefer one over
+        # another. Zero modes is allowed (writes a no-op all-zero TIB).
+        provided = [
+            name
+            for name, val in (
+                ("stress_period_data", stress_period_data),
+                ("blocks", blocks),
+                ("raw_body", raw_body),
+            )
+            if val
+        ]
+        if len(provided) > 1:
+            raise ValueError(
+                "MfUsgTib accepts only one input mode at a time; received "
+                f"non-empty {provided}. Provide exactly one of "
+                "'stress_period_data', 'blocks', or 'raw_body' (or none for a "
+                "no-op TIB)."
+            )
 
         if unitnumber is None:
             unitnumber = MfUsgTib._defaultunit()
@@ -406,7 +428,11 @@ class MfUsgTib(Package):
         for kper in range(nper):
             header = fh.readline()
             if not header:
-                break
+                raise ValueError(
+                    f"TIB file ended after {kper} of {nper} stress-period "
+                    "header(s); expected one block per stress period. "
+                    "(load(parse=True) falls back to the raw round-trip.)"
+                )
             toks = header.split()
             if transport:
                 if len(toks) < 6:
