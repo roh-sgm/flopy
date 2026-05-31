@@ -22,8 +22,9 @@ Primary USG-T source reference:
 
 All ten cards are done (commits on `develop`, pushed to `origin`). Default
 focused suite `python -m pytest autotest/test_usg_transport.py -q` →
-**101 passed**; opt-in `autotest/test_usg_transport_exe.py` runs end-to-end
-under `USGT_EXE` (default `mfusg_gsi`). Outcomes:
+**101 passed** with a USG-T executable, or **85 passed, 16 skipped** without one
+(see Current Baseline below); the opt-in `autotest/test_usg_transport_exe.py`
+runs end-to-end under `USGT_EXE` (default `mfusg_gsi`). Outcomes:
 
 - **C1 audit:** per-package decision table in `USGT_roadmap.md`; TIB/GSF
   relabeled Raw/text.
@@ -47,8 +48,18 @@ The main USG-T authoring path is now strong. The default focused suite is:
 python -m pytest autotest/test_usg_transport.py -q
 ```
 
-Current expected result: **101 passed** (after Stage 3). The earlier
-**95 passed** figure was the Phase 2 + polish baseline and is now historical.
+Current expected result depends on whether a USG-T executable resolves (the
+`Ex1..Ex9` run tests are `@requires_exe`-gated):
+
+- with a USG-T executable available (`mfusg_gsi` on PATH, or `USGT_EXE` set):
+  **101 passed**;
+- with no resolvable executable: **85 passed, 16 skipped** (the 16 `Ex*` run
+  tests skip cleanly).
+
+The opt-in `autotest/test_usg_transport_exe.py` adds 2 from-scratch executable
+tests; both suites together are **103 passed** under `USGT_EXE` (USG-T 2.7) or
+**85 passed, 18 skipped** with no executable. The earlier **95 passed** figure
+was the Phase 2 + polish baseline and is now historical.
 
 Known local repo state: generated USG-T transport `.CBB` outputs are ignored
 for the `Ex3_CLN_Conduit/Dispersion` validation folder because they are too

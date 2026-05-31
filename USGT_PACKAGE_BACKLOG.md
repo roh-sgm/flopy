@@ -40,8 +40,13 @@ All priority tiers below have been worked through. Commits on `develop`:
 - **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
   real-model run-validation is a documented manual tier (Ex* loads in CI).
 
-Test status: **80 tests pass** in `autotest/test_usg_transport.py` (synthetic
-authoring/round-trip + `Ex1..Ex9` real-model load+write), ~40 s.
+Test status (current, after Stage 3 + follow-up): `autotest/test_usg_transport.py`
+→ **101 passed** when a USG-T executable resolves (`Ex1..Ex9` run), or
+**85 passed, 16 skipped** with no executable (the `Ex*` run tests skip). With
+the opt-in `autotest/test_usg_transport_exe.py`, both suites together →
+**103 passed** under `USGT_EXE` (USG-T 2.7), or **85 passed, 18 skipped** with
+no resolvable executable. (Historical counts below: 80 after the initial
+backlog pass, 95 after Phase 2 + polish.)
 
 ## Critical review addendum (2026-05-30)
 

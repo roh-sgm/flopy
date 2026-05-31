@@ -4,10 +4,15 @@ Date: 2026-05-31
 
 Basis: `USGT_STAGE3_REREVIEW.md`
 
-Current observable repo state: after fetching `origin`, `develop` and
-`origin/develop` both point to `6618181c`. No post-review agent fixes are visible
-in this checkout yet. This plan converts the open re-review findings into an
-explicit work order.
+> **Status: COMPLETED — executed by commit `d3725bd8`** (follow-up range
+> `6618181c..d3725bd8` on `develop`). All re-review findings are Fixed (see the
+> Resolution section of `USGT_STAGE3_REREVIEW.md`). The work order below is
+> retained verbatim as the historical plan; it has already been carried out.
+
+Historical context (at the time this plan was written): after fetching
+`origin`, `develop` and `origin/develop` both pointed to `6618181c` and no
+post-review agent fixes were visible yet. This plan converted the then-open
+re-review findings into an explicit work order, which is now done.
 
 Local macOS USG-T 2.7 executable available for validation:
 

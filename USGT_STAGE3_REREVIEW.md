@@ -2,7 +2,14 @@
 
 Date: 2026-05-31
 
-Review target: `17f96dd0..6618181c`
+- Original review target (pre-fix): `17f96dd0..6618181c`
+- Follow-up range (the fixes): `6618181c..d3725bd8`
+- Resolution commit: `d3725bd8`
+
+This document is **closed**: the Resolution section below records the
+follow-up that fixed every finding (commit `d3725bd8`); the original review
+text is retained underneath as historical context. It is not a pre-fix-only
+document.
 
 Scope: Stage 3 completion pass after `USGT_STAGE3_COMPLETION_PLAN.md`. This
 review focuses on consistency between the new tests, the roadmap/backlog docs,
@@ -19,13 +26,25 @@ a fresh Fortran semantic audit.
 | P2 — completion plan stale baseline | **Fixed** | `USGT_STAGE3_COMPLETION_PLAN.md` `Current Baseline` now says **101 passed** (95 labeled the historical Phase 2 + polish baseline); trailing EOF blank line removed (`git diff --check` clean). |
 | P3 — transport executable test overclaims concentration validation | **Fixed** | `test_usgt_exe_minimal_transport_from_scratch` docstring now states it produces a `.con` and closes the species-isolated transport mass budget (no concentration-value claim); the `.con` is USG node-based binary. |
 
-Verification after the fixes:
+Verification after the fixes (commit `d3725bd8`), by executable availability —
+counts depend on whether `USGT_EXE` resolves, because the real-model `Ex*` and
+from-scratch executable tests are `@requires_exe`-gated:
 
-- `autotest/test_usg_transport.py`: **101 passed**.
-- `autotest/test_usg_transport_exe.py`: **2 passed** (default `mfusg_gsi`).
-- Both suites with the local USG-T 2.7 ARM binary
-  (`USGT_EXE=.../usgt_2.7/usgt_270_arm`): **103 passed**.
-- `git diff --check`: **clean**.
+- **USG-T 2.7 resolves via `USGT_EXE`** (e.g. the local ARM binary
+  `USGT_EXE=.../usgt_2.7/usgt_270_arm`), both suites together:
+  **103 passed**.
+- **`mfusg_gsi` available on PATH by default** (no `USGT_EXE` set):
+  `autotest/test_usg_transport.py` → **101 passed**;
+  `autotest/test_usg_transport_exe.py` → **2 passed**.
+- **No resolvable executable** (e.g. `USGT_EXE` unset and `mfusg_gsi` absent,
+  or `USGT_EXE` pointing at a missing path), both suites together:
+  **85 passed, 18 skipped** (the 16 `Ex*` + 2 from-scratch executable tests
+  skip cleanly).
+- `git diff --check 17f96dd0..d3725bd8`: **clean**.
+
+CI note: an environment without a USG-T executable should expect
+**85 passed, 18 skipped**, not a literal `101 passed`; the executable tier is
+optional by design.
 
 Everything below this line is the **original re-review**, preserved for history;
 its findings are resolved per the table above.

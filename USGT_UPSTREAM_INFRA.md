@@ -69,8 +69,9 @@ ad-hoc zip of unknown provenance.
 
 ## 4. What this fork already provides toward the criteria
 
-- A clean, honest, well-tested FloPy package layer (101 synthetic tests; status
-  audit; explicit failure for unsupported modes) — see `USGT_roadmap.md`.
+- A clean, honest, well-tested FloPy package layer (a 101-test focused suite:
+  synthetic authoring/round-trip plus `Ex1..Ex9` real-model loads; status audit;
+  explicit failure for unsupported modes) — see `USGT_roadmap.md`.
 - An **opt-in executable validation tier** (`USGT_EXE`-gated) that runs
   from-scratch and real models end-to-end and checks budgets — the seed for the
   source-repo smoke tests (Card 9).
