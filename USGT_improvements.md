@@ -38,6 +38,12 @@ honest, upstream-ready USG-T 2.7 story.
   `MfUsgDpt.load` raises `NotImplementedError` at the option line before any
   extra read; test covers both the bare keyword and the `IAREA_FNIM IKAWI_FNIM`
   form. Spec recorded in roadmap Gap §6.
+- **Card 4 — TIB:** decision is **keep raw/text round-trip for v1** (no semantic
+  constructor). Fortran grammar (`GWF2TIB1RP`: `NIB0/NIB1/NIBM1
+  [NICB0/NICB1/NICBM1]` + `U1DINT` node lists + node/head + transport blocks)
+  recorded in the backlog. The raw round-trip preserves multi-node `U1DINT`
+  continuation lines (tested) and round-trips Model A bit-for-bit; semantic
+  authoring deferred until a target model needs it.
 
 ### Phase 2 hardening (2026-05-30)
 
