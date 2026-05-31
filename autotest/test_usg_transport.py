@@ -870,6 +870,201 @@ def test_mfusgtib_roundtrip(function_tmpdir):
     assert orig_body == new_body, "TIB body not preserved through load/write"
 
 
+def test_mfusgtib_authoring_nontransport_from_scratch(function_tmpdir):
+    """Build a non-transport TIB from Python and write it without loading.
+
+    Primary authoring acceptance: no existing ``.tib`` is read first. Also
+    verifies 0-based internal nodes become 1-based file ids, a multi-node
+    ``U1DINT`` list, and HEAD/AVHEAD/bare records.
+    """
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=10, nper=2)
+
+    spd = {
+        0: {
+            "ib0": [0, 9],  # multi-node U1DINT list
+            "ib1": [(1, 8.0), (2, "AVHEAD")],
+            "ibm1": [(5, 3.5)],
+        },
+        1: {"ibm1": [(7, None)]},  # bare record (reuse existing head)
+    }
+    tib = MfUsgTib(ml, stress_period_data=spd)
+    tib.fn_path = str(function_tmpdir / "scratch.tib")
+    tib.write_file()
+
+    lines = [
+        ln
+        for ln in Path(tib.fn_path).read_text().splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    # SP1 header is 3 ints (no BCT): NIB0=2 NIB1=2 NIBM1=1
+    assert lines[0].split() == ["2", "2", "1"]
+    # U1DINT control + multi-node values line, 1-based (0,9 -> 1,10)
+    assert lines[1].upper().startswith("INTERNAL")
+    assert lines[2].split() == ["1", "10"]
+    # activate records: node 1 -> file 2 with HEAD; node 2 -> file 3 AVHEAD
+    assert lines[3].split() == ["2", "HEAD", "8.0"]
+    assert lines[4].split() == ["3", "AVHEAD"]
+    # prescribed head: node 5 -> file 6
+    assert lines[5].split() == ["6", "HEAD", "3.5"]
+    # SP2 header then a bare reuse record: node 7 -> file 8
+    assert lines[6].split() == ["0", "0", "1"]
+    assert lines[7].split() == ["8"]
+
+
+def test_mfusgtib_authoring_transport_from_scratch(function_tmpdir):
+    """Build a transport TIB (concentration blocks) from Python and write it.
+
+    Verifies the 6-int header emitted when a BCT package is present and the
+    multi-component ``CONC`` records, all with 1-based file ids.
+    """
+    from flopy.mfusg import MfUsgBct, MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=10, nper=1)
+    MfUsgBct(ml, mcomp=2)  # transport active, two mobile components
+
+    spd = {
+        0: {
+            "ib0": [0],
+            "ib1": [(1, 5.0)],
+            "icb0": [9],
+            "icb1": [(2, [0.5, 0.2]), (3, "AVCONC")],
+            "icbm1": [(4, [1.0, 0.0])],
+        }
+    }
+    tib = MfUsgTib(ml, stress_period_data=spd)
+    tib.fn_path = str(function_tmpdir / "scratch_tr.tib")
+    tib.write_file()
+
+    text = Path(tib.fn_path).read_text()
+    lines = [
+        ln
+        for ln in text.splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    # 6-int header because the model has a BCT package
+    assert lines[0].split() == ["1", "1", "0", "1", "2", "1"]
+    # multi-component CONC record, node 2 -> file 3
+    assert " 3 CONC 0.5 0.2\n" in text
+    assert " 4 AVCONC\n" in text
+    # icb0 transport-inactivate list, node 9 -> file 10
+    assert " 10\n" in text
+
+
+def test_mfusgtib_semantic_load_nontransport(function_tmpdir):
+    """Semantic load of a minimal non-transport TIB file (parse=True)."""
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    src = function_tmpdir / "load.tib"
+    src.write_text(
+        "# minimal TIB\n"
+        " 2 1 0\n"
+        "INTERNAL 1 (FREE) -1\n"
+        " 11 12\n"
+        " 21 HEAD 4.0\n"
+    )
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=30, nper=1)
+
+    tib = MfUsgTib.load(str(src), ml, parse=True)
+    assert tib.raw_body is None  # parsed, not raw
+    sp = tib.stress_period_data[0]
+    # file 11,12 -> internal 10,11
+    assert sp["ib0"].tolist() == [10, 11]
+    # file 21 -> internal 20, HEAD 4.0
+    assert sp["ib1"] == [(20, 4.0)]
+
+
+def test_mfusgtib_semantic_write_reload_roundtrip(function_tmpdir):
+    """Author from scratch, write, reload with parse=True, compare semantics."""
+    from flopy.mfusg import MfUsgBct, MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    def build(ws, name):
+        m = MfUsg(model_ws=str(ws), modelname=name)
+        ModflowDis(m, nlay=1, nrow=1, ncol=10, nper=2)
+        MfUsgBct(m, mcomp=2)
+        return m
+
+    spd = {
+        0: {
+            "ib0": [0, 4],
+            "ib1": [(1, 6.0)],
+            "icb1": [(2, [0.3, 0.1])],
+        },
+        1: {
+            "ibm1": [(8, "AVHEAD")],
+            "icbm1": [(9, [2.0, 0.0])],
+        },
+    }
+    m1 = build(function_tmpdir, "rt")
+    tib = MfUsgTib(m1, stress_period_data=spd)
+    tib.fn_path = str(function_tmpdir / "rt.tib")
+    tib.write_file()
+
+    m2 = build(function_tmpdir, "rt2")
+    re = MfUsgTib.load(tib.fn_path, m2, parse=True)
+    s = re.stress_period_data
+
+    assert s[0]["ib0"].tolist() == [0, 4]
+    assert s[0]["ib1"] == [(1, 6.0)]
+    assert s[0]["icb1"][0][0] == 2
+    assert np.allclose(s[0]["icb1"][0][1], [0.3, 0.1])
+    assert s[1]["ibm1"] == [(8, "AVHEAD")]
+    assert s[1]["icbm1"][0][0] == 9
+    assert np.allclose(s[1]["icbm1"][0][1], [2.0, 0.0])
+
+    # second write must be byte-identical to the first (stable round-trip)
+    first = Path(tib.fn_path).read_text()
+    re.fn_path = str(function_tmpdir / "rt_again.tib")
+    re.write_file()
+    assert Path(re.fn_path).read_text() == first
+
+
+def test_mfusgtib_parse_falls_back_on_unsupported(function_tmpdir):
+    """Unsupported U1DINT syntax keeps the raw round-trip (documented design)."""
+    from flopy.mfusg import MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    src = function_tmpdir / "ext.tib"
+    src.write_text("# ext\n 2 0 0\nEXTERNAL 47\n")
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=5, nper=1)
+
+    # parse=True cannot model EXTERNAL U1DINT -> falls back to raw, no partial data
+    tib = MfUsgTib.load(str(src), ml, parse=True)
+    assert tib.stress_period_data is None
+    assert tib.raw_body is not None and "EXTERNAL 47" in tib.raw_body
+
+
+def test_mfusgtib_authoring_rejects_invalid(function_tmpdir):
+    """From-scratch authoring fails explicitly on inconsistent inputs."""
+    from flopy.mfusg import MfUsgBct, MfUsgTib
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=10, nper=1)
+
+    # transport data with no BCT on the model
+    with pytest.raises(ValueError, match="requires an active BCT"):
+        MfUsgTib(ml, stress_period_data={0: {"icb1": [(1, [0.5])]}})
+
+    # 1-based node slip (negative after the caller's off-by-one) is rejected
+    with pytest.raises(ValueError, match="0-based"):
+        MfUsgTib(ml, stress_period_data={0: {"ib0": [-1]}})
+
+    # CONC length must match MCOMP
+    MfUsgBct(ml, mcomp=2)
+    with pytest.raises(ValueError, match="expected MCOMP = 2"):
+        MfUsgTib(ml, stress_period_data={0: {"icb1": [(1, [0.5])]}})
+
+
 def test_mfusgbas_unstructured_keyword_roundtrip(function_tmpdir):
     """MfUsgBas must emit UNSTRUCTURED when the parent model is unstructured.
 

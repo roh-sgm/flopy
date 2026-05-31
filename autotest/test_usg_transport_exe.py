@@ -34,6 +34,7 @@ from flopy.mfusg import (
     MfUsgOc,
     MfUsgPcb,
     MfUsgSms,
+    MfUsgTib,
 )
 from flopy.modflow import ModflowChd, ModflowDis
 from flopy.utils import HeadFile, MfusgListBudget, MfusgTransportListBudget
@@ -119,4 +120,50 @@ def test_usgt_exe_minimal_transport_from_scratch(function_tmpdir):
     ).get_budget()
     assert inc is not None and len(inc) > 0
     assert "PRESCRIBED_CONCS_IN" in inc.dtype.names
+    assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
+
+
+@requires_exe(USGT_EXE)
+def test_usgt_exe_tib_prescribed_head_from_scratch(function_tmpdir):
+    """A from-scratch semantic TIB package runs under USG-T 2.7.
+
+    A 2-period steady model: period 1 is an unconstrained linear gradient
+    between two CHD cells; period 2 uses TIB ``NIBM1`` + ``HEAD`` to prescribe an
+    interior head, bending the gradient to a different exact solution. This
+    proves the executable reads and applies the FloPy-authored semantic TIB
+    record (not just that the file is syntactically accepted)."""
+    ml = MfUsg(
+        modelname="tibflow",
+        model_ws=str(function_tmpdir),
+        exe_name=USGT_EXE,
+        structured=True,
+    )
+    ModflowDis(
+        ml, nlay=1, nrow=1, ncol=5, nper=2, perlen=1.0, nstp=1, steady=True,
+        delr=10.0, delc=10.0, top=10.0, botm=0.0,
+    )
+    MfUsgBas(ml, ibound=1, strt=5.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ipakcb=0)
+    MfUsgSms(ml, linmeth=1)
+    MfUsgOc(
+        ml, stress_period_data={(0, 0): ["save head"], (1, 0): ["save head"]}
+    )
+    chd = [[0, 0, 0, 8.0, 8.0], [0, 0, 4, 2.0, 2.0]]
+    ModflowChd(ml, stress_period_data={0: chd, 1: chd})
+    # Period 2: prescribe interior node 2 (0-based) at 6.0 via NIBM1 + HEAD.
+    MfUsgTib(ml, stress_period_data={1: {"ibm1": [(2, 6.0)]}})
+    ml.write_input()
+
+    success, _ = ml.run_model(silent=True)
+    assert success, "USG-T TIB run did not terminate normally"
+
+    heads = HeadFile(os.path.join(ml.model_ws, "tibflow.hds")).get_alldata()
+    # Period 1: unconstrained linear gradient between the CHD cells.
+    assert np.allclose(heads[0].ravel(), [8.0, 6.5, 5.0, 3.5, 2.0], atol=1e-3)
+    # Period 2: TIB pins node 2 at 6.0 -> exact piecewise-linear [8,7,6,4,2].
+    assert np.allclose(heads[-1].ravel(), [8.0, 7.0, 6.0, 4.0, 2.0], atol=1e-3)
+
+    inc, _cum = MfusgListBudget(
+        os.path.join(ml.model_ws, "tibflow.list")
+    ).get_budget()
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1

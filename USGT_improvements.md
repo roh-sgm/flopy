@@ -14,6 +14,32 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 4 — programmatic authoring (in progress)
+
+Guided by `USGT_STAGE4_MASTER_PLAN.md`. Closing authoring gaps so USG-T packages
+can be built from Python/numpy without first loading an existing model.
+
+- **Stage 4.1 — TIB semantic support (2026-05-31):** promoted `MfUsgTib` from
+  `Raw/text round-trip` to **`Full (authoring)`**, reversing the Stage 3 Card 4
+  "keep raw/text" decision. Audited `GWF2TIB1RP` in `glo2basu1.f` and added a
+  semantic `stress_period_data` constructor plus a `parse=True` loader covering
+  the full grammar: flow blocks (`NIB0` inactivate / `NIB1` activate / `NIBM1`
+  prescribed-head, with `HEAD`/`AVHEAD`/bare) and transport blocks
+  (`NICB0`/`NICB1`/`NICBM1`, with multi-component `CONC`/`AVCONC`/bare); `NIB0`/
+  `NICB0` node lists via `U1DINT`; 3- vs 6-int header keyed to BCT presence;
+  0-based internal / 1-based file. `MfUsgTib.load` still **defaults to byte-exact
+  raw round-trip** (what `MfUsg.load` uses); `parse=True` returns semantic data
+  and falls back to raw on `EXTERNAL`/`OPEN-CLOSE` `U1DINT` rather than writing
+  partial data. Authoring validates transport-requires-BCT, `CONC` length =
+  MCOMP, and 0-based nodes. Six new focused tests (from-scratch non-transport +
+  transport authoring, semantic load, write/reload byte-stable, raw fallback on
+  unsupported syntax, explicit authoring rejections) join the existing raw
+  round-trip test, plus a USG-T 2.7 executable smoke test
+  (`test_usgt_exe_tib_prescribed_head_from_scratch`) that proves a FloPy-authored
+  TIB `NIBM1`+`HEAD` record actually bends the head solution when run. Focused
+  suite **107 passed**, exe suite **3 passed**, combined **110 passed** under the
+  USG-T 2.7 ARM binary.
+
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 
 Guided by `USGT_STAGE3_COMPLETION_PLAN.md`. Card-by-card hardening toward an
@@ -43,7 +69,9 @@ honest, upstream-ready USG-T 2.7 story.
   [NICB0/NICB1/NICBM1]` + `U1DINT` node lists + node/head + transport blocks)
   recorded in the backlog. The raw round-trip preserves multi-node `U1DINT`
   continuation lines (tested) and round-trips Model A bit-for-bit; semantic
-  authoring deferred until a target model needs it.
+  authoring deferred until a target model needs it. → **Superseded by Stage 4.1**
+  (semantic authoring + `parse=True` load now implemented; raw round-trip kept as
+  the `load` default).
 - **Card 5 — LAK:** decision is **keep `✅` not Full**. `MfUsgLak` already
   parses/preserves `TABLEINPUT` and the `transportboundary` flag and round-trips
   the Ex8 real model; from-scratch authoring (full lake connectivity / bathymetry
@@ -175,7 +203,7 @@ explicitly rather than producing incomplete or mis-parsed files.
 |---|---|
 | `usgt/rch-transport-fix` | In `MfUsgRch.write_file`, `"# Stress period {kper + 1}"` becomes an f-string so the comment substitutes per SP, and `INRECH` is followed by `INIRCH` only when `NRCHOP == 2` (matching the read path). Both details were harmless at runtime but left the written RCH file not round-trippable. |
 | `usgt/cln-load-none-unit` | In `MfUsgCln.__init__`, treat `None` entries in `unitnumber` as 0 instead of calling `int(None)`. This comes up when a CLN-declared output unit is not declared in the NAM's `ext_unit_dict`. |
-| `usgt/tib-package` | Adds a new `MfUsgTib` class for the Transient Ibound package. Raw-body text-preserving round-trip — enough to load + write an existing TIB without mis-parsing `U1DINT` continuation lines. |
+| `usgt/tib-package` | Adds a new `MfUsgTib` class for the Transient Ibound package. **Stage 4.1: semantic** `stress_period_data` authoring (flow `NIB0/NIB1/NIBM1` + transport `NICB0/NICB1/NICBM1` blocks) and a `parse=True` loader, on top of the byte-exact raw round-trip that remains the `load` default (and the `parse=True` fallback for `EXTERNAL`/`OPEN-CLOSE` `U1DINT`). |
 | `usgt/bas-preserve-unstructured` | `MfUsgBas.write_file` re-emits the `UNSTRUCTURED` keyword when `parent.structured is False`. The load side already reads the token; adding it to write closes the round-trip. |
 | `usgt/nam-rebase-output-paths` | `BaseModel._reset_external` stores the basename of output files on `change_model_ws`, and `Modflow.write_name_file` preserves subdirectories for external input files. Previously the NAM writer also reduced inputs to basenames, breaking valid `DATA` paths in subfolders. |
 
