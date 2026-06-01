@@ -155,6 +155,24 @@ can be built from Python/numpy without first loading an existing model.
     `test_gridgen_to_gsf_skip_degenerate_compacts`); `MfUsgGsf` unchanged.
     `-k gridgen_to_gsf` **5 passed**, focused suite **128 passed**, exe
     **3 passed**, combined **131 passed** under the ARM binary.
+- **Stage 4 — OC Fullness Card A (2026-05-31):** audited `MfUsgOc` against
+  USG-T 2.7 Output Control (`glo2basu1.f` SGWF2BAS7I/J/N) and hardened it.
+  Implemented the `BOOTSTRAPPING` header — `__init__`/`write_file` now author and
+  preserve it (previously `load` read the units but they were dropped on
+  round-trip), written on the **first OC line** (the only place USG-T's setup
+  parses it; the per-record reader rejects a standalone `BOOTSTRAPPING` line).
+  Fixed `load` to keep **layer-qualified** `PRINT`/`SAVE HEAD`/`DRAWDOWN`/`CONC`
+  actions (it previously truncated to two tokens) and to recapture
+  **`DDREFERENCE`** from the period line. Added six tests (BOOTSTRAPPING header,
+  per-SP `BOOTSTRAP`/`NOBOOTSTRAP`/`BOOTSTRAPSCALE`/`NOBOOTSTRAPSCALE`,
+  CONC/BUDGET output blocks, `SAVE IBOUND`, layer-qualified, `DDREFERENCE`).
+  **Decision: kept `✅ (intentionally not Full)`** with explicit gaps —
+  `SAVE IBOUND` is commented out in USG-T 2.7 (solver rejects it; FloPy preserves
+  the keyword); `FASTFORWARD`/`FASTFORWARDC` separate-line placement and
+  `BOOTSTRAPPING` execution are not exe-verified; numeric-format OC rewrites as
+  words. EVT/MDT/LAK untouched. See `USGT_STAGE4_OC_FULLNESS.md`. `-k mfusgoc`
+  **7 passed**, focused suite **134 passed**, exe **3 passed**, combined
+  **137 passed** under the USG-T 2.7 ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

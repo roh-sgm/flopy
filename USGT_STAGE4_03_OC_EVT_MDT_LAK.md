@@ -60,7 +60,7 @@ Known gap:
 Treat each package as its own mini-card. Do not try to promote all four in one
 large commit unless the changes are documentation-only.
 
-### Card A - OC Fullness
+### Card A - OC Fullness — EXECUTED
 
 Required:
 
@@ -69,6 +69,14 @@ Required:
 - add output-block coverage for common save/print concentration/head/budget
   combinations,
 - decide whether compact/non-compact or rare modes are in scope.
+
+**Done.** Full audit, implementation, tests, and the honest Full/not-Full
+decision are recorded in **`USGT_STAGE4_OC_FULLNESS.md`**: implemented the
+`BOOTSTRAPPING` header (first-line placement + round-trip) and fixed
+layer-qualified / `DDREFERENCE` round-trip; added six `-k mfusgoc` tests; kept
+OC `✅ (intentionally not Full)` with explicit gaps (`SAVE IBOUND`
+solver-rejected, FASTFORWARD/BOOTSTRAPPING execution not exe-verified). EVT /
+MDT / LAK (Cards B–D) remain not started.
 
 ### Card B - EVT Fullness
 

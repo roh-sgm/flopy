@@ -235,6 +235,19 @@ class MfUsgOc(Package):
             if "iumfastc" in kwargs:
                 self.iumfastc = int(kwargs.pop("iumfastc"))
 
+        # BOOTSTRAPPING: read the first-iteration head estimate of a transient
+        # run from a separate file (USG-T). Per glo2basu1.f the option lives on
+        # the FIRST OC line (SGWF2BAS7I); the per-record reader SGWF2BAS7J does
+        # not accept it as a standalone line. ``bootstrapping`` may be passed
+        # explicitly when authoring, or is inferred when a head unit (iugboot)
+        # is supplied (e.g. on load).
+        self.iugboot = int(kwargs.pop("iugboot", 0))
+        self.iucboot = int(kwargs.pop("iucboot", 0))
+        self.iudboot = int(kwargs.pop("iudboot", 0))
+        self.bootstrapping = (
+            bool(int(kwargs.pop("bootstrapping", 0))) or self.iugboot != 0
+        )
+
         # set output unit numbers based on oc settings
         self.savehead = False
         self.saveddn = False
@@ -441,7 +454,16 @@ class MfUsgOc(Package):
         f_oc = open(self.fn_path, "w")
         f_oc.write(f"{self.heading}\n")
 
-        # write options
+        # write options. BOOTSTRAPPING must sit on the first OC line (USG-T's
+        # SGWF2BAS7I parses it there; SGWF2BAS7J rejects it as a standalone
+        # record), so it is appended to the ATSA line or written as line 1.
+        boot = ""
+        if self.bootstrapping:
+            boot = f" BOOTSTRAPPING {self.iugboot:.0f}"
+            if getattr(self.parent, "icln", 0):
+                boot += f" {self.iucboot:.0f}"
+            if getattr(self.parent, "idpf", 0):
+                boot += f" {self.iudboot:.0f}"
         if self.atsa:
             f_oc.write("ATSA ")
             if self.nptimes > 0:
@@ -450,7 +472,9 @@ class MfUsgOc(Package):
                     f_oc.write(f"{self.timot[i]} ")
             if self.npsteps > 0:
                 f_oc.write(f"NPSTPS {self.npsteps} ")
-            f_oc.write("\n")
+            f_oc.write(f"{boot}\n")
+        elif boot:
+            f_oc.write(f"{boot.strip()}\n")
         if self.fastforward:
             f_oc.write(
                 f"FASTFORWARD {self.ispfast:3.0f} {self.itsfast:3.0f}"
@@ -1130,11 +1154,15 @@ class MfUsgOc(Package):
                     if iperoc > nper:
                         break
 
-                # dataset 3
-                elif "PRINT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {lnlst[1]}")
-                elif "SAVE" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {lnlst[1]}")
+                    # DDREFERENCE rides on the period line on write; recapture
+                    # it as an action so it survives the round-trip.
+                    if "DDREFERENCE" in lnlst:
+                        lines.append("DDREFERENCE")
+
+                # dataset 3 — keep the whole action so layer qualifiers
+                # (e.g. "SAVE HEAD 1 2") survive the round-trip.
+                elif "PRINT" in lnlst[0] or "SAVE" in lnlst[0]:
+                    lines.append(" ".join(lnlst))
                 elif "DELTAT" in lnlst[0]:
                     lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
                 elif "TMINAT" in lnlst[0]:

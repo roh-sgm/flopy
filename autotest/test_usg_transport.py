@@ -4337,3 +4337,154 @@ def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     MfUsgBas(ml2, ibound=1, strt=1.0)
     oc2 = MfUsgOc.load(oc.fn_path, ml2, nper=1)
     assert oc2.atsa == 1
+
+
+def _oc_model(function_tmpdir, name="m", nlay=2, nper=1):
+    """A minimal structured MfUsg model for OC authoring/round-trip tests."""
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=nlay, nrow=1, ncol=3, nper=nper, nstp=1)
+    return m
+
+
+def test_mfusgoc_bootstrapping_header_authoring_roundtrip(function_tmpdir):
+    """OC BOOTSTRAPPING header authors from scratch and round-trips.
+
+    Per glo2basu1.f the option is parsed only from the first OC line
+    (SGWF2BAS7I); the per-record reader SGWF2BAS7J rejects it as a standalone
+    line, so the writer must place it on line 1.
+    """
+    from flopy.mfusg import MfUsgOc
+
+    oc = MfUsgOc(
+        _oc_model(function_tmpdir, "b1"),
+        bootstrapping=1,
+        iugboot=80,
+        stress_period_data={(0, 0): ["save head"]},
+    )
+    oc.fn_path = str(function_tmpdir / "b1.oc")
+    oc.write_file()
+    body = Path(oc.fn_path).read_text().splitlines()
+    assert "BOOTSTRAPPING" in body[1] and "80" in body[1]  # first OC line
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "b2"), nper=1)
+    assert re.bootstrapping and re.iugboot == 80
+    re.fn_path = str(function_tmpdir / "b1_re.oc")
+    re.write_file()
+    assert "BOOTSTRAPPING 80" in Path(re.fn_path).read_text()  # stable
+
+    # a normal OC writes no BOOTSTRAPPING line
+    plain = MfUsgOc(
+        _oc_model(function_tmpdir, "b3"), stress_period_data={(0, 0): ["save head"]}
+    )
+    plain.fn_path = str(function_tmpdir / "b3.oc")
+    plain.write_file()
+    assert "BOOTSTRAP" not in Path(plain.fn_path).read_text()
+
+
+def test_mfusgoc_bootstrap_stress_period_actions(function_tmpdir):
+    """Per-stress-period BOOTSTRAP toggles round-trip as OC actions."""
+    from flopy.mfusg import MfUsgOc
+
+    spd = {
+        (0, 0): ["save head", "bootstrap", "bootstrapscale"],
+        (1, 0): ["save head", "nobootstrap", "nobootstrapscale"],
+    }
+    oc = MfUsgOc(_oc_model(function_tmpdir, "spb", nper=2), stress_period_data=spd)
+    oc.fn_path = str(function_tmpdir / "spb.oc")
+    oc.write_file()
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "spb2", nper=2), nper=2)
+    a0 = [a.upper() for a in re.stress_period_data[(0, 0)]]
+    a1 = [a.upper() for a in re.stress_period_data[(1, 0)]]
+    assert "BOOTSTRAP" in a0 and "BOOTSTRAPSCALE" in a0
+    assert "NOBOOTSTRAP" in a1 and "NOBOOTSTRAPSCALE" in a1
+
+
+def test_mfusgoc_output_block_combinations(function_tmpdir):
+    """SAVE/PRINT HEAD/CONC/BUDGET output actions round-trip."""
+    from flopy.mfusg import MfUsgOc
+
+    spd = {
+        (0, 0): [
+            "save head",
+            "save conc",
+            "print conc",
+            "save budget",
+            "print budget",
+        ]
+    }
+    oc = MfUsgOc(_oc_model(function_tmpdir, "io"), stress_period_data=spd)
+    oc.fn_path = str(function_tmpdir / "io.oc")
+    oc.write_file()
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "io2"), nper=1)
+    acts = [a.upper() for a in re.stress_period_data[(0, 0)]]
+    for a in ("SAVE HEAD", "SAVE CONC", "PRINT CONC", "SAVE BUDGET", "PRINT BUDGET"):
+        assert a in acts, (a, acts)
+
+
+def test_mfusgoc_save_ibound_roundtrips_but_usgt_rejects(function_tmpdir):
+    """SAVE IBOUND round-trips in FloPy, but USG-T 2.7's OC reader rejects it.
+
+    The per-step SAVE IBOUND branch is commented out in glo2basu1.f
+    (SGWF2BAS7N), so this action must not be used with USG-T 2.7. FloPy still
+    preserves the keyword for standard-MODFLOW compatibility — this test pins
+    that documented gap.
+    """
+    from flopy.mfusg import MfUsgOc
+
+    oc = MfUsgOc(
+        _oc_model(function_tmpdir, "ib"),
+        stress_period_data={(0, 0): ["save head", "save ibound"]},
+    )
+    oc.fn_path = str(function_tmpdir / "ib.oc")
+    oc.write_file()
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "ib2"), nper=1)
+    assert "SAVE IBOUND" in [a.upper() for a in re.stress_period_data[(0, 0)]]
+
+
+def test_mfusgoc_layer_qualified_roundtrip(function_tmpdir):
+    """Layer-qualified PRINT/SAVE HEAD/DRAWDOWN/CONC keep their layer lists."""
+    from flopy.mfusg import MfUsgOc
+
+    spd = {
+        (0, 0): [
+            "save head 1 2",
+            "print head 1",
+            "save drawdown 2 3",
+            "print conc 1 3",
+        ]
+    }
+    oc = MfUsgOc(_oc_model(function_tmpdir, "lay", nlay=3), stress_period_data=spd)
+    oc.fn_path = str(function_tmpdir / "lay.oc")
+    oc.write_file()
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "lay2", nlay=3), nper=1)
+    acts = [a.upper() for a in re.stress_period_data[(0, 0)]]
+    assert "SAVE HEAD 1 2" in acts
+    assert "PRINT HEAD 1" in acts
+    assert "SAVE DRAWDOWN 2 3" in acts
+    assert "PRINT CONC 1 3" in acts
+
+
+def test_mfusgoc_ddreference_roundtrip(function_tmpdir):
+    """DDREFERENCE (written on the period line) round-trips as an action."""
+    from flopy.mfusg import MfUsgOc
+
+    oc = MfUsgOc(
+        _oc_model(function_tmpdir, "ddr"),
+        stress_period_data={(0, 0): ["save drawdown", "ddreference"]},
+    )
+    oc.fn_path = str(function_tmpdir / "ddr.oc")
+    oc.write_file()
+    period_line = next(
+        ln
+        for ln in Path(oc.fn_path).read_text().splitlines()
+        if ln.lower().startswith("period")
+    )
+    assert "ddreference" in period_line.lower()
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "ddr2"), nper=1)
+    assert "DDREFERENCE" in [a.upper() for a in re.stress_period_data[(0, 0)]]

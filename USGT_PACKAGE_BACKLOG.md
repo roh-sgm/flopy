@@ -928,6 +928,22 @@ offset/quadtree logic). Focal test filter `-k gridgen_to_gsf`. Two tests added
 (`test_gridgen_to_gsf_parsimonious_compacts`,
 `test_gridgen_to_gsf_skip_degenerate_compacts`); `MfUsgGsf` unchanged.
 
+### OC — Fullness Card A (Stage 4)
+
+Audited `MfUsgOc` against USG-T 2.7 OC (`glo2basu1.f` SGWF2BAS7I/J/N). Implemented
+the `BOOTSTRAPPING` header (authoring + round-trip; written on the **first** OC
+line, the only place USG-T parses it — `SGWF2BAS7J` rejects a standalone
+`BOOTSTRAPPING` record), and fixed `load` to preserve **layer-qualified**
+`PRINT`/`SAVE` actions and **`DDREFERENCE`** on round-trip. Added explicit tests
+for those plus per-SP `BOOTSTRAP`/`NOBOOTSTRAP`/`BOOTSTRAPSCALE`/
+`NOBOOTSTRAPSCALE`, `SAVE`/`PRINT CONC`/`BUDGET`, and `SAVE IBOUND`.
+
+Decision: **kept `✅ (intentionally not Full)`** with explicit gaps — `SAVE
+IBOUND` is commented out in USG-T 2.7 (solver rejects; FloPy still preserves the
+keyword); `FASTFORWARD`/`FASTFORWARDC` separate-line placement and
+`BOOTSTRAPPING` execution are not exe-verified; numeric-format OC rewrites as
+words. See `USGT_STAGE4_OC_FULLNESS.md`. (EVT / MDT / LAK untouched.)
+
 ---
 
 ## Priority 5 - Post-Processing And Validation
