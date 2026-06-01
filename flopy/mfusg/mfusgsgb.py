@@ -18,14 +18,18 @@ values, so each record is ``NODE GRADIENT [aux ...]``.
 
 Internal ``node`` values are 0-based; the file is written 1-based.
 
-Named parameters (``NPSGB > 0``, ``UPARLSTAL``/``UPARLSTRP``/``UPARLSTSUB``) are
-**preserved** (load -> write -> reload) as of Stage 4.4C: the leading
-``PARAMETER NPSGB MXS`` record, the per-parameter definitions and their ``NLST``
-rows, and the per-stress-period active-parameter records (``ITMP NP`` + names)
-all round-trip. Non-parametric authoring is unchanged. Parameter ``INSTANCES``
-(``NUMINST>0``) are supported by the Fortran but not yet by FloPy and raise
-``NotImplementedError``; from-scratch parameter authoring also raises
-``NotImplementedError``; inconsistent preserved state raises ``ValueError``.
+Named parameters (``NPSGB > 0``) are **definition-preserving only** as of Stage
+4.4C (review follow-up): the leading ``PARAMETER NPSGB MXS`` record and the
+per-parameter definitions (``UPARLSTRP`` header + ``NLST`` rows) round-trip
+(load -> write -> reload), but **active SGB parameters are unsupported**. USG-T
+2.7 defines SGB parameters as ``PARTYP='SGB'`` (``UPARLSTRP``, glo2sgbu1.f:97)
+but activates them as ``PTYP='G'`` (``UPARLSTSUB``, glo2sgbu1.f:185); since a
+parameter has a single type, any active SGB parameter trips a "Parameter type
+conflict" (parutl7.f:684/800) and aborts the run. Therefore a per-stress-period
+``NP>0`` raises ``NotImplementedError`` on load/write, parameter ``INSTANCES``
+(``NUMINST>0``) raise ``NotImplementedError``, and inconsistent preserved state
+(including ``MXS<=0`` or ``MXS`` below the total definition rows) raises
+``ValueError``. Non-parametric authoring is unchanged.
 """
 
 import numpy as np
@@ -35,14 +39,27 @@ from ..utils import MfList
 from ..utils.recarray_utils import create_empty_recarray
 from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
-    read_active_list_parameters,
     read_list_parameter_count,
     read_list_parameter_header,
-    write_active_list_parameters,
     write_list_parameter_count,
     write_list_parameter_header,
 )
 from .mfusg import MfUsg
+
+# USG-T 2.7 has a parameter-type mismatch for SGB: definitions are read with
+# PARTYP='SGB' (UPARLSTRP, glo2sgbu1.f:97) but activations require PTYP='G'
+# (UPARLSTSUB, glo2sgbu1.f:185). Since a parameter has a single PARTYP, any
+# active SGB parameter trips "Parameter type conflict" (parutl7.f:684/800) and
+# aborts the run. So active SGB parameters are not executable in USG-T 2.7;
+# FloPy preserves SGB parameter *definitions* only.
+_SGB_ACTIVE_PARAM_MSG = (
+    "MfUsgSgb: active SGB parameters (per-stress-period NP>0) are not supported. "
+    "USG-T 2.7 defines SGB parameters as PARTYP='SGB' (UPARLSTRP, "
+    "glo2sgbu1.f:97) but activates them as PTYP='G' (UPARLSTSUB, "
+    "glo2sgbu1.f:185), so any active SGB parameter aborts the Fortran with a "
+    "'Parameter type conflict' (parutl7.f:684/800). Only SGB parameter "
+    "definitions (no activations) are preserved."
+)
 
 
 class MfUsgSgb(Package):
@@ -129,7 +146,9 @@ class MfUsgSgb(Package):
         # Preserved SGB list-parameter state (set by load when NPSGB > 0):
         #   parameters: {name: {"partyp", "parval", "nlst", "data"}} (rows 0-based)
         #   mxs:        MXS from the leading PARAMETER NPSGB MXS record
-        #   active_params: {kper: [name, ...]} active parameters per stress period
+        #   active_params: {kper: [name, ...]} -- always empty from load (active
+        #     SGB parameters are unsupported; see _SGB_ACTIVE_PARAM_MSG). Kept so
+        #     a manually constructed non-empty value is rejected on write.
         self.parameters = parameters
         self.mxs = mxs
         self.active_params = active_params if active_params is not None else {}
@@ -187,18 +206,18 @@ class MfUsgSgb(Package):
     def _validate_parameter_write(self):
         """Validate preserved SGB parameter state before a parameterized write.
 
-        Raises ``NotImplementedError`` for from-scratch authoring (active
-        parameters with no loaded definitions) and ``ValueError`` for
-        inconsistent definitions, so a ``PARAMETER`` header is never written
-        without a complete, consistent body.
+        Active SGB parameters are unsupported (USG-T 2.7 defines them as
+        PARTYP='SGB' but activates them as PTYP='G', so any activation aborts the
+        run) and raise ``NotImplementedError``. Parameter *definitions* (with no
+        activations) are preserved; inconsistent state raises ``ValueError`` so a
+        ``PARAMETER`` header is never written without a complete, consistent body
+        (including ``MXS`` large enough for the definition rows).
         """
+        if any(self.active_params.values()):
+            raise NotImplementedError(_SGB_ACTIVE_PARAM_MSG)
         if not self.parameters:
-            raise NotImplementedError(
-                "MfUsgSgb.write_file cannot author SGB parameter definitions "
-                "from scratch (active parameters without loaded definitions). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgSgb.load; for from-scratch input use no parameters."
-            )
+            return
+        total = 0
         for name, pdef in self.parameters.items():
             missing = [k for k in ("partyp", "parval", "nlst", "data") if k not in pdef]
             if missing:
@@ -212,14 +231,19 @@ class MfUsgSgb(Package):
                     f"MfUsgSgb.write_file: parameter '{name}' declares nlst="
                     f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
                 )
-        defined = {name.lower() for name in self.parameters}
-        for kper, names in self.active_params.items():
-            for nm in names:
-                if nm.lower() not in defined:
-                    raise ValueError(
-                        f"MfUsgSgb.write_file: active parameter '{nm}' (stress "
-                        f"period {kper}) is not defined in parameters."
-                    )
+            total += pdef["nlst"]
+        if self.mxs <= 0:
+            raise ValueError(
+                "MfUsgSgb.write_file: MXS (the PARAMETER NPSGB MXS record) must "
+                f"be > 0 when SGB parameter definitions are present; got "
+                f"mxs={self.mxs}. A from-scratch parameterized SGB without a "
+                "valid MXS does not represent a loadable file."
+            )
+        if self.mxs < total:
+            raise ValueError(
+                f"MfUsgSgb.write_file: MXS ({self.mxs}) must be >= the total "
+                f"number of parameter list entries ({total})."
+            )
 
     def write_file(self):
         """Write the package file in MODFLOW-USG-T SGB format."""
@@ -252,18 +276,17 @@ class MfUsgSgb(Package):
                     )
                     self._write_sgb_rows(f, pdef["data"], n_base)
 
+            # Per stress period: ITMP NP. Active SGB parameters are unsupported
+            # (see _validate_parameter_write), so NP is always 0 and only
+            # non-parametric rows are written; parameter definitions above are
+            # preserved but never activated.
             for kper in range(nper):
-                active = self.active_params.get(kper, []) if preserve else []
                 if kper in self.stress_period_data.data:
                     kdata = self.stress_period_data[kper]
-                    f.write(
-                        f" {len(kdata)} {len(active)}    Stress Period {kper + 1}\n"
-                    )
+                    f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     self._write_sgb_rows(f, kdata, n_base)
                 else:
-                    f.write(f" -1 {len(active)}    Stress Period {kper + 1}\n")
-                # Active-parameter records (UPARLSTSUB) follow the non-param rows.
-                write_active_list_parameters(f, active)
+                    f.write(f" -1 0    Stress Period {kper + 1}\n")
 
     # ------------------------------------------------------------------
     # load
@@ -346,7 +369,9 @@ class MfUsgSgb(Package):
                 if numinst > 0:
                     raise NotImplementedError(
                         "MfUsgSgb.load: SGB parameter INSTANCES (NUMINST>0) are "
-                        "supported by the Fortran but not yet by FloPy."
+                        "not supported. SGB active parameters are unsupported in "
+                        "USG-T 2.7 (PARTYP 'SGB' vs 'G' mismatch), so instanced "
+                        "definitions could never be activated either."
                     )
                 data = cls._read_sgb_rows(f, nlst, dtype, model, ext_unit_dict)
                 parameters[name] = {
@@ -376,14 +401,10 @@ class MfUsgSgb(Package):
                 current = cls._read_sgb_rows(f, itmp, dtype, model, ext_unit_dict)
                 spd[kper] = current
 
-            # Active-parameter records (UPARLSTSUB) for this stress period.
+            # Active SGB parameters (per-SP NP>0) are not executable in USG-T 2.7
+            # (PARTYP='SGB' definition vs PTYP='G' activation -> type conflict).
             if np_sp > 0:
-                if not parameters:
-                    raise NotImplementedError(
-                        "MfUsgSgb.load: active SGB parameters (NP>0) without "
-                        "NPSGB parameter definitions are not supported."
-                    )
-                active_params[kper] = read_active_list_parameters(f, np_sp)
+                raise NotImplementedError(_SGB_ACTIVE_PARAM_MSG)
 
         if openfile:
             f.close()

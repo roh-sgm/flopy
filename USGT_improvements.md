@@ -351,6 +351,24 @@ honest, upstream-ready USG-T 2.7 story.
   inconsistent fail; the old parameters-fail test superseded); `-k "mfusgsgb or
   usgt_list"` **17**; focused **192**, exe **4**, combined **196** (ARM). DRT/QRT
   remain explicit-fail. See `USGT_STAGE4_04_PARAMETERS_SGB.md`.
+- **Stage 4.4C review follow-up — SGB active parameters are unsupported
+  (executed; supersedes the active-parameter claims above):** the review found a
+  real USG-T 2.7 incompatibility. SGB parameter *definitions* are read with
+  `PARTYP='SGB'` (`UPARLSTRP`, glo2sgbu1.f:97; `parutl7.f:684` enforces
+  `PARTYP==PTYPX='SGB'`), but *activations* are read with `PTYP='G'`
+  (`UPARLSTSUB`, glo2sgbu1.f:185; `parutl7.f:800` enforces `PARTYP==PTYP='G'`).
+  A parameter has one `PARTYP`, so any active SGB parameter trips "Parameter type
+  conflict" and aborts the run — i.e. USG-T 2.7 cannot execute an activated SGB
+  parameter (a Fortran bug). So SGB is now **definition-preserving only**:
+  `NPSGB>0` definitions round-trip, but a per-SP `NP>0` (and `INSTANCES`) raises
+  `NotImplementedError` on load/write with a message citing the `SGB`/`G`
+  mismatch. The writer was also hardened — definitions with `MXS<=0`
+  (e.g. a from-scratch `PARAMETER 1 0`) or `MXS <` the total definition rows
+  raise `ValueError`, with no partial file. Tests reworked: `-k mfusgsgb` **15
+  passed** (4 definition-preserving + active-unsupported + INSTANCES + 3
+  MXS/consistency + constructed-active fail); `-k "mfusgsgb or usgt_list"`
+  **18**; focused **193**, exe **4**, combined **197** (ARM). See
+  `USGT_STAGE4_04_PARAMETERS_SGB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

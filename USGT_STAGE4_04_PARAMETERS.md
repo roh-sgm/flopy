@@ -20,13 +20,16 @@ USG-T packages that currently expand parameters or fail explicitly.
   authoring and `TRANSIENT_HFB`+`NPHFB>0` raise `NotImplementedError`;
   `INSTANCES` are unsupported (matches the Fortran). See
   `USGT_STAGE4_04_PARAMETERS_HFB.md`.
-- `SGB`: **parameter-preserving (Stage 4.4C, executed)** — list parameters
-  (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB`) now load → write → reload with their
-  syntax intact (`PARAMETER NPSGB MXS` record, definitions with `NLST`
-  `NODE GRADIENT [aux]` rows, per-SP `ITMP NP` + active names). SFAC is inert on
-  the gradient (Fortran ISCLOC=2), AUX is preserved, `ITMP<0` reuse kept.
-  `INSTANCES` (Fortran-supported) and from-scratch authoring raise
-  `NotImplementedError`; inconsistent state raises `ValueError`. See
+- `SGB`: **parameter-definition-preserving only (Stage 4.4C + review
+  follow-up)** — the `PARAMETER NPSGB MXS` record and the per-parameter
+  definitions (`UPARLSTRP` header + `NLST` `NODE GRADIENT [aux]` rows) load →
+  write → reload with their syntax intact; SFAC inert on the gradient (Fortran
+  ISCLOC=2), AUX preserved, `ITMP<0` reuse kept. **Active SGB parameters are
+  unsupported**: USG-T 2.7 defines them as `PARTYP='SGB'` (`UPARLSTRP`,
+  glo2sgbu1.f:97) but activates them as `PTYP='G'` (`UPARLSTSUB`,
+  glo2sgbu1.f:185), a type conflict (`parutl7.f:684/800`) that aborts the run.
+  So `NP>0` and `INSTANCES` raise `NotImplementedError`; the writer validates
+  `MXS` and inconsistent state raises `ValueError` (no partial file). See
   `USGT_STAGE4_04_PARAMETERS_SGB.md`.
 - `QRT`: `NPQRT>0` fails explicitly.
 - `DRT`: `NPDRT>0` fails explicitly.
@@ -115,11 +118,12 @@ Update:
 
 Promote only the package modes that preserve parameter syntax. ETS now
 **preserves** ETSR array parameters (Stage 4.4A); HFB **preserves** list
-parameters (Stage 4.4B); SGB **preserves** list parameters (Stage 4.4C). All
-three are documented as parameter-preserving for those paths but stay not `Full`
-because from-scratch parameter authoring is unsupported (and, for HFB,
-`TRANSIENT_HFB`+`NPHFB>0`; for SGB, parameter `INSTANCES`). The remaining
-list-parameter packages (DRT/QRT) stay explicit-fail until their write path
+parameters (Stage 4.4B); SGB is **definition-preserving only** (Stage 4.4C +
+review follow-up). All three stay not `Full` because from-scratch parameter
+authoring is unsupported (and, for HFB, `TRANSIENT_HFB`+`NPHFB>0`; for SGB,
+**active parameters and `INSTANCES`** — USG-T 2.7 rejects an SGB activation with
+a `PARTYP='SGB'` vs `'G'` type conflict). The remaining list-parameter packages
+(DRT/QRT) stay explicit-fail until their write path
 lands.
 
 ## Validation

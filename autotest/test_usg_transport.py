@@ -3211,6 +3211,12 @@ def test_mfusgsgb_nam_registry():
 
 
 # --- Stage 4.4C: SGB MODFLOW list-parameter preservation -------------------
+#
+# Review follow-up: USG-T 2.7 defines SGB parameters with PARTYP='SGB'
+# (UPARLSTRP) but activates them with PTYP='G' (UPARLSTSUB), so any active SGB
+# parameter aborts the run with a "Parameter type conflict". SGB is therefore
+# "definition-preserving only": parameter definitions (no activations)
+# round-trip; active parameters (per-SP NP>0) and INSTANCES are unsupported.
 
 
 def _sgb_model(function_tmpdir, name, nper=1):
@@ -3221,20 +3227,19 @@ def _sgb_model(function_tmpdir, name, nper=1):
     return ml
 
 
-def test_mfusgsgb_parameterized_roundtrip(function_tmpdir):
-    """SGB NPSGB>0 preserves the PARAMETER record, definitions, and per-SP
-    active-parameter records on load -> write -> reload (0-based / 1-based)."""
+def test_mfusgsgb_definitions_preserved_roundtrip(function_tmpdir):
+    """SGB NPSGB>0 definitions (no activations) preserve the PARAMETER record and
+    the per-parameter rows on load -> write -> reload (0-based / 1-based)."""
     p = function_tmpdir / "param.sgb"
     p.write_text(
-        "# sgb param\n"
+        "# sgb param defs only\n"
         "PARAMETER 1 5\n"  # NPSGB MXS
         "         2 0\n"  # MXACTS ISGBCB
         "sgbpar SGB 1.0 2\n"  # PARNAM PARTYP PARVAL NLST
         " 101   1.000000e-02\n"
         " 102   2.000000e-02\n"
-        " 1 1    Stress Period 1\n"  # ITMP NP
+        " 1 0    Stress Period 1\n"  # ITMP NP (no active parameters)
         " 201   5.000000e-02\n"  # non-parametric row
-        "sgbpar\n"  # active parameter
     )
     ml = _sgb_model(function_tmpdir, "p1")
     sgb = MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
@@ -3243,7 +3248,7 @@ def test_mfusgsgb_parameterized_roundtrip(function_tmpdir):
     pdef = sgb.parameters["sgbpar"]
     assert pdef["partyp"] == "SGB" and pdef["parval"] == "1.0" and pdef["nlst"] == 2
     assert list(pdef["data"]["node"]) == [100, 101]  # 0-based internal
-    assert sgb.active_params[0] == ["sgbpar"]
+    assert not any(sgb.active_params.values())  # no activations
     assert list(sgb.stress_period_data[0]["node"]) == [200]
 
     out = function_tmpdir / "param_out.sgb"
@@ -3253,92 +3258,25 @@ def test_mfusgsgb_parameterized_roundtrip(function_tmpdir):
     assert "PARAMETER 1 5" in content
     assert "sgbpar SGB 1.0 2" in content
     assert "\n 101  1.000000e-02" in content  # parameter row written 1-based
-    assert "sgbpar" in [ln.strip() for ln in content.splitlines()]  # activation
 
     ml2 = _sgb_model(function_tmpdir, "p2")
     re = MfUsgSgb.load(str(out), ml2, nper=1, ext_unit_dict={})
     assert re.mxs == 5 and list(re.parameters) == ["sgbpar"]
     assert list(re.parameters["sgbpar"]["data"]["node"]) == [100, 101]
-    assert re.active_params[0] == ["sgbpar"]
     assert list(re.stress_period_data[0]["node"]) == [200]
 
 
-def test_mfusgsgb_parameter_mixed_with_nonparam_and_active(function_tmpdir):
-    """A stress period mixes non-parametric rows (ITMP) with active parameters
-    (NP); both round-trip and the per-SP header carries ITMP NP."""
-    p = function_tmpdir / "mix.sgb"
-    p.write_text(
-        "# sgb mixed\n"
-        "PARAMETER 1 5\n"
-        "         2 0\n"
-        "gp SGB 2.0 1\n"
-        " 50   1.000000e-02\n"
-        " 2 1    Stress Period 1\n"
-        " 201   5.000000e-02\n"
-        " 202   6.000000e-02\n"
-        "gp\n"
-    )
-    ml = _sgb_model(function_tmpdir, "mx1")
-    sgb = MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
-    assert list(sgb.stress_period_data[0]["node"]) == [200, 201]
-    assert sgb.active_params[0] == ["gp"]
-
-    out = function_tmpdir / "mix_out.sgb"
-    sgb.fn_path = str(out)
-    sgb.write_file()
-    sp_line = next(
-        ln for ln in out.read_text().splitlines() if "Stress Period 1" in ln
-    )
-    assert sp_line.split()[:2] == ["2", "1"]  # ITMP NP
-
-    ml2 = _sgb_model(function_tmpdir, "mx2")
-    re = MfUsgSgb.load(str(out), ml2, nper=1, ext_unit_dict={})
-    assert list(re.stress_period_data[0]["node"]) == [200, 201]
-    assert re.active_params[0] == ["gp"]
-
-
-def test_mfusgsgb_parameter_reuse_with_active(function_tmpdir):
-    """ITMP<0 reuses the previous period's non-parametric rows while a new active
-    parameter applies (NP>0); data round-trips."""
-    p = function_tmpdir / "reuse.sgb"
-    p.write_text(
-        "# sgb reuse\n"
-        "PARAMETER 1 5\n"
-        "         1 0\n"
-        "gp SGB 1.0 1\n"
-        " 50   1.000000e-02\n"
-        " 1 1    Stress Period 1\n"
-        " 201   5.000000e-02\n"
-        "gp\n"
-        " -1 1    Stress Period 2\n"
-        "gp\n"
-    )
-    ml = _sgb_model(function_tmpdir, "r1", nper=2)
-    sgb = MfUsgSgb.load(str(p), ml, nper=2, ext_unit_dict={})
-    assert list(sgb.stress_period_data[1]["node"]) == [200]  # reused from SP1
-    assert sgb.active_params[1] == ["gp"]
-
-    out = function_tmpdir / "reuse_out.sgb"
-    sgb.fn_path = str(out)
-    sgb.write_file()
-    ml2 = _sgb_model(function_tmpdir, "r2", nper=2)
-    re = MfUsgSgb.load(str(out), ml2, nper=2, ext_unit_dict={})
-    assert list(re.stress_period_data[1]["node"]) == [200]
-    assert re.active_params[1] == ["gp"]
-
-
-def test_mfusgsgb_parameter_aux(function_tmpdir):
-    """AUX values on parameter definition rows are preserved."""
+def test_mfusgsgb_definitions_aux(function_tmpdir):
+    """AUX values on SGB parameter definition rows are preserved (no activations)."""
     p = function_tmpdir / "auxp.sgb"
     p.write_text(
-        "# sgb aux param\n"
+        "# sgb aux param defs\n"
         "PARAMETER 1 5\n"
         " 1 0 AUX C01\n"
         "gp SGB 1.0 1\n"
         " 101   1.000000e-02  5.000000e-01\n"
-        " 1 1    Stress Period 1\n"
+        " 1 0    Stress Period 1\n"
         " 201   2.000000e-02  7.000000e-01\n"
-        "gp\n"
     )
     ml = _sgb_model(function_tmpdir, "ax1")
     sgb = MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
@@ -3352,47 +3290,66 @@ def test_mfusgsgb_parameter_aux(function_tmpdir):
     assert np.isclose(re.parameters["gp"]["data"]["C01"][0], 0.5)
 
 
-def test_mfusgsgb_parameter_sfac_inert_on_gradient(function_tmpdir):
+def test_mfusgsgb_definitions_sfac_inert_on_gradient(function_tmpdir):
     """SFAC inside a parameter's row block is consumed but inert on the gradient
-    (Fortran ISCLOC=2 scales an internal dummy column, not the gradient)."""
+    (Fortran ISCLOC=2 scales an internal dummy column)."""
     p = function_tmpdir / "sfacp.sgb"
     p.write_text(
-        "# sgb sfac param\n"
+        "# sgb sfac param defs\n"
         "PARAMETER 1 5\n"
         "         0 0\n"
         "gp SGB 1.0 1\n"
         " SFAC 3.0\n"
         " 101   1.000000e-02\n"
-        " 0 1    Stress Period 1\n"
-        "gp\n"
+        " 0 0    Stress Period 1\n"
     )
     ml = _sgb_model(function_tmpdir, "sf1")
     sgb = MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
     assert np.isclose(sgb.parameters["gp"]["data"]["gradient"][0], 0.01)  # unscaled
 
 
-def test_mfusgsgb_parameter_open_close(function_tmpdir):
+def test_mfusgsgb_definitions_open_close(function_tmpdir):
     """A parameter's NLST rows can be read via an OPEN/CLOSE list control."""
     (function_tmpdir / "gp_rows.dat").write_text(
         " 101 1.000000e-02\n 102 2.000000e-02\n"
     )
     p = function_tmpdir / "ocp.sgb"
     p.write_text(
-        "# sgb param open/close\n"
+        "# sgb param open/close defs\n"
         "PARAMETER 1 5\n"
         "         0 0\n"
         "gp SGB 1.0 2\n"
         " OPEN/CLOSE gp_rows.dat\n"
-        " 0 1    Stress Period 1\n"
-        "gp\n"
+        " 0 0    Stress Period 1\n"
     )
     ml = _sgb_model(function_tmpdir, "oc1")
     sgb = MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
     assert list(sgb.parameters["gp"]["data"]["node"]) == [100, 101]
 
 
+def test_mfusgsgb_active_parameters_unsupported(function_tmpdir):
+    """Active SGB parameters (per-SP NP>0) are rejected. USG-T 2.7 reads SGB
+    parameters as PARTYP='SGB' (UPARLSTRP) but activates them as PTYP='G'
+    (UPARLSTSUB) -- a type conflict that aborts the Fortran. Any NP>0 on load
+    raises NotImplementedError."""
+    p = function_tmpdir / "active.sgb"
+    p.write_text(
+        "# sgb active param\n"
+        "PARAMETER 1 5\n"
+        "         1 0\n"
+        "gp SGB 1.0 1\n"
+        " 101   1.000000e-02\n"
+        " 1 1    Stress Period 1\n"  # NP=1 active parameter
+        " 201   5.000000e-02\n"
+        "gp\n"
+    )
+    ml = _sgb_model(function_tmpdir, "ac1")
+    with pytest.raises(NotImplementedError, match="not supported"):
+        MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
+
+
 def test_mfusgsgb_parameter_instances_unsupported(function_tmpdir):
-    """SGB parameter INSTANCES are Fortran-supported but not yet by FloPy."""
+    """SGB parameter INSTANCES are unsupported (active params unsupported)."""
     p = function_tmpdir / "inst.sgb"
     p.write_text(
         "# sgb instances\n"
@@ -3401,38 +3358,70 @@ def test_mfusgsgb_parameter_instances_unsupported(function_tmpdir):
         "gp SGB 1.0 2 INSTANCES 2\n"
         "spring\n 101 1.000000e-02\n"
         "fall\n 102 2.000000e-02\n"
-        " 0 1    Stress Period 1\n"
-        "gp spring\n"
+        " 0 0    Stress Period 1\n"
     )
     ml = _sgb_model(function_tmpdir, "in1")
     with pytest.raises(NotImplementedError, match="INSTANCES"):
         MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
 
 
-def test_mfusgsgb_parameter_from_scratch_fails(function_tmpdir):
-    """Active parameters with no loaded definitions (from scratch) fail
-    explicitly and write no partial file."""
-    sgb = MfUsgSgb(_sgb_model(function_tmpdir, "fs"), active_params={0: ["p1"]})
-    out = function_tmpdir / "fs.sgb"
+def test_mfusgsgb_parameter_mxs_zero_fails(function_tmpdir):
+    """Definitions present with MXS<=0 (a from-scratch PARAMETER 1 0) raise
+    ValueError and write no partial file."""
+    dtype = MfUsgSgb.get_default_dtype()
+    rows = np.array([(0, 0.01)], dtype=dtype).view(np.recarray)
+    params = {"p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1, "data": rows}}
+    sgb = MfUsgSgb(_sgb_model(function_tmpdir, "mz"), parameters=params, mxs=0)
+    out = function_tmpdir / "mz.sgb"
     sgb.fn_path = str(out)
-    with pytest.raises(NotImplementedError, match="from scratch"):
+    with pytest.raises(ValueError, match="MXS"):
+        sgb.write_file()
+    assert not out.exists()
+
+
+def test_mfusgsgb_parameter_mxs_too_small_fails(function_tmpdir):
+    """MXS below the total number of parameter list entries raises ValueError."""
+    dtype = MfUsgSgb.get_default_dtype()
+    rows = np.array([(0, 0.01)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1, "data": rows},
+        "p2": {"partyp": "SGB", "parval": "1.0", "nlst": 1, "data": rows},
+    }
+    sgb = MfUsgSgb(_sgb_model(function_tmpdir, "mt"), parameters=params, mxs=1)
+    out = function_tmpdir / "mt.sgb"
+    sgb.fn_path = str(out)
+    with pytest.raises(ValueError, match="MXS"):
         sgb.write_file()
     assert not out.exists()
 
 
 def test_mfusgsgb_parameter_inconsistent_fails(function_tmpdir):
-    """Inconsistent preserved parameter state raises ValueError, no partial file."""
+    """A definition whose nlst != len(data) raises ValueError, no partial file."""
     dtype = MfUsgSgb.get_default_dtype()
     rows = np.array([(0, 0.01)], dtype=dtype).view(np.recarray)
     params = {"p1": {"partyp": "SGB", "parval": "1.0", "nlst": 2, "data": rows}}
-    sgb = MfUsgSgb(
-        _sgb_model(function_tmpdir, "ic"),
-        parameters=params,
-        active_params={0: ["p1"]},
-    )
+    sgb = MfUsgSgb(_sgb_model(function_tmpdir, "ic"), parameters=params, mxs=5)
     out = function_tmpdir / "ic.sgb"
     sgb.fn_path = str(out)
     with pytest.raises(ValueError, match="nlst"):
+        sgb.write_file()
+    assert not out.exists()
+
+
+def test_mfusgsgb_active_params_constructed_fails(function_tmpdir):
+    """Manually constructed active parameters are rejected on write."""
+    dtype = MfUsgSgb.get_default_dtype()
+    rows = np.array([(0, 0.01)], dtype=dtype).view(np.recarray)
+    params = {"p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1, "data": rows}}
+    sgb = MfUsgSgb(
+        _sgb_model(function_tmpdir, "am"),
+        parameters=params,
+        mxs=5,
+        active_params={0: ["p1"]},
+    )
+    out = function_tmpdir / "am.sgb"
+    sgb.fn_path = str(out)
+    with pytest.raises(NotImplementedError, match="not supported"):
         sgb.write_file()
     assert not out.exists()
 
