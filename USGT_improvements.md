@@ -122,6 +122,23 @@ can be built from Python/numpy without first loading an existing model.
     `test_mfusggsf_iz_ic_flags`, `test_mfusggsf_inode_validation`); focused suite
     **123 passed**, exe **3 passed**, combined **126 passed** under the ARM
     binary. GSF stays `Full (authoring)`.
+- **Stage 4.3 — gridgen2gsf utility (2026-05-31):** added a clean,
+  non-interactive `gridgen_to_gsf(model, source, top=, botm=, vertex_mode=, ...)`
+  in a **separate** module `flopy/mfusg/gridgen2gsf.py` (exported from
+  `flopy.mfusg`) — the Python equivalent of the `GRIDGEN2GSF` program without its
+  interactive flow. It builds a `MfUsgGsf` from a MODFLOW 6 `disv_gridprops`
+  dict, a flopy `Gridgen` object (`get_gridprops_disv()`), or an
+  `UnstructuredGrid`, delegating all GSF authoring (vertex layout, validation,
+  0-based/1-based ids, `to_grid`) to `MfUsgGsf`'s public API — so `MfUsgGsf` is
+  **unchanged** (Stage 4.2 stays closed) and there is no duplicated geometry
+  logic. Supports `vertex_mode="shared"`/`"parsimonious"` and
+  `"cell"`/`"nonparsimonious"`; `top`/`botm` are the GSF top/bottom surfaces
+  (default unit slab `1`/`0`, broadcast per-vertex for grid sources). Three tests
+  added (DISV shared-vs-cell + `to_grid` top/botm; Gridgen-like + UnstructuredGrid
+  sources; invalid mode/source/geometry + degenerate handling). Primary spec
+  gwutil_a 2.17; `gridgen2gsf.f90` used only as a geometry reference. Focused
+  suite **126 passed**, exe **3 passed**, combined **129 passed** under the
+  USG-T 2.7 ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

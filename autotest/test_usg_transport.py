@@ -2896,6 +2896,125 @@ def test_mfusggsf_inode_validation(function_tmpdir):
 
 
 # ---------------------------------------------------------------------------
+# gridgen_to_gsf utility tests (flopy/mfusg/gridgen2gsf.py)
+# ---------------------------------------------------------------------------
+
+# Two adjacent quad cells sharing the edge vertices 1 and 2.
+_GG_DISV = {
+    "vertices": [
+        (0, 0.0, 0.0),
+        (1, 1.0, 0.0),
+        (2, 1.0, 1.0),
+        (3, 0.0, 1.0),
+        (4, 2.0, 0.0),
+        (5, 2.0, 1.0),
+    ],
+    "cell2d": [
+        [0, 0.5, 0.5, 4, 0, 1, 2, 3],
+        [1, 1.5, 0.5, 4, 1, 4, 5, 2],
+    ],
+}
+
+
+def _gg_model(function_tmpdir, name="gg"):
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+    return m
+
+
+def test_gridgen_to_gsf_disv_modes(function_tmpdir):
+    """gridgen_to_gsf from disv_gridprops: shared shares ids, cell does not."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.mfusg import MfUsgGsf, gridgen_to_gsf
+
+    shared = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "s"),
+        _GG_DISV,
+        top=10.0,
+        botm=0.0,
+        vertex_mode="parsimonious",
+    )
+    assert isinstance(shared, MfUsgGsf)
+    assert len(shared.vertices) == 12  # 2 * 6 shared
+    assert set(shared.node_data[0]["vertices"]) & set(
+        shared.node_data[1]["vertices"]
+    )  # neighbours reuse ids
+
+    cell = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "c"),
+        _GG_DISV,
+        top=10.0,
+        botm=0.0,
+        vertex_mode="nonparsimonious",
+    )
+    assert len(cell.vertices) == 2 * 8  # unique per quad
+    assert not (
+        set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"])
+    )
+    assert len(cell.node_data[0]["vertices"]) == 8  # quad -> 8 vertices
+
+    # both reconstruct top/botm through to_grid (split_vertices)
+    for gsf, name in ((shared, "s"), (cell, "c")):
+        gsf.fn_path = str(function_tmpdir / f"gg_{name}.gsf")
+        gsf.write_file()
+        grid = gsf.to_grid()
+        assert isinstance(grid, UnstructuredGrid)
+        assert np.allclose(grid.top, 10.0) and np.allclose(grid.botm, 0.0)
+
+
+def test_gridgen_to_gsf_source_types(function_tmpdir):
+    """gridgen_to_gsf accepts a Gridgen-like object and an UnstructuredGrid."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.mfusg import gridgen_to_gsf
+
+    # flopy Gridgen-like object: only get_gridprops_disv() is required
+    class _FakeGridgen:
+        def get_gridprops_disv(self):
+            return _GG_DISV
+
+    g = gridgen_to_gsf(_gg_model(function_tmpdir, "fg"), _FakeGridgen(), top=5.0)
+    assert g.nnodes == 2
+
+    # UnstructuredGrid source (top/botm broadcast to per-vertex surfaces)
+    src = function_tmpdir / "tri.gsf"
+    src.write_text("".join(_MINIMAL_GSF_LINES))
+    ug = UnstructuredGrid.from_gridspec(str(src))
+    gu = gridgen_to_gsf(_gg_model(function_tmpdir, "ug"), ug, top=20.0, botm=2.0)
+    gu.fn_path = str(function_tmpdir / "gg_ug.gsf")
+    gu.write_file()
+    grid = gu.to_grid()
+    assert np.allclose(grid.top, 20.0) and np.allclose(grid.botm, 2.0)
+
+
+def test_gridgen_to_gsf_validation(function_tmpdir):
+    """gridgen_to_gsf fails explicitly on bad mode/source/geometry."""
+    from flopy.mfusg import gridgen_to_gsf
+
+    with pytest.raises(ValueError, match="vertex_mode"):
+        gridgen_to_gsf(_gg_model(function_tmpdir), _GG_DISV, vertex_mode="bogus")
+
+    with pytest.raises(TypeError, match="source"):
+        gridgen_to_gsf(_gg_model(function_tmpdir), 12345)
+
+    with pytest.raises(ValueError, match="vertices.*cell2d|cell2d"):
+        gridgen_to_gsf(_gg_model(function_tmpdir), {"vertices": []})
+
+    # degenerate cell: raises by default, dropped + renumbered with the flag
+    disv_deg = {
+        "vertices": _GG_DISV["vertices"],
+        "cell2d": [[0, 0.5, 0.5, 4, 0, 1, 2, 3], [1, 1.5, 0.5, 2, 4, 5]],
+    }
+    with pytest.raises(ValueError, match="unique vertices"):
+        gridgen_to_gsf(_gg_model(function_tmpdir), disv_deg, top=10.0, botm=0.0)
+    g = gridgen_to_gsf(
+        _gg_model(function_tmpdir), disv_deg, top=10.0, botm=0.0, skip_degenerate=True
+    )
+    assert g.nnodes == 1
+
+
+# ---------------------------------------------------------------------------
 # MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
 # ---------------------------------------------------------------------------
 

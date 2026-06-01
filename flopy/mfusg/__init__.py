@@ -18,6 +18,7 @@ from .mfusgets import MfUsgEts
 from .mfusgghb import MfUsgGhb
 from .mfusghfb import MfUsgHfb
 from .mfusgsf import MfUsgGsf
+from .gridgen2gsf import gridgen_to_gsf
 from .mfusgevt import MfUsgEvt
 from .mfusggnc import MfUsgGnc
 from .mfusglak import MfUsgLak
@@ -55,6 +56,7 @@ __all__ = [
     "MfUsgHfb",
     "MfUsgGnc",
     "MfUsgGsf",
+    "gridgen_to_gsf",
     "MfUsgLak",
     "MfUsgLpf",
     "MfUsgMdt",

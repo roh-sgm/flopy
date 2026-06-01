@@ -907,6 +907,17 @@ winding (only the top/bottom-half split is guaranteed). Three tests added
 (`test_mfusggsf_parse_header_strict`, `test_mfusggsf_iz_ic_flags`,
 `test_mfusggsf_inode_validation`). Status unchanged: Full (authoring).
 
+Stage 4.3 — `gridgen2gsf` utility (separate, does not modify `MfUsgGsf`): a
+non-interactive `gridgen_to_gsf(model, source, top, botm, vertex_mode, ...)` in
+`flopy/mfusg/gridgen2gsf.py` (exported from `flopy.mfusg`) — the Python
+equivalent of the `GRIDGEN2GSF` program. It builds an `MfUsgGsf` from a
+`disv_gridprops` dict, a flopy `Gridgen` object (`get_gridprops_disv()`), or an
+`UnstructuredGrid`, delegating all authoring to `MfUsgGsf` (no duplicated
+geometry logic). Modes `shared`/`parsimonious` and `cell`/`nonparsimonious`;
+`top`/`botm` are the GSF surfaces (default unit slab). Tests:
+`test_gridgen_to_gsf_disv_modes`, `test_gridgen_to_gsf_source_types`,
+`test_gridgen_to_gsf_validation`. See `USGT_STAGE4_03_GRIDGEN2GSF.md`.
+
 ---
 
 ## Priority 5 - Post-Processing And Validation
