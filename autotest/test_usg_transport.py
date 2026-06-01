@@ -3014,6 +3014,97 @@ def test_gridgen_to_gsf_validation(function_tmpdir):
     assert g.nnodes == 1
 
 
+def test_gridgen_to_gsf_parsimonious_compacts(function_tmpdir):
+    """Shared/parsimonious drops unused vertices and remaps per-vertex top/botm."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.mfusg import gridgen_to_gsf
+
+    # one quad cell using vertices 0..3; vertex 4 is unused
+    disv = {
+        "vertices": [
+            (0, 0.0, 0.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 1.0),
+            (3, 0.0, 1.0),
+            (4, 9.0, 9.0),  # not referenced by any cell
+        ],
+        "cell2d": [[0, 0.5, 0.5, 4, 0, 1, 2, 3]],
+    }
+
+    # parsimonious: only the 4 used vertices are written (doubled -> 8), and the
+    # unused (9, 9) vertex never appears.
+    shared = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "p"), disv, top=10.0, botm=0.0, vertex_mode="shared"
+    )
+    assert len(shared.vertices) == 8  # 2 * 4 used (not 2 * 5)
+    xy = {(round(float(x), 3), round(float(y), 3)) for x, y, _ in shared.vertices}
+    assert (9.0, 9.0) not in xy
+
+    # per-vertex top/botm arrays are remapped to the kept subset
+    topv = [10.0, 11.0, 12.0, 13.0, 99.0]  # 99 belongs to the unused vertex
+    botv = [0.0, 1.0, 2.0, 3.0, -99.0]
+    g2 = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "p2"),
+        disv,
+        top=topv,
+        botm=botv,
+        vertex_mode="parsimonious",
+    )
+    zvals = {round(float(z), 3) for _, _, z in g2.vertices}
+    assert 99.0 not in zvals and -99.0 not in zvals
+    assert {10.0, 11.0, 12.0, 13.0}.issubset(zvals)
+
+    # still reconstructs top/botm through to_grid
+    shared.fn_path = str(function_tmpdir / "p.gsf")
+    shared.write_file()
+    grid = shared.to_grid()
+    assert isinstance(grid, UnstructuredGrid)
+    assert np.allclose(grid.top, 10.0) and np.allclose(grid.botm, 0.0)
+
+    # cell/nonparsimonious also ignores the unused vertex and gives 8 per quad
+    cell = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "pc"),
+        disv,
+        top=10.0,
+        botm=0.0,
+        vertex_mode="nonparsimonious",
+    )
+    assert len(cell.vertices) == 8
+    assert len(cell.node_data[0]["vertices"]) == 8
+
+
+def test_gridgen_to_gsf_skip_degenerate_compacts(function_tmpdir):
+    """Vertices used only by a skipped degenerate cell are not retained."""
+    from flopy.mfusg import gridgen_to_gsf
+
+    disv = {
+        "vertices": [
+            (0, 0.0, 0.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 1.0),
+            (3, 0.0, 1.0),
+            (4, 5.0, 5.0),  # exclusive to the degenerate cell below
+            (5, 6.0, 6.0),
+        ],
+        "cell2d": [
+            [0, 0.5, 0.5, 4, 0, 1, 2, 3],
+            [1, 5.5, 5.5, 2, 4, 5],  # degenerate (< 3 unique verts)
+        ],
+    }
+    g = gridgen_to_gsf(
+        _gg_model(function_tmpdir, "sd"),
+        disv,
+        top=10.0,
+        botm=0.0,
+        vertex_mode="parsimonious",
+        skip_degenerate=True,
+    )
+    assert g.nnodes == 1
+    assert len(g.vertices) == 8  # only the surviving quad's 4 verts, doubled
+    xy = {(round(float(x), 3), round(float(y), 3)) for x, y, _ in g.vertices}
+    assert (5.0, 5.0) not in xy and (6.0, 6.0) not in xy
+
+
 # ---------------------------------------------------------------------------
 # MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
 # ---------------------------------------------------------------------------

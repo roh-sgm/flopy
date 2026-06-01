@@ -1,15 +1,27 @@
 """gridgen2gsf module — build a GSF from Gridgen / DISV geometry.
 
-Non-interactive Python equivalent of the ``GRIDGEN2GSF`` utility
-(``gridgen2gsf.f90``): convert a quadtree / DISV-style geometry into a
-MODFLOW-USG Grid Specification File. The GSF format spec is gwutil_a section
-2.17; the Fortran is used only as a reference for the two geometry layouts it
-writes (vertex-parsimonious and non-parsimonious), not for its interactive flow.
+Non-interactive helper **inspired by** the ``GRIDGEN2GSF`` utility
+(``gridgen2gsf.f90``) for turning an already-built DISV-style / Gridgen geometry
+into a MODFLOW-USG Grid Specification File.
 
-This is a thin, **separate** front-end: it accepts several geometry sources and
-delegates the GSF authoring (vertex layout, validation, 0-based/1-based id
-handling, ``to_grid``) to the :class:`flopy.mfusg.MfUsgGsf` package. It does not
-modify ``MfUsgGsf``.
+Scope and references:
+
+* Primary format spec: gwutil_a section 2.17 (``MODFLOW-USG Grid Specification
+  File``).
+* ``gridgen2gsf.f90`` is consulted only as a reference for the two GSF vertex
+  layouts it emits (vertex-parsimonious and non-parsimonious).
+* This helper does **not** parse GRIDGEN2GSF interactive prompts or its
+  definition / quadtree input files, and does **not** reproduce the Fortran's
+  grid construction (refinement, thresholds, rotation, offsets, quadtree
+  structure). It starts from a geometry the caller already has: a
+  ``disv_gridprops`` dict, a flopy ``Gridgen`` object, or an ``UnstructuredGrid``.
+
+It is a thin, **separate** front-end: it accepts those geometry sources and
+delegates GSF authoring (vertex layout, validation, 0-based/1-based ids,
+``to_grid``) to the :class:`flopy.mfusg.MfUsgGsf` package, which it does not
+modify. For the parsimonious/shared mode it first drops vertices not used by any
+(surviving) cell and compacts the ids — the GRIDGEN2GSF vertex-parsimonious
+behaviour.
 """
 
 from __future__ import annotations
@@ -73,7 +85,12 @@ def gridgen_to_gsf(
     -----
     Node ids are contiguous and 0-based internally / 1-based in the file; cells
     with a duplicated closing vertex are handled automatically. All validation
-    is performed by ``MfUsgGsf``.
+    is performed by ``MfUsgGsf``. In the shared/parsimonious mode, vertices not
+    used by any surviving cell are dropped and the ids compacted before
+    authoring (per-vertex ``top``/``botm`` arrays are remapped alongside);
+    scalar ``top``/``botm`` pass through unchanged. The cell mode emits unique
+    per-cell vertices, so unused source vertices never appear and no compaction
+    is needed.
     """
     from ..discretization.unstructuredgrid import UnstructuredGrid
 
@@ -86,6 +103,8 @@ def gridgen_to_gsf(
             raise ValueError(
                 "disv_gridprops must contain 'vertices' and 'cell2d' keys."
             )
+        if MfUsgGsf._canon_vertex_mode(vertex_mode) == "shared":
+            source, top, botm = _compact_shared_disv(source, top, botm, skip_degenerate)
         return MfUsgGsf.from_disv_gridprops(
             model,
             source,
@@ -115,3 +134,54 @@ def gridgen_to_gsf(
         "gridgen_to_gsf 'source' must be a disv_gridprops dict, a flopy Gridgen "
         f"object, or an UnstructuredGrid; got {type(source).__name__}."
     )
+
+
+def _compact_shared_disv(disv_gridprops, top, botm, skip_degenerate):
+    """Drop unused vertices and compact ids for the shared/parsimonious mode.
+
+    Mirrors the GRIDGEN2GSF vertex-parsimonious pass: only vertices referenced by
+    a surviving cell are kept, and their ids are remapped to ``0..n_used-1``. A
+    cell dropped by ``skip_degenerate`` does not retain its exclusive vertices.
+    Per-vertex ``top``/``botm`` arrays are remapped to the kept subset; scalars
+    are returned unchanged. Returns ``(disv_gridprops, top, botm)`` — the inputs
+    unchanged when every vertex is already used.
+    """
+    verts = disv_gridprops["vertices"]
+    cell2d = disv_gridprops["cell2d"]
+    nvert = len(verts)
+
+    used = set()
+    surviving = []  # (record, stripped 0-based vertex ids) in original order
+    for rec in cell2d:
+        ncvert = int(rec[3])
+        ids = MfUsgGsf._strip_closing([int(v) for v in rec[4 : 4 + ncvert]])
+        if skip_degenerate and len(set(ids)) < 3:
+            # This cell will be dropped by from_disv_gridprops; its exclusive
+            # vertices must not be retained.
+            continue
+        used.update(ids)
+        surviving.append((rec, ids))
+
+    if len(used) == nvert:
+        return disv_gridprops, top, botm  # nothing unused; no remap needed
+
+    used_sorted = sorted(used)
+    remap = {old: new for new, old in enumerate(used_sorted)}
+
+    new_vertices = [
+        (new, verts[old][1], verts[old][2]) for new, old in enumerate(used_sorted)
+    ]
+    new_cell2d = [
+        [rec[0], rec[1], rec[2], len(ids), *[remap[v] for v in ids]]
+        for rec, ids in surviving
+    ]
+
+    new_disv = dict(disv_gridprops)
+    new_disv["vertices"] = new_vertices
+    new_disv["cell2d"] = new_cell2d
+    if "nvert" in new_disv:
+        new_disv["nvert"] = len(new_vertices)
+
+    new_top = top if np.ndim(top) == 0 else np.asarray(top)[used_sorted]
+    new_botm = botm if np.ndim(botm) == 0 else np.asarray(botm)[used_sorted]
+    return new_disv, new_top, new_botm

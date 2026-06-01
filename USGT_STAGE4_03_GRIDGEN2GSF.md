@@ -1,18 +1,23 @@
 # Stage 4.3 - gridgen2gsf utility
 
-Goal: a clean, non-interactive Python utility that builds a GSF file from
-Gridgen / DISV-style geometry — the equivalent of the `GRIDGEN2GSF` program,
-without its interactive prompts. This follows Stage 4.2 (GSF semantic support)
-and is GSF-adjacent; it is numbered 03 as requested and is independent of the
-master-plan's other Stage 4.3 package work.
+Goal: a clean, non-interactive Python helper **inspired by** the `GRIDGEN2GSF`
+program for building a GSF file from an already-built Gridgen / DISV-style
+geometry. This follows Stage 4.2 (GSF semantic support) and is GSF-adjacent; it
+is numbered 03 as requested and is independent of the master-plan's other Stage
+4.3 package work.
 
 ## References
 
 - Primary GSF spec: gwutil_a section 2.17 (`MODFLOW-USG Grid Specification
   File`).
 - Secondary (geometry patterns only): `gridgen2gsf.f90` (`GRIDGEN2GSF`) — its
-  two output layouts (vertex-parsimonious and non-parsimonious). The interactive
-  flow and quadtree-file reading are intentionally **not** reproduced.
+  two output layouts (vertex-parsimonious and non-parsimonious).
+
+Scope: this helper is **not** a full port of `GRIDGEN2GSF`. It does not parse
+the Fortran's interactive prompts or its definition / quadtree input files, and
+it does not reproduce the Fortran's grid construction (refinement, thresholds,
+rotation, offsets, quadtree structure). It starts from a geometry the caller
+already has.
 
 ## Design (chosen)
 
@@ -45,7 +50,9 @@ scalars are broadcast to per-vertex `top_zverts` / `bot_zverts`.
 ### Modes
 
 - `vertex_mode="shared"` / `"parsimonious"` (default): neighbouring cells reuse
-  vertex ids (one shared `2*nverts` vertex set).
+  vertex ids. Vertices not used by any surviving cell are dropped and the ids
+  compacted before authoring (the GRIDGEN2GSF vertex-parsimonious pass);
+  per-vertex `top`/`botm` arrays are remapped alongside, scalars pass through.
 - `vertex_mode="cell"` / `"nonparsimonious"`: every cell owns unique top/bottom
   vertices (8 per quad), never shared. Caller polygon order is kept within each
   half; this is a non-shared generalization and is **not** byte-equivalent to
@@ -70,11 +77,17 @@ scalars are broadcast to per-vertex `top_zverts` / `bot_zverts`.
   (`get_gridprops_disv`) and an `UnstructuredGrid` source.
 - `test_gridgen_to_gsf_validation` — invalid `vertex_mode`, invalid source type,
   malformed `disv_gridprops`, and degenerate-cell raise / `skip_degenerate`.
+- `test_gridgen_to_gsf_parsimonious_compacts` — an unused source vertex is
+  dropped and ids compacted; per-vertex `top`/`botm` arrays are remapped; cell
+  mode also ignores the unused vertex (8 per quad).
+- `test_gridgen_to_gsf_skip_degenerate_compacts` — vertices used only by a
+  skipped degenerate cell are not retained.
 
 ## Validation
 
 ```bash
-python -m pytest autotest/test_usg_transport.py -k mfusggsf -q
+python -m pytest autotest/test_usg_transport.py -k gridgen_to_gsf -q   # focal
+python -m pytest autotest/test_usg_transport.py -k mfusggsf -q          # GSF package
 python -m pytest autotest/test_usg_transport.py -q
 python -m pytest autotest/test_usg_transport_exe.py -q
 USGT_EXE=/Users/roh.sgm/Documents/GitHub_Projects/GW-Software-Compiled-via-Claude/gfortran/usgt_2.7/usgt_270_arm python -m pytest autotest/test_usg_transport.py autotest/test_usg_transport_exe.py -q
@@ -82,11 +95,30 @@ git diff --check
 git status --short
 ```
 
-Result: `-k mfusggsf` 17 passed; focused **126 passed**; exe **3 passed**;
-combined **129 passed** under the USG-T 2.7 ARM binary; `git diff --check` clean.
+`-k mfusggsf` covers the GSF package; the utility's own tests are under
+`-k gridgen_to_gsf` (the focal filter).
 
 ## Status
 
-Done. New module + 3 tests; `MfUsgGsf` unchanged. GSF is not solver input, so
-there is no executable smoke test (validated through `to_grid` / `from_gridspec`
-and the GSF write path).
+Done.
+
+Follow-up (resolved):
+
+1. **Parsimonious now compacts** unused vertices for DISV / Gridgen sources:
+   before delegating, `gridgen_to_gsf` drops vertices not referenced by any
+   surviving cell and remaps the `cell2d` ids (helper `_compact_shared_disv`).
+   `skip_degenerate=True` drops a degenerate cell's exclusive vertices too;
+   per-vertex `top`/`botm` arrays are remapped, scalars unchanged. The cell mode
+   needs no compaction (it emits unique per-cell vertices).
+2. **Docstring no longer overpromises**: "inspired by GRIDGEN2GSF", with the
+   non-reproduction scope (interactive/definition files, refinement, thresholds,
+   rotation, offsets, quadtree) stated explicitly.
+3. Focal validation filter documented as `-k gridgen_to_gsf`.
+
+Five tests (`..._disv_modes`, `..._source_types`, `..._validation`,
+`..._parsimonious_compacts`, `..._skip_degenerate_compacts`); `MfUsgGsf`
+unchanged. GSF is not solver input, so there is no executable smoke test
+(validated through `to_grid` / `from_gridspec` and the GSF write path).
+`-k gridgen_to_gsf` **5 passed**; `-k mfusggsf` **17 passed**; focused
+**128 passed**; exe **3 passed**; combined **131 passed** under the USG-T 2.7
+ARM binary; `git diff --check` clean.

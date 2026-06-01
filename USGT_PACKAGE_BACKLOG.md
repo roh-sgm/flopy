@@ -918,6 +918,16 @@ geometry logic). Modes `shared`/`parsimonious` and `cell`/`nonparsimonious`;
 `test_gridgen_to_gsf_disv_modes`, `test_gridgen_to_gsf_source_types`,
 `test_gridgen_to_gsf_validation`. See `USGT_STAGE4_03_GRIDGEN2GSF.md`.
 
+Follow-up (resolved): shared/parsimonious now compacts unused vertices for
+DISV/Gridgen sources (drops vertices not used by any surviving cell, remaps
+`cell2d` ids and per-vertex `top`/`botm`; `skip_degenerate` drops exclusive
+vertices too) — the GRIDGEN2GSF vertex-parsimonious behaviour; cell mode needs
+no compaction. Docstring reworded to "inspired by" (not a full GRIDGEN2GSF port:
+no interactive/definition/quadtree parsing, no refinement/threshold/rotation/
+offset/quadtree logic). Focal test filter `-k gridgen_to_gsf`. Two tests added
+(`test_gridgen_to_gsf_parsimonious_compacts`,
+`test_gridgen_to_gsf_skip_degenerate_compacts`); `MfUsgGsf` unchanged.
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

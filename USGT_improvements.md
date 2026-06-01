@@ -139,6 +139,22 @@ can be built from Python/numpy without first loading an existing model.
   gwutil_a 2.17; `gridgen2gsf.f90` used only as a geometry reference. Focused
   suite **126 passed**, exe **3 passed**, combined **129 passed** under the
   USG-T 2.7 ARM binary.
+  - **Review follow-up (resolved):** (1) the shared/parsimonious mode now
+    **compacts** vertices for DISV/Gridgen sources — `gridgen_to_gsf` drops
+    vertices not used by any surviving cell and remaps the `cell2d` ids before
+    delegating (helper `_compact_shared_disv`), mirroring the GRIDGEN2GSF
+    vertex-parsimonious pass; `skip_degenerate=True` also drops a degenerate
+    cell's exclusive vertices, and per-vertex `top`/`botm` arrays are remapped
+    (scalars unchanged); the cell mode needs no compaction. (2) the docstring no
+    longer claims to be a "Python equivalent" — it is a helper *inspired by*
+    GRIDGEN2GSF, and explicitly does not parse the Fortran's interactive /
+    definition / quadtree files or reproduce its grid construction (refinement,
+    thresholds, rotation, offsets, quadtree). (3) the utility's focal test filter
+    is `-k gridgen_to_gsf`. Two tests added
+    (`test_gridgen_to_gsf_parsimonious_compacts`,
+    `test_gridgen_to_gsf_skip_degenerate_compacts`); `MfUsgGsf` unchanged.
+    `-k gridgen_to_gsf` **5 passed**, focused suite **128 passed**, exe
+    **3 passed**, combined **131 passed** under the ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 
