@@ -317,6 +317,19 @@ honest, upstream-ready USG-T 2.7 story.
   EXTERNAL-without-dict fail, nacthfb-mismatch fail); SGB/QRT/DRT `_usgt_list`
   regressions green; focused **180**, exe **4**, combined **184** (ARM). See
   `USGT_STAGE4_04_PARAMETERS_HFB.md`.
+- **Stage 4.4B polish — HFB parameter writer validation (executed):** the writer
+  only guarded `parameters is None`, so a `NPHFB>0` header could still be written
+  with no body from `parameters={}` or an inconsistent dict (a partial, invalid
+  file). `write_file` now validates the preserved parameter state up front (new
+  `_validate_parameter_write`, before the file is opened): from-scratch authoring
+  (`parameters` `None`/empty) raises `NotImplementedError`; inconsistent
+  definitions raise `ValueError` — `len(parameters) != NPHFB`, a def missing
+  `partyp`/`parval`/`nlst`/`data`, `len(data) != nlst`, `nacthfb !=
+  len(acthfb_names)`, or an active name not defined (case-insensitive). Files
+  read by `load` satisfy these invariants, so valid round-trips are unaffected.
+  Tests: `-k mfusghfb` **19 passed** (4 new negative tests, incl. an assertion
+  that no partial file is written); focused **184**, exe **4**, combined **188**
+  (ARM). See `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

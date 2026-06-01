@@ -155,6 +155,29 @@ New tests (Stage 4.4B follow-up): `test_mfusghfb_sfac_scales_nonparam`,
 `test_mfusghfb_nacthfb_mismatch_fails`. The SGB/QRT/DRT `_usgt_list` regressions
 stay green (the helper was reused, not modified).
 
+## Writer validation (polish)
+
+The earlier writer only guarded `parameters is None`, so a parameterized header
+(`NPHFB>0`) could still be written with no body from `parameters={}` or an
+inconsistent dict. `write_file` now validates the preserved parameter state up
+front (in `_validate_parameter_write`, before the file is opened, so no partial
+file is produced):
+
+- **`NotImplementedError`** when there are no loaded definitions — `parameters`
+  is `None` **or** empty `{}` (from-scratch parameter authoring).
+- **`ValueError`** when definitions are present but inconsistent:
+  `len(parameters) != NPHFB`; a definition missing any of
+  `partyp`/`parval`/`nlst`/`data`; `len(pdef["data"]) != pdef["nlst"]`;
+  `nacthfb != len(acthfb_names)`; or an active name not defined in `parameters`
+  (matched case-insensitively, as the Fortran upper-cases parameter names).
+
+Files read by `MfUsgHfb.load` always satisfy these invariants, so valid
+round-trips are unaffected. Negative tests:
+`test_mfusghfb_param_write_empty_dict_fails` (asserts no partial file),
+`test_mfusghfb_param_write_count_mismatch_fails`,
+`test_mfusghfb_param_write_nlst_mismatch_fails`,
+`test_mfusghfb_param_write_undefined_active_name_fails`.
+
 ## Validation
 
 ```bash
@@ -166,6 +189,6 @@ git diff --check
 git status --short
 ```
 
-Results (after the list-control follow-up): `-k "mfusghfb or usgt_list"`
-**18 passed**; `-k mfusghfb` **15 passed**; focused **180 passed**; exe
-**4 passed**; combined **184 passed** under the USG-T 2.7 ARM binary.
+Results (after the writer-validation polish): `-k "mfusghfb or usgt_list"`
+**22 passed**; `-k mfusghfb` **19 passed**; focused **184 passed**; exe
+**4 passed**; combined **188 passed** under the USG-T 2.7 ARM binary.

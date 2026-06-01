@@ -464,10 +464,18 @@ per-parameter `NLST` rows and the non-parametric `NHFBNP` rows). `MfUsgHfb` now
 consumes these via the shared `_usgt_list.begin_list_block` (reused unchanged):
 `SFAC` scales `HYDCHR` per block, `OPEN/CLOSE` resolves against `model_ws` (quoted
 names supported), `EXTERNAL` resolves via `ext_unit_dict` (unresolvable →
-`NotImplementedError`). The writer still emits expanded inline rows. `write_file`
-now also requires `nacthfb == len(acthfb_names)` (else `ValueError`).
+`NotImplementedError`). The writer still emits expanded inline rows.
 
-Required tests (all green, `-k mfusghfb` 8 passed):
+Writer-validation polish (executed): `write_file` validates the preserved
+parameter state before opening the file, so a `NPHFB>0` header is never written
+without a complete, consistent body. From-scratch authoring (`parameters` `None`
+or empty `{}`) raises `NotImplementedError`; inconsistent definitions raise
+`ValueError` — `len(parameters) != NPHFB`, a def missing
+`partyp`/`parval`/`nlst`/`data`, `len(data) != nlst`, `nacthfb !=
+len(acthfb_names)`, or an active name not defined (case-insensitive). Files read
+by `load` satisfy these invariants, so valid round-trips are unaffected.
+
+Required tests (all green, `-k mfusghfb` 19 passed):
 
 - Static non-parametric authoring. (Done.)
 - Transient non-parametric authoring; `IHFBRD=-1`, `0`, `>0`. (Done.)

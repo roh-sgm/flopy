@@ -4015,6 +4015,98 @@ def test_mfusghfb_nacthfb_mismatch_fails(function_tmpdir):
         hfb.write_file()
 
 
+# --- Stage 4.4B polish: HFB parameter writer validation --------------------
+
+
+def _hfb_param_def(nlst, hydchr=0.5):
+    """Build an unstructured HFB list-parameter `data` recarray with nlst rows."""
+    from flopy.mfusg import MfUsgHfb
+
+    dt = MfUsgHfb.get_default_dtype(structured=False)
+    return np.array(
+        [(i, i + 1, hydchr) for i in range(nlst)], dtype=dt
+    ).view(np.recarray)
+
+
+def test_mfusghfb_param_write_empty_dict_fails(function_tmpdir):
+    """NPHFB>0 with an empty parameters dict is from-scratch authoring: it fails
+    with NotImplementedError and writes no partial file."""
+    from flopy.mfusg import MfUsgHfb
+
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "e1"),
+        nphfb=1,
+        mxfb=1,
+        parameters={},
+        acthfb_names=[],
+    )
+    out = function_tmpdir / "empty.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(NotImplementedError, match="from scratch"):
+        hfb.write_file()
+    assert not out.exists()  # no partial file written
+
+
+def test_mfusghfb_param_write_count_mismatch_fails(function_tmpdir):
+    """len(parameters) must equal NPHFB."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "p1": {"partyp": "hfb", "parval": "1.0", "nlst": 1, "data": _hfb_param_def(1)}
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "c1"),
+        nphfb=2,  # claims 2 parameters but only one is defined
+        mxfb=1,
+        parameters=params,
+        acthfb_names=["p1"],
+        nacthfb=1,
+    )
+    hfb.fn_path = str(function_tmpdir / "count.hfb")
+    with pytest.raises(ValueError, match="NPHFB"):
+        hfb.write_file()
+
+
+def test_mfusghfb_param_write_nlst_mismatch_fails(function_tmpdir):
+    """A parameter's nlst must equal len(data)."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "p1": {"partyp": "hfb", "parval": "1.0", "nlst": 2, "data": _hfb_param_def(1)}
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "n1"),
+        nphfb=1,
+        mxfb=2,
+        parameters=params,
+        acthfb_names=["p1"],
+        nacthfb=1,
+    )
+    hfb.fn_path = str(function_tmpdir / "nlst.hfb")
+    with pytest.raises(ValueError, match="nlst"):
+        hfb.write_file()
+
+
+def test_mfusghfb_param_write_undefined_active_name_fails(function_tmpdir):
+    """Every active parameter name must be defined in parameters."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "p1": {"partyp": "hfb", "parval": "1.0", "nlst": 1, "data": _hfb_param_def(1)}
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "u1"),
+        nphfb=1,
+        mxfb=1,
+        parameters=params,
+        acthfb_names=["px"],  # not defined
+        nacthfb=1,
+    )
+    hfb.fn_path = str(function_tmpdir / "undef.hfb")
+    with pytest.raises(ValueError, match="not defined"):
+        hfb.write_file()
+
+
 def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
     """DPT immobile-domain air-water adsorption (A-W_ADSORBIM) fails explicitly.
 

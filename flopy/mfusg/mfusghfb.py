@@ -164,7 +164,7 @@ class MfUsgHfb(ModflowHfb):
 
     def write_file(self):
         """Write HFB6 package file honouring TRANSIENT_HFB when set."""
-        preserve = self.nphfb > 0 and self.parameters is not None
+        preserve = self.nphfb > 0
         if self.nphfb > 0 and self.transient:
             raise NotImplementedError(
                 "MfUsgHfb.write_file does not support TRANSIENT_HFB combined "
@@ -173,19 +173,11 @@ class MfUsgHfb(ModflowHfb):
                 "which would redefine them. Use non-transient parameterized HFB, "
                 "or NPHFB=0 for transient barriers."
             )
-        if self.nphfb > 0 and self.parameters is None:
-            raise NotImplementedError(
-                "MfUsgHfb.write_file cannot author HFB parameter definitions "
-                "from scratch (NPHFB > 0 without loaded parameter data). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgHfb.load; for from-scratch input use NPHFB=0."
-            )
-        if self.nphfb > 0 and self.nacthfb != len(self.acthfb_names):
-            raise ValueError(
-                "MfUsgHfb.write_file: nacthfb "
-                f"({self.nacthfb}) must equal the number of active parameter "
-                f"names ({len(self.acthfb_names)})."
-            )
+        if self.nphfb > 0:
+            # Validate the preserved parameter state before opening the file, so a
+            # parameterized header is never written without a complete, consistent
+            # body (from-scratch -> NotImplementedError; inconsistent -> ValueError).
+            self._validate_parameter_write()
         structured = self.parent.structured
         nper = self.parent.nper
 
@@ -241,6 +233,54 @@ class MfUsgHfb(ModflowHfb):
                     )
                 f.write("1\n")
                 self._write_hfb_rows(f, sp_data, structured)
+
+    def _validate_parameter_write(self):
+        """Validate preserved HFB parameter state before a parameterized write.
+
+        Raises ``NotImplementedError`` when there are no loaded definitions
+        (from-scratch parameter authoring) and ``ValueError`` when definitions
+        are present but inconsistent, so a ``NPHFB>0`` header is never written
+        without a complete, consistent body.
+        """
+        if not self.parameters:
+            raise NotImplementedError(
+                "MfUsgHfb.write_file cannot author HFB parameter definitions "
+                "from scratch (NPHFB > 0 without loaded parameter data). "
+                "Parameter preservation is supported for files read by "
+                "MfUsgHfb.load; for from-scratch input use NPHFB=0."
+            )
+        if len(self.parameters) != self.nphfb:
+            raise ValueError(
+                f"MfUsgHfb.write_file: NPHFB ({self.nphfb}) must equal the "
+                f"number of parameter definitions ({len(self.parameters)})."
+            )
+        for name, pdef in self.parameters.items():
+            missing = [k for k in ("partyp", "parval", "nlst", "data") if k not in pdef]
+            if missing:
+                raise ValueError(
+                    f"MfUsgHfb.write_file: parameter '{name}' is missing keys "
+                    f"{missing} (each definition needs partyp, parval, nlst, "
+                    "data)."
+                )
+            if len(pdef["data"]) != pdef["nlst"]:
+                raise ValueError(
+                    f"MfUsgHfb.write_file: parameter '{name}' declares nlst="
+                    f"{pdef['nlst']} but carries {len(pdef['data'])} barrier "
+                    "rows."
+                )
+        if self.nacthfb != len(self.acthfb_names):
+            raise ValueError(
+                "MfUsgHfb.write_file: nacthfb "
+                f"({self.nacthfb}) must equal the number of active parameter "
+                f"names ({len(self.acthfb_names)})."
+            )
+        defined = {name.lower() for name in self.parameters}
+        for nm in self.acthfb_names:
+            if nm.lower() not in defined:
+                raise ValueError(
+                    f"MfUsgHfb.write_file: active parameter '{nm}' is not "
+                    "defined in parameters."
+                )
 
     @staticmethod
     def _write_hfb_rows(f, data, structured):
