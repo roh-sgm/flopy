@@ -84,6 +84,28 @@ gaps keep the honest label at `✅ (intentionally not Full)`:
 - **Output binaries.** `MULTIFILE_MD`/`SEPARATE_AI2` AI1/AI2 binary outputs are
   authored (keywords/units round-trip) but not read or post-processed by FloPy.
 
+## Review follow-up (resolved)
+
+P1 — TSHIFTMD could produce misaligned MDT files. USG-T reads AIOLD1MD/AIOLD2MD
+only when `TSHIFTMD > 1e-10`, but the writer used `tshiftmd > 0` for the arrays
+and a fixed `{tshiftmd:9.2f}` format for the keyword. So `tshiftmd=1e-6` wrote
+`TSHIFTMD 0.00` *and* the AIOLD arrays — USG-T then read TSHIFTMD as 0.0, did not
+expect AIOLD, and the file desynced; `tshiftmd=1e-12` likewise wrote AIOLD below
+the solver threshold. Fixed:
+
+- a module constant `MDT_TSHIFT_THRESHOLD = 1.0e-10` is now used consistently in
+  the constructor (AIOLD built/required), `write_file` (TSHIFTMD keyword + AIOLD
+  written), the IDPF-options check, and `load` (AIOLD read);
+- the TSHIFTMD keyword is written with a general format (`{tshiftmd:15.7g}`) so a
+  small valid value like `1e-6` is not rounded to `0.00`.
+
+Test added: `test_mfusgmdt_tshiftmd_threshold` (tshiftmd=2.0 writes TSHIFTMD +
+AIOLD and round-trips; 1e-6 writes a non-zero readable value + AIOLD; 1e-12
+writes neither; IDPF!=0 with 1e-12 is inactive/no error, with 1e-6 raises).
+`-k mfusgmdt` **9 passed**; focused **155 passed**; exe **4 passed**; combined
+**159 passed** under the USG-T 2.7 ARM binary. Status unchanged
+(`✅ intentionally not Full`).
+
 ## Validation
 
 ```bash

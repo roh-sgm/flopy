@@ -119,7 +119,9 @@ conditional reads; from-scratch authoring + round-trip for all main branches
 (options, base arrays, per-species, AIOLD under TSHIFTMD, IDPF on/off,
 multi-species); fixed three real bugs (`load` dropped `FRAHK`/`FRADARCY`,
 `write_file(f=)` crash, debug print) and added option/length validation; kept
-the Ex7 real-model round-trip/run. Eight synthetic tests; `-k mfusgmdt` 8 passed.
+the Ex7 real-model round-trip/run. A review follow-up then fixed the TSHIFTMD
+threshold (use 1e-10 consistently + a general number format so small valid
+values are not rounded to 0.0). Nine synthetic tests; `-k mfusgmdt` 9 passed.
 Kept MDT `✅ (intentionally not Full)` (gaps: species count uses MCOMP, AI1/AI2
 output binaries not read). LAK (Card D) remains not started.
 

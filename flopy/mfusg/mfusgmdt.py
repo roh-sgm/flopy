@@ -16,6 +16,12 @@ from ..utils.utils_def import (
 )
 from .mfusg import MfUsg
 
+# USG-T (gwt2mdtu1.for) reads/uses the AIOLD1MD/AIOLD2MD arrays and treats the
+# time shift as active only when TSHIFTMD exceeds this threshold. Use the same
+# criterion everywhere (constructor, writer, options check) so written files
+# stay aligned with what the solver will read.
+MDT_TSHIFT_THRESHOLD = 1.0e-10
+
 
 class MfUsgMdt(Package):
     """Matrix Diffusion Transport (mdt) Package Class for MODFLOW-USG Transport.
@@ -158,7 +164,11 @@ class MfUsgMdt(Package):
         # flow); with dual-porosity flow they are skipped and VOLFRACMD comes
         # from DPF/PHIF, so setting them with IDPF!=0 is invalid.
         if model.idpf and (
-            frahk or fradarcy or tshiftmd > 0 or iunitAI2 > 0 or crootname is not None
+            frahk
+            or fradarcy
+            or tshiftmd > MDT_TSHIFT_THRESHOLD
+            or iunitAI2 > 0
+            or crootname is not None
         ):
             raise ValueError(
                 "MDT header options (FRAHK/FRADARCY/TSHIFTMD/SEPARATE_AI2/"
@@ -206,8 +216,8 @@ class MfUsgMdt(Package):
         decaymd = _per_comp(decaymd, "decaymd", True)
         yieldmd = _per_comp(yieldmd, "yieldmd", True)
         diffmd = _per_comp(diffmd, "diffmd", True)
-        aiold1md = _per_comp(aiold1md, "aiold1md", self.tshiftmd > 0)
-        aiold2md = _per_comp(aiold2md, "aiold2md", self.tshiftmd > 0)
+        aiold1md = _per_comp(aiold1md, "aiold1md", self.tshiftmd > MDT_TSHIFT_THRESHOLD)
+        aiold2md = _per_comp(aiold2md, "aiold2md", self.tshiftmd > MDT_TSHIFT_THRESHOLD)
 
         self.kdmd = [0] * mcomp
         self.decaymd = [0] * mcomp
@@ -229,7 +239,7 @@ class MfUsgMdt(Package):
             self.diffmd[icomp] = Util3d(
                 model, (nlay, nrow, ncol), np.float32, diffmd[icomp], name="diffmd"
             )
-            if self.tshiftmd > 0:
+            if self.tshiftmd > MDT_TSHIFT_THRESHOLD:
                 self.aiold1md[icomp] = Util3d(
                     model,
                     (nlay, nrow, ncol),
@@ -275,8 +285,10 @@ class MfUsgMdt(Package):
         if self.fradarcy:
             f_obj.write(" FRADARCY")
 
-        if self.tshiftmd > 0:
-            f_obj.write(f" TSHIFTMD {self.tshiftmd:9.2f}")
+        if self.tshiftmd > MDT_TSHIFT_THRESHOLD:
+            # General format so small but valid values (e.g. 1e-6) are not
+            # rounded to 0.0, which would make USG-T skip the AIOLD arrays.
+            f_obj.write(f" TSHIFTMD {self.tshiftmd:15.7g}")
 
         if self.iunitAI2 > 0:
             f_obj.write(f" SEPARATE_AI2 {self.iunitAI2:9d}")
@@ -303,7 +315,7 @@ class MfUsgMdt(Package):
             f_obj.write(self.decaymd[icomp].get_file_entry())
             f_obj.write(self.yieldmd[icomp].get_file_entry())
             f_obj.write(self.diffmd[icomp].get_file_entry())
-            if self.tshiftmd > 0:
+            if self.tshiftmd > MDT_TSHIFT_THRESHOLD:
                 f_obj.write(self.aiold1md[icomp].get_file_entry())
                 f_obj.write(self.aiold2md[icomp].get_file_entry())
 
@@ -436,7 +448,7 @@ class MfUsgMdt(Package):
                 f_obj, model, nlay, np.float32, "diffmd", ext_unit_dict
             )
 
-            if kwargs["tshiftmd"] > 0:
+            if kwargs["tshiftmd"] > MDT_TSHIFT_THRESHOLD:
                 aiold1md[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "aiold1md", ext_unit_dict
                 )

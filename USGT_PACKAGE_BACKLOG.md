@@ -994,6 +994,13 @@ uses `MCOMP` (chained-decay `NTCOMP>MCOMP` not independently verified) and the
 AI1/AI2 output binaries (`MULTIFILE_MD`/`SEPARATE_AI2`) are authored but not
 read. See `USGT_STAGE4_MDT_FULLNESS.md`. (OC / EVT / LAK untouched beyond docs.)
 
+Review follow-up: fixed a TSHIFTMD misalignment — USG-T reads AIOLD only when
+`TSHIFTMD > 1e-10`, but the writer used `> 0` for AIOLD and a `{:9.2f}` format
+that rounded a small valid value (e.g. `1e-6`) to `0.00`. A module constant
+`MDT_TSHIFT_THRESHOLD = 1e-10` is now used everywhere (constructor, writer,
+IDPF-options check, load) and TSHIFTMD is written with a general format. One test
+added; `-k mfusgmdt` 9 passed. Status unchanged.
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

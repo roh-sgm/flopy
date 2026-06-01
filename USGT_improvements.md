@@ -235,6 +235,17 @@ can be built from Python/numpy without first loading an existing model.
   `USGT_STAGE4_MDT_FULLNESS.md`. `-k mfusgmdt` **8 passed**, focused suite
   **154 passed**, exe **4 passed**, combined **158 passed** under the USG-T 2.7
   ARM binary.
+  - **Review follow-up (resolved):** fixed a TSHIFTMD misalignment. USG-T reads
+    AIOLD1MD/AIOLD2MD only when `TSHIFTMD > 1e-10`, but the writer used
+    `tshiftmd > 0` for the AIOLD arrays and a fixed `{:9.2f}` keyword format that
+    rounded a small valid value (e.g. `1e-6`) to `0.00` — so the solver read
+    TSHIFTMD as 0.0, skipped AIOLD, and the file desynced. A module constant
+    `MDT_TSHIFT_THRESHOLD = 1e-10` is now used consistently (constructor, writer,
+    IDPF-options check, load), and the keyword is written with a general format
+    (`{:15.7g}`) so small valid values survive. One test added
+    (`test_mfusgmdt_tshiftmd_threshold`); `-k mfusgmdt` **9 passed**, focused
+    suite **155 passed**, exe **4 passed**, combined **159 passed** under the ARM
+    binary. MDT stays `✅ (intentionally not Full)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

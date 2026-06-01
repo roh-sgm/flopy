@@ -5026,3 +5026,79 @@ def test_mfusgmdt_rejects_invalid(function_tmpdir):
 
     with pytest.raises(ValueError, match="imdtcf"):
         MfUsgMdt(_mdt_model(function_tmpdir, "b4"), imdtcf=0, crootname="x")
+
+
+def test_mfusgmdt_tshiftmd_threshold(function_tmpdir):
+    """TSHIFTMD uses the Fortran threshold (1e-10) consistently for AIOLD.
+
+    USG-T (gwt2mdtu1.for) reads AIOLD1MD/AIOLD2MD only when TSHIFTMD > 1e-10, so
+    FloPy must (a) not round a small valid value to 0.0 and (b) not write AIOLD
+    for a value below the threshold.
+    """
+    from flopy.mfusg import MfUsgMdt
+
+    base = dict(kdmd=0.01, decaymd=1e-6, yieldmd=1.0, diffmd=1e-9)
+
+    def n_blocks(text):
+        up = text.upper()
+        return up.count("CONSTANT") + up.count("INTERNAL")
+
+    # tshiftmd=2.0: TSHIFTMD + AIOLD written and round-tripped
+    big = MfUsgMdt(
+        _mdt_model(function_tmpdir, "tbig"),
+        tshiftmd=2.0,
+        aiold1md=0.3,
+        aiold2md=0.4,
+        **base,
+    )
+    big.fn_path = str(function_tmpdir / "tbig.mdt")
+    big.write_file()
+    assert "TSHIFTMD" in Path(big.fn_path).read_text()
+    re = MfUsgMdt.load(big.fn_path, _mdt_model(function_tmpdir, "tbig2"))
+    assert np.isclose(re.tshiftmd, 2.0)
+    assert np.isclose(re.aiold1md[0].array.mean(), 0.3)
+
+    # tshiftmd=1e-6: above threshold -> a non-zero readable value (NOT 0.00)
+    # and AIOLD are written; round-trips back above the threshold.
+    small = MfUsgMdt(
+        _mdt_model(function_tmpdir, "sm"),
+        tshiftmd=1e-6,
+        aiold1md=0.3,
+        aiold2md=0.4,
+        **base,
+    )
+    small.fn_path = str(function_tmpdir / "sm.mdt")
+    small.write_file()
+    ts_line = next(
+        ln
+        for ln in Path(small.fn_path).read_text().splitlines()
+        if "TSHIFTMD" in ln
+    )
+    assert float(ts_line.split("TSHIFTMD")[1].split()[0]) > 1e-10  # not rounded to 0
+    re = MfUsgMdt.load(small.fn_path, _mdt_model(function_tmpdir, "sm2"))
+    assert re.tshiftmd > 1e-10
+    assert np.isclose(re.aiold1md[0].array.mean(), 0.3)
+
+    # tshiftmd=1e-12: below threshold -> no TSHIFTMD keyword and no AIOLD arrays
+    tiny = MfUsgMdt(
+        _mdt_model(function_tmpdir, "ti"),
+        tshiftmd=1e-12,
+        aiold1md=0.3,
+        aiold2md=0.4,
+        **base,
+    )
+    tiny.fn_path = str(function_tmpdir / "ti.mdt")
+    tiny.write_file()
+    none = MfUsgMdt(_mdt_model(function_tmpdir, "no"), **base)
+    none.fn_path = str(function_tmpdir / "no.mdt")
+    none.write_file()
+    assert "TSHIFTMD" not in Path(tiny.fn_path).read_text()
+    assert n_blocks(Path(tiny.fn_path).read_text()) == n_blocks(
+        Path(none.fn_path).read_text()
+    )
+
+    # IDPF!=0: a below-threshold tshiftmd is inactive (no error); an
+    # above-threshold one is an active option and must raise.
+    MfUsgMdt(_mdt_model(function_tmpdir, "dp_ok", idpf=1), tshiftmd=1e-12, **base)
+    with pytest.raises(ValueError, match="IDPF"):
+        MfUsgMdt(_mdt_model(function_tmpdir, "dp_bad", idpf=1), tshiftmd=1e-6, **base)
