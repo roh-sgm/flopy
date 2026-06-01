@@ -215,6 +215,26 @@ can be built from Python/numpy without first loading an existing model.
     the structured layer index was checked). Two tests added; `-k mfusgevt`
     **9 passed**, focused suite **146 passed**, exe **4 passed**, combined
     **150 passed** under the ARM binary. EVT stays `✅ (intentionally not Full)`.
+- **Stage 4 — MDT Fullness Card C (2026-06-01):** audited `MfUsgMdt` against
+  `gwt2mdtu1.for` and hardened it. Fixed three real bugs: `load` dropped
+  `FRAHK`/`FRADARCY` (it upper-cased the header line but matched the lowercase
+  keywords, so e.g. the Ex7 Multispecies `FRAHK` was lost on round-trip);
+  `write_file(f=handle)` raised `NameError` (`f_obj` was only assigned when
+  `f is None`, and it also closed a caller-supplied handle); and a stray
+  `print(f"line={line}")` debug line. Added from-scratch authoring + round-trip
+  for every main branch (header options parsed/written only when `IDPF==0`; base
+  arrays with `VOLFRACMD` dropped when `IDPF!=0`; per-species `KDMD`/`DECAYMD`/
+  `YIELDMD`/`DIFFMD`; `AIOLD1MD`/`AIOLD2MD` under `TSHIFTMD>0`; multi-species),
+  plus validation (FRAHK⊕FRADARCY, IDPF-options, `MULTIFILE_MD` needs
+  `imdtcf>0`, per-`MCOMP` list lengths → clear `ValueError`). Eight synthetic
+  tests; the three Ex7 real-model round-trip/run tests are kept (no separate
+  from-scratch MDT exe smoke — the Ex7 runs already exercise MDT execution).
+  **Decision: kept `✅ (intentionally not Full)`** — gaps: the species loop uses
+  `MCOMP` (chained-decay `NTCOMP>MCOMP` unverified) and the AI1/AI2 output
+  binaries are authored but not read. OC/EVT/LAK untouched. See
+  `USGT_STAGE4_MDT_FULLNESS.md`. `-k mfusgmdt` **8 passed**, focused suite
+  **154 passed**, exe **4 passed**, combined **158 passed** under the USG-T 2.7
+  ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

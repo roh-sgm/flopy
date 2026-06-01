@@ -101,9 +101,9 @@ load) and the dataset-1 3-integer write under transport; ETS zonal raises
 follow-up then fixed a scalar-ETFACTOR crash and added unstructured `IEVT`
 node-range validation. Eight synthetic tests + one exe test; `-k mfusgevt` 9
 passed. Kept EVT `✅ (intentionally not Full)` (gaps: ETS zonal, NPEVT parameter
-preservation). MDT / LAK (Cards C–D) remain not started.
+preservation). LAK (Card D) remains not started.
 
-### Card C - MDT Fullness
+### Card C - MDT Fullness — EXECUTED
 
 Required:
 
@@ -112,6 +112,16 @@ Required:
 - add from-scratch MDT authoring test,
 - reload written MDT and compare all semantic fields,
 - include multi-species if Fortran supports/uses it.
+
+**Done.** Audit, bug fixes, tests, and the Full/not-Full decision are recorded
+in **`USGT_STAGE4_MDT_FULLNESS.md`**: Fortran-audited the dataset order +
+conditional reads; from-scratch authoring + round-trip for all main branches
+(options, base arrays, per-species, AIOLD under TSHIFTMD, IDPF on/off,
+multi-species); fixed three real bugs (`load` dropped `FRAHK`/`FRADARCY`,
+`write_file(f=)` crash, debug print) and added option/length validation; kept
+the Ex7 real-model round-trip/run. Eight synthetic tests; `-k mfusgmdt` 8 passed.
+Kept MDT `✅ (intentionally not Full)` (gaps: species count uses MCOMP, AI1/AI2
+output binaries not read). LAK (Card D) remains not started.
 
 ### Card D - LAK Fullness
 

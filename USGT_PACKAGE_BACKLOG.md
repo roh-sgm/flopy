@@ -975,6 +975,25 @@ and added unstructured `NEVTOP=2` `IEVT` node-range validation (0-based in
 `[0, NODES-1]`, file 1-based; `< 0` or `>= NODES` raises). Two tests added;
 `-k mfusgevt` 9 passed. Status unchanged.
 
+### MDT — Fullness Card C (Stage 4)
+
+Audited `MfUsgMdt` against `gwt2mdtu1.for`. Fixed three real bugs: `load`
+dropped `FRAHK`/`FRADARCY` (it upper-cased the line but searched lowercase
+keywords — e.g. the Ex7 Multispecies `FRAHK` was lost on round-trip);
+`write_file(f=handle)` crashed (`f_obj` only assigned when `f is None`, and it
+closed external handles); and a stray debug `print`. Added from-scratch
+authoring + round-trip for all main branches (header options only when
+`IDPF==0`, base arrays with `VOLFRACMD` skipped when `IDPF!=0`, per-species
+`KDMD`/`DECAYMD`/`YIELDMD`/`DIFFMD`, `AIOLD1MD`/`AIOLD2MD` under `TSHIFTMD>0`,
+multi-species) plus validation (FRAHK⊕FRADARCY, IDPF-options, MULTIFILE needs
+`imdtcf>0`, per-`MCOMP` list lengths). Eight synthetic tests; the three Ex7
+real-model round-trip/run tests kept.
+
+Decision: **kept `✅ (intentionally not Full)`** — gaps: the per-species loop
+uses `MCOMP` (chained-decay `NTCOMP>MCOMP` not independently verified) and the
+AI1/AI2 output binaries (`MULTIFILE_MD`/`SEPARATE_AI2`) are authored but not
+read. See `USGT_STAGE4_MDT_FULLNESS.md`. (OC / EVT / LAK untouched beyond docs.)
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

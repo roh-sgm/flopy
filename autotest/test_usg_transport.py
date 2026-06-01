@@ -4830,3 +4830,199 @@ def test_mfusgoc_check_warns_param_without_value(function_tmpdir):
         )
         == []
     )
+
+
+# ---------------------------------------------------------------------------
+# MfUsgMdt tests (Matrix Diffusion Transport, gwt2mdtu1.for)
+# ---------------------------------------------------------------------------
+
+
+def _mdt_model(function_tmpdir, name, mcomp=1, idpf=0, nlay=1, nrow=2, ncol=2):
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=nlay, nrow=nrow, ncol=ncol, nper=1)
+    m.mcomp = mcomp
+    m.itrnsp = 1
+    m.idpf = idpf
+    return m
+
+
+def test_mfusgmdt_minimal_authoring_roundtrip(function_tmpdir):
+    """Minimal structured MDT (mcomp=1, tshiftmd=0) authors and round-trips."""
+    from flopy.mfusg import MfUsgMdt
+
+    mdt = MfUsgMdt(
+        _mdt_model(function_tmpdir, "m1"),
+        mdflag=1,
+        volfracmd=0.1,
+        pormd=0.2,
+        rhobmd=1500.0,
+        difflenmd=0.5,
+        tortmd=0.7,
+        kdmd=0.01,
+        decaymd=1e-6,
+        yieldmd=1.0,
+        diffmd=1e-9,
+    )
+    mdt.fn_path = str(function_tmpdir / "m1.mdt")
+    mdt.write_file()
+
+    re = MfUsgMdt.load(mdt.fn_path, _mdt_model(function_tmpdir, "m1b"))
+    assert re.frahk == 0 and re.tshiftmd == 0.0
+    assert np.isclose(re.volfracmd.array.mean(), 0.1)
+    assert np.isclose(re.pormd.array.mean(), 0.2)
+    assert np.isclose(re.kdmd[0].array.mean(), 0.01)
+
+    # rewrite then reload is semantically stable
+    re.fn_path = str(function_tmpdir / "m1_re.mdt")
+    re.write_file()
+    re2 = MfUsgMdt.load(re.fn_path, _mdt_model(function_tmpdir, "m1c"))
+    assert np.isclose(re2.volfracmd.array.mean(), 0.1)
+    assert np.isclose(re2.tortmd.array.mean(), 0.7)
+    assert np.isclose(re2.kdmd[0].array.mean(), 0.01)
+
+
+def test_mfusgmdt_tshift_aiold_roundtrip(function_tmpdir):
+    """TSHIFTMD>0 writes and round-trips AIOLD1MD/AIOLD2MD."""
+    from flopy.mfusg import MfUsgMdt
+
+    mdt = MfUsgMdt(
+        _mdt_model(function_tmpdir, "ts"),
+        tshiftmd=2.0,
+        kdmd=0.01,
+        decaymd=1e-6,
+        yieldmd=1.0,
+        diffmd=1e-9,
+        aiold1md=0.3,
+        aiold2md=0.4,
+    )
+    mdt.fn_path = str(function_tmpdir / "ts.mdt")
+    mdt.write_file()
+    assert "TSHIFTMD" in Path(mdt.fn_path).read_text()
+
+    re = MfUsgMdt.load(mdt.fn_path, _mdt_model(function_tmpdir, "ts2"))
+    assert np.isclose(re.tshiftmd, 2.0)
+    assert np.isclose(re.aiold1md[0].array.mean(), 0.3)
+    assert np.isclose(re.aiold2md[0].array.mean(), 0.4)
+
+
+def test_mfusgmdt_multispecies_roundtrip(function_tmpdir):
+    """Multi-species MDT preserves distinct per-component values."""
+    from flopy.mfusg import MfUsgMdt
+
+    mdt = MfUsgMdt(
+        _mdt_model(function_tmpdir, "ms", mcomp=2),
+        kdmd=[0.01, 0.02],
+        decaymd=[1e-6, 2e-6],
+        yieldmd=[1.0, 0.5],
+        diffmd=[1e-9, 2e-9],
+    )
+    mdt.fn_path = str(function_tmpdir / "ms.mdt")
+    mdt.write_file()
+
+    re = MfUsgMdt.load(mdt.fn_path, _mdt_model(function_tmpdir, "ms2", mcomp=2))
+    assert np.isclose(re.kdmd[0].array.mean(), 0.01)
+    assert np.isclose(re.kdmd[1].array.mean(), 0.02)
+    assert np.isclose(re.diffmd[1].array.mean(), 2e-9)
+
+
+def test_mfusgmdt_frahk_fradarcy_roundtrip(function_tmpdir):
+    """FRAHK and FRADARCY each author and reload (regression: load was lowercase)."""
+    from flopy.mfusg import MfUsgMdt
+
+    for opt in ("frahk", "fradarcy"):
+        mdt = MfUsgMdt(
+            _mdt_model(function_tmpdir, opt),
+            kdmd=0.01,
+            decaymd=1e-6,
+            yieldmd=1.0,
+            diffmd=1e-9,
+            **{opt: True},
+        )
+        mdt.fn_path = str(function_tmpdir / f"{opt}.mdt")
+        mdt.write_file()
+        assert opt.upper() in Path(mdt.fn_path).read_text()
+        re = MfUsgMdt.load(mdt.fn_path, _mdt_model(function_tmpdir, f"{opt}b"))
+        assert getattr(re, opt) == 1
+
+
+def test_mfusgmdt_output_options_roundtrip(function_tmpdir):
+    """SEPARATE_AI2 and MULTIFILE_MD round-trip (rootname case preserved)."""
+    from flopy.mfusg import MfUsgMdt
+
+    mdt = MfUsgMdt(
+        _mdt_model(function_tmpdir, "out"),
+        imdtcf=58,
+        iunitAI2=59,
+        crootname="mdRoot",
+        kdmd=0.01,
+        decaymd=1e-6,
+        yieldmd=1.0,
+        diffmd=1e-9,
+    )
+    mdt.fn_path = str(function_tmpdir / "out.mdt")
+    mdt.write_file()
+    text = Path(mdt.fn_path).read_text()
+    assert "SEPARATE_AI2" in text and "MULTIFILE_MD mdRoot" in text
+
+    re = MfUsgMdt.load(mdt.fn_path, _mdt_model(function_tmpdir, "out2"))
+    assert re.iunitAI2 == 59 and re.crootname == "mdRoot"
+
+
+def test_mfusgmdt_idpf_skips_volfracmd(function_tmpdir):
+    """With dual-porosity flow (IDPF!=0), VOLFRACMD is not written or expected."""
+    from flopy.mfusg import MfUsgMdt
+
+    def blocks(model, name):
+        mdt = MfUsgMdt(
+            model, kdmd=0.01, decaymd=1e-6, yieldmd=1.0, diffmd=1e-9
+        )
+        mdt.fn_path = str(function_tmpdir / f"{name}.mdt")
+        mdt.write_file()
+        text = Path(mdt.fn_path).read_text().upper()
+        return text.count("CONSTANT") + text.count("INTERNAL"), mdt.fn_path
+
+    n0, _ = blocks(_mdt_model(function_tmpdir, "d0", idpf=0), "d0")
+    n1, path1 = blocks(_mdt_model(function_tmpdir, "d1", idpf=1), "d1")
+    assert n1 == n0 - 1  # the VOLFRACMD array block is dropped under IDPF!=0
+
+    # and it loads back without expecting VOLFRACMD
+    re = MfUsgMdt.load(path1, _mdt_model(function_tmpdir, "d1b", idpf=1))
+    assert np.isclose(re.pormd.array.mean(), 0.0)
+
+
+def test_mfusgmdt_external_handle_write(function_tmpdir):
+    """write_file(f=handle) writes to and does not close the caller's handle."""
+    import io
+
+    from flopy.mfusg import MfUsgMdt
+
+    mdt = MfUsgMdt(
+        _mdt_model(function_tmpdir, "ext"),
+        kdmd=0.01,
+        decaymd=1e-6,
+        yieldmd=1.0,
+        diffmd=1e-9,
+    )
+    buf = io.StringIO()
+    mdt.write_file(f=buf)  # regression: previously NameError on f_obj
+    assert len(buf.getvalue()) > 50
+    assert not buf.closed  # external handle must stay open
+
+
+def test_mfusgmdt_rejects_invalid(function_tmpdir):
+    """MDT fails explicitly on conflicting/incomplete options and bad lengths."""
+    from flopy.mfusg import MfUsgMdt
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        MfUsgMdt(_mdt_model(function_tmpdir, "b1"), frahk=True, fradarcy=True)
+
+    with pytest.raises(ValueError, match="MCOMP"):
+        MfUsgMdt(_mdt_model(function_tmpdir, "b2", mcomp=2), kdmd=[0.01])
+
+    with pytest.raises(ValueError, match="IDPF"):
+        MfUsgMdt(_mdt_model(function_tmpdir, "b3", idpf=1), frahk=True)
+
+    with pytest.raises(ValueError, match="imdtcf"):
+        MfUsgMdt(_mdt_model(function_tmpdir, "b4"), imdtcf=0, crootname="x")

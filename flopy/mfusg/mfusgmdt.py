@@ -148,6 +148,30 @@ class MfUsgMdt(Package):
         self.iunitAI2 = iunitAI2
         self.crootname = crootname
 
+        # FRAHK (IFRAHK=1) and FRADARCY (IFRAHK=2) map to the same flag with
+        # conflicting values -- only one may be set.
+        if frahk and fradarcy:
+            raise ValueError(
+                "MDT FRAHK and FRADARCY are mutually exclusive (both set IFRAHK)."
+            )
+        # gwt2mdtu1.for reads the header options only when IDPF==0 (single-domain
+        # flow); with dual-porosity flow they are skipped and VOLFRACMD comes
+        # from DPF/PHIF, so setting them with IDPF!=0 is invalid.
+        if model.idpf and (
+            frahk or fradarcy or tshiftmd > 0 or iunitAI2 > 0 or crootname is not None
+        ):
+            raise ValueError(
+                "MDT header options (FRAHK/FRADARCY/TSHIFTMD/SEPARATE_AI2/"
+                "MULTIFILE_MD) are only read by USG-T when IDPF==0; this model "
+                "has dual-porosity flow (IDPF!=0)."
+            )
+        # MULTIFILE_MD output needs a positive IMDTCF unit (Fortran STOPs at 0).
+        if crootname is not None and imdtcf <= 0:
+            raise ValueError(
+                "MDT MULTIFILE_MD (crootname) requires imdtcf>0 for the AI1/AI2 "
+                "output files."
+            )
+
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
 
         self.mdflag = Util3d(model, (nlay, nrow, ncol), np.int32, mdflag, name="mdflag")
@@ -166,18 +190,24 @@ class MfUsgMdt(Package):
         )
 
         mcomp = model.mcomp
-        if isinstance(kdmd, (int, float)):
-            kdmd = [kdmd] * mcomp
-        if isinstance(decaymd, (int, float)):
-            decaymd = [decaymd] * mcomp
-        if isinstance(yieldmd, (int, float)):
-            yieldmd = [yieldmd] * mcomp
-        if isinstance(diffmd, (int, float)):
-            diffmd = [diffmd] * mcomp
-        if isinstance(aiold1md, (int, float)):
-            aiold1md = [aiold1md] * mcomp
-        if isinstance(aiold2md, (int, float)):
-            aiold2md = [aiold2md] * mcomp
+
+        def _per_comp(val, label, required):
+            """Broadcast a scalar to MCOMP, or validate a per-species sequence."""
+            if np.isscalar(val):
+                return [val] * mcomp
+            seq = list(val)
+            if required and len(seq) != mcomp:
+                raise ValueError(
+                    f"MDT {label} must have MCOMP={mcomp} entries; got {len(seq)}."
+                )
+            return seq
+
+        kdmd = _per_comp(kdmd, "kdmd", True)
+        decaymd = _per_comp(decaymd, "decaymd", True)
+        yieldmd = _per_comp(yieldmd, "yieldmd", True)
+        diffmd = _per_comp(diffmd, "diffmd", True)
+        aiold1md = _per_comp(aiold1md, "aiold1md", self.tshiftmd > 0)
+        aiold2md = _per_comp(aiold2md, "aiold2md", self.tshiftmd > 0)
 
         self.kdmd = [0] * mcomp
         self.decaymd = [0] * mcomp
@@ -231,9 +261,9 @@ class MfUsgMdt(Package):
         Examples
         --------
         """
-        # Open file for writing
-        if f is None:
-            f_obj = open(self.fn_path, "w")
+        # Open file for writing (use a caller-supplied handle if given).
+        opened = f is None
+        f_obj = open(self.fn_path, "w") if opened else f
 
         f_obj.write(f"{self.heading}\n")
         f_obj.write(f"{self.ipakcb:9d} {self.imdtcf:9d}")
@@ -277,8 +307,9 @@ class MfUsgMdt(Package):
                 f_obj.write(self.aiold1md[icomp].get_file_entry())
                 f_obj.write(self.aiold2md[icomp].get_file_entry())
 
-        # close the file
-        f_obj.close()
+        # close the file only if we opened it
+        if opened:
+            f_obj.close()
 
     @classmethod
     def load(cls, f, model, ext_unit_dict=None):
@@ -324,50 +355,35 @@ class MfUsgMdt(Package):
 
         nlay = model.nlay
 
-        # item 0
-        line = f_obj.readline().upper()
-        while line[0] == "#":
-            line = f_obj.readline().upper()
+        # item 0 + item 1a header. Keep the original case for the rootname;
+        # compare keywords case-insensitively.
+        line = f_obj.readline()
+        while line.startswith("#"):
+            line = f_obj.readline()
 
-        print(f"line={line}")
-
-        t = line.split()
+        traw = line.split()
+        t = [tok.upper() for tok in traw]
         kwargs = {}
+        kwargs["ipakcb"] = int(t[0])
+        kwargs["imdtcf"] = int(t[1])
 
-        # item 1a
-        vars = {"ipakcb": int, "imdtcf": int}
-
-        for i, (v, c) in enumerate(vars.items()):
-            kwargs[v] = c(t[i].strip())
-
-        # item 1a - options
-        if "frahk" in t:
-            kwargs["frahk"] = 1
-        else:
-            kwargs["frahk"] = 0
-
-        if "fradarcy" in t:
-            kwargs["fradarcy"] = 1
-        else:
-            kwargs["fradarcy"] = 0
-
-        if "TSHIFTMD" in t:
-            idx = t.index("TSHIFTMD")
-            kwargs["tshiftmd"] = float(t[idx + 1])
-        else:
-            kwargs["tshiftmd"] = 0.0
-
-        if "SEPARATE_AI2" in t:
-            idx = t.index("SEPARATE_AI2")
-            kwargs["iunitAI2"] = int(t[idx + 1])
-        else:
-            kwargs["iunitAI2"] = 0
-
-        if "MULTIFILE_MD" in t:
-            idx = t.index("MULTIFILE_MD")
-            kwargs["crootname"] = str(t[idx + 1])
-        else:
-            kwargs["crootname"] = None
+        # item 1a options -- USG-T (gwt2mdtu1.for) reads these only when IDPF==0.
+        kwargs["frahk"] = 0
+        kwargs["fradarcy"] = 0
+        kwargs["tshiftmd"] = 0.0
+        kwargs["iunitAI2"] = 0
+        kwargs["crootname"] = None
+        if not model.idpf:
+            if "FRAHK" in t:
+                kwargs["frahk"] = 1
+            if "FRADARCY" in t:
+                kwargs["fradarcy"] = 1
+            if "TSHIFTMD" in t:
+                kwargs["tshiftmd"] = float(t[t.index("TSHIFTMD") + 1])
+            if "SEPARATE_AI2" in t:
+                kwargs["iunitAI2"] = int(t[t.index("SEPARATE_AI2") + 1])
+            if "MULTIFILE_MD" in t:
+                kwargs["crootname"] = traw[t.index("MULTIFILE_MD") + 1]
 
         kwargs["mdflag"] = cls._load_prop_arrays(
             f_obj, model, nlay, np.int32, "mdflag", ext_unit_dict
