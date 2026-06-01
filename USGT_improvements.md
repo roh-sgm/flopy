@@ -205,6 +205,16 @@ can be built from Python/numpy without first loading an existing model.
   `USGT_STAGE4_EVT_FULLNESS.md`. `-k mfusgevt` **7 passed**, focused suite
   **144 passed**, exe **4 passed**, combined **148 passed** under the USG-T 2.7
   ARM binary.
+  - **Review follow-up (resolved):** (1) a scalar `ETFACTOR` (e.g.
+    `etfactor=2.5` with MCOMP=1) passed the length check but crashed
+    `write_file` at `self.etfactor[icomp]`; `__init__` now normalizes
+    `self.etfactor` to a 1-D array, so scalar (MCOMP=1) and array (MCOMP>1) both
+    author/load/reload and an incompatible length still raises. (2) unstructured
+    `NEVTOP=2` `IEVT` is now validated as a 0-based node index in `[0, NODES-1]`
+    (file 1-based) via `node_count`; `< 0` or `>= NODES` raises (previously only
+    the structured layer index was checked). Two tests added; `-k mfusgevt`
+    **9 passed**, focused suite **146 passed**, exe **4 passed**, combined
+    **150 passed** under the ARM binary. EVT stays `✅ (intentionally not Full)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

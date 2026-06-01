@@ -97,10 +97,11 @@ NEVTOP modes (structured + unstructured `NEVTOP=2` with `MXNDEVT`; `IEVT`
 0-based/1-based + layer-range validation) and transport `IETFACTOR` 0/<0/>0 with
 per-`MCOMP` `ETFACTOR`; fixed the `IETFACTOR` round-trip bug (it was dropped on
 load) and the dataset-1 3-integer write under transport; ETS zonal raises
-`NotImplementedError`; added a USG-T 2.7 EVT executable smoke. Six synthetic
-tests + one exe test; `-k mfusgevt` 7 passed. Kept EVT `✅ (intentionally not
-Full)` (gaps: ETS zonal, NPEVT parameter preservation). MDT / LAK (Cards C–D)
-remain not started.
+`NotImplementedError`; added a USG-T 2.7 EVT executable smoke. A review
+follow-up then fixed a scalar-ETFACTOR crash and added unstructured `IEVT`
+node-range validation. Eight synthetic tests + one exe test; `-k mfusgevt` 9
+passed. Kept EVT `✅ (intentionally not Full)` (gaps: ETS zonal, NPEVT parameter
+preservation). MDT / LAK (Cards C–D) remain not started.
 
 ### Card C - MDT Fullness
 

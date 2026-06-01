@@ -4485,6 +4485,74 @@ def test_mfusgevt_rejects_invalid(function_tmpdir):
         ).write_file()
 
 
+def test_mfusgevt_etfactor_scalar_and_array_roundtrip(function_tmpdir):
+    """ETFACTOR accepts a scalar (MCOMP=1) or an array (MCOMP>1) and round-trips."""
+    from flopy.mfusg import MfUsgEvt
+
+    def tmodel(name, mcomp):
+        m = _evt_struct_model(function_tmpdir, name)
+        m.itrnsp = 1
+        m.mcomp = mcomp
+        return m
+
+    # scalar ETFACTOR with MCOMP=1 must write (not crash) and round-trip
+    evt = MfUsgEvt(tmodel("sc", 1), nevtop=1, evtr=1e-4, ietfactor=1, etfactor=2.5)
+    evt.fn_path = str(function_tmpdir / "sc.evt")
+    evt.write_file()
+    assert "2.5" in Path(evt.fn_path).read_text()
+    re = MfUsgEvt.load(evt.fn_path, tmodel("sc2", 1))
+    assert np.allclose(re.etfactor, [2.5])
+    re.fn_path = str(function_tmpdir / "sc_re.evt")
+    re.write_file()  # rewrite stable, no crash
+    assert "2.5" in Path(re.fn_path).read_text()
+
+    # array ETFACTOR with MCOMP>1 still works
+    evt = MfUsgEvt(
+        tmodel("ar", 2), nevtop=1, evtr=1e-4, ietfactor=1, etfactor=[2.5, 3.5]
+    )
+    evt.fn_path = str(function_tmpdir / "ar.evt")
+    evt.write_file()
+    re = MfUsgEvt.load(evt.fn_path, tmodel("ar2", 2))
+    assert np.allclose(re.etfactor, [2.5, 3.5])
+
+    # incompatible length still raises
+    with pytest.raises(ValueError, match="MCOMP"):
+        MfUsgEvt(tmodel("bad", 2), nevtop=1, ietfactor=1, etfactor=[2.5])
+
+
+def test_mfusgevt_nevtop2_unstructured_ievt_out_of_range(function_tmpdir):
+    """Unstructured NEVTOP=2 validates the IEVT node index against NODES."""
+    from flopy.mfusg import MfUsgEvt
+
+    # valid node indices (4 nodes -> 0..3) author and round-trip fine
+    evt = MfUsgEvt(
+        _usgt_unstructured_model_ncol(function_tmpdir, "uok", ncol=4),
+        nevtop=2,
+        ievt=np.array([[0, 1, 2, 3]]),
+        surf=5.0,
+        evtr=1e-4,
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "uok.evt")
+    evt.write_file()
+
+    # node index >= NODES is rejected
+    with pytest.raises(ValueError, match="0-based node"):
+        MfUsgEvt(
+            _usgt_unstructured_model_ncol(function_tmpdir, "uhi", ncol=4),
+            nevtop=2,
+            ievt=np.array([[0, 1, 2, 4]]),
+        ).write_file()
+
+    # negative node index is rejected
+    with pytest.raises(ValueError, match="0-based node"):
+        MfUsgEvt(
+            _usgt_unstructured_model_ncol(function_tmpdir, "uneg", ncol=4),
+            nevtop=2,
+            ievt=np.array([[-1, 1, 2, 3]]),
+        ).write_file()
+
+
 def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
     from flopy.mfusg import MfUsgOc

@@ -84,6 +84,26 @@ EVT honest at `✅ (intentionally not Full)`:
 These mirror how the sibling ETS package is classified, so promoting EVT to
 `Full` would overclaim.
 
+## Review follow-up (resolved)
+
+1. **Scalar ETFACTOR no longer crashes (P1).** `MfUsgEvt(..., ietfactor=1,
+   etfactor=2.5)` previously passed the length check (`np.atleast_1d(2.5).size
+   == 1`) but crashed in `write_file` at `self.etfactor[icomp]`. `__init__` now
+   normalizes `self.etfactor` to a 1-D array, so a scalar (MCOMP=1) and an array
+   (MCOMP>1) both author/load/reload correctly; an incompatible length still
+   raises `ValueError`.
+2. **Unstructured IEVT node range validated (P2).** For unstructured `NEVTOP=2`,
+   `IEVT` is a 0-based node index written 1-based. `write_file` now validates it
+   against the total node count (via `node_count`, i.e. DISU `nodes` or the
+   DIS fallback): a value `< 0` or `>= NODES` raises a clear `ValueError`.
+   Structured `NEVTOP=2` continues to validate the layer index in `[0, NLAY-1]`.
+
+Tests added: `test_mfusgevt_etfactor_scalar_and_array_roundtrip`,
+`test_mfusgevt_nevtop2_unstructured_ievt_out_of_range`. `-k mfusgevt`
+**9 passed**; focused **146 passed**; exe **4 passed**; combined **150 passed**
+under the USG-T 2.7 ARM binary. EVT status unchanged: `✅ (intentionally not
+Full)`.
+
 ## Validation
 
 ```bash

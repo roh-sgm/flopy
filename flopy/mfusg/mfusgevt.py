@@ -149,11 +149,14 @@ class MfUsgEvt(Package):
             )
 
         self.ietfactor = int(ietfactor or 0)
-        self.etfactor = etfactor
+        # Normalize ETFACTOR to an indexable 1-D array so a scalar (e.g.
+        # etfactor=2.5 with MCOMP=1) does not crash write_file's per-component
+        # indexing. ETFACTOR is only written when ietfactor>0.
+        self.etfactor = np.atleast_1d(etfactor) if etfactor is not None else None
         # Transport ET factor: USG-T reads MCOMP ETFACTOR values when
         # ietfactor>0 (ietfactor==0 -> implicit 0.0, ietfactor<0 -> implicit 1.0).
         if getattr(model, "itrnsp", 0) and self.ietfactor > 0:
-            netf = np.atleast_1d(etfactor).size
+            netf = 0 if self.etfactor is None else self.etfactor.size
             if netf != model.mcomp:
                 raise ValueError(
                     f"EVT etfactor must have MCOMP={model.mcomp} value(s) when "
@@ -222,20 +225,24 @@ class MfUsgEvt(Package):
         f_evt.write("\n")
 
         if self.nevtop == 2:
+            # USG-T validates the IEVT index: a structured layer in 1..NLAY,
+            # or an unstructured node in 1..NODES (1-based in the file). Internal
+            # values are 0-based, so check [0, NLAY-1] / [0, NODES-1].
+            if self.parent.structured:
+                hi, kind = nlay, "layer"
+            else:
+                from ._tabrich import node_count
+
+                hi, kind = node_count(self.parent), "node"
             ievt = {}
             for kper, u2d in self.ievt.transient_2ds.items():
-                arr1 = u2d.array + 1  # 0-based internal -> 1-based file
-                # USG-T validates the structured layer index in 1..NLAY.
-                if (
-                    self.parent.structured
-                    and arr1.size
-                    and (arr1.min() < 1 or arr1.max() > nlay)
-                ):
+                arr = u2d.array  # 0-based internal
+                if arr.size and (arr.min() < 0 or arr.max() > hi - 1):
                     raise ValueError(
-                        f"EVT ievt (0-based layer) must be in [0, {nlay - 1}] for "
+                        f"EVT ievt (0-based {kind}) must be in [0, {hi - 1}] for "
                         f"NEVTOP=2; stress period {kper} is out of range."
                     )
-                ievt[kper] = arr1
+                ievt[kper] = arr + 1  # 1-based file
             ievt = Transient2d(
                 self.parent,
                 self.ievt.shape,

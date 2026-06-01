@@ -969,6 +969,12 @@ parameters are *Expanded valid write* (loaded as arrays, `NP=0` on write,
 authoring-with-params unsupported) — same treatment as ETS. See
 `USGT_STAGE4_EVT_FULLNESS.md`. (OC / MDT / LAK untouched beyond docs.)
 
+Review follow-up: fixed a scalar-`ETFACTOR` crash (`__init__` normalizes
+`self.etfactor` to a 1-D array, so `etfactor=2.5` with MCOMP=1 writes correctly)
+and added unstructured `NEVTOP=2` `IEVT` node-range validation (0-based in
+`[0, NODES-1]`, file 1-based; `< 0` or `>= NODES` raises). Two tests added;
+`-k mfusgevt` 9 passed. Status unchanged.
+
 ---
 
 ## Priority 5 - Post-Processing And Validation
