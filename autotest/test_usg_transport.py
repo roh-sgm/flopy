@@ -3719,21 +3719,153 @@ def test_mfusgets_iesfactor_authoring(function_tmpdir):
     assert "2.500000" in content
 
 
-def test_mfusghfb_parameterized_fails_explicitly(function_tmpdir):
-    """Parameterized HFB (NPHFB>0) fails explicitly on load rather than partial."""
-    from flopy.mfusg import MfUsgHfb
+# --- Stage 4.4B: HFB MODFLOW list-parameter preservation -------------------
+
+
+def _hfb_model(function_tmpdir, name, structured=False, nlay=1, nrow=1, ncol=1, nper=1):
     from flopy.modflow import ModflowDis
 
-    # Header: NPHFB MXFB NHFBNP -> NPHFB=1 (named parameters), unsupported
-    hfb_param = function_tmpdir / "param.hfb"
-    hfb_param.write_text(
+    ml = MfUsg(structured=structured, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(ml, nlay=nlay, nrow=nrow, ncol=ncol, nper=nper)
+    return ml
+
+
+def test_mfusghfb_parameterized_roundtrip(function_tmpdir):
+    """A parameterized (NPHFB>0) HFB file preserves defs + activations on
+    load -> write -> reload (no longer expands or fails)."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "param.hfb"
+    p.write_text(
         "# parameterized HFB\n"
-        "         1         1         0\n"
+        "         1         2         0\n"  # NPHFB MXFB NHFBNP
+        "hfb_par hfb 2.0 2\n"  # def: name type parval nlst
+        "1 2 0.5\n"  # barrier row 1 (1-based in file)
+        "3 4 0.5\n"  # barrier row 2
+        "1\n"  # NACTHFB
+        "hfb_par\n"  # active parameter name
     )
-    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
-    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-    with pytest.raises(NotImplementedError):
-        MfUsgHfb.load(str(hfb_param), ml, ext_unit_dict={})
+    hfb = MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "h1"), nper=1)
+    assert hfb.nphfb == 1 and hfb.mxfb == 2 and hfb.nhfbnp == 0
+    assert hfb.nacthfb == 1 and hfb.acthfb_names == ["hfb_par"]
+    pdef = hfb.parameters["hfb_par"]
+    assert pdef["partyp"] == "hfb" and pdef["parval"] == "2.0" and pdef["nlst"] == 2
+    # barrier nodes are stored 0-based internally
+    assert list(pdef["data"]["node1"]) == [0, 2]
+    assert list(pdef["data"]["node2"]) == [1, 3]
+
+    out = function_tmpdir / "param_out.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    content = out.read_text()
+    # NPHFB preserved in the header; parameter syntax re-emitted
+    item1 = next(ln for ln in content.splitlines() if not ln.startswith("#"))
+    assert item1.split()[:3] == ["1", "2", "0"]
+    assert "hfb_par hfb 2.0 2" in content
+    rows = [ln for ln in content.splitlines() if not ln.startswith("#")]
+    assert "hfb_par" in [ln.strip() for ln in rows]  # activation record
+
+    re = MfUsgHfb.load(str(out), _hfb_model(function_tmpdir, "h2"), nper=1)
+    assert re.nphfb == 1 and re.acthfb_names == ["hfb_par"]
+    assert list(re.parameters["hfb_par"]["data"]["node1"]) == [0, 2]
+
+
+def test_mfusghfb_parameterized_structured_roundtrip(function_tmpdir):
+    """Structured parameterized HFB keeps k/i/j 0-based internally, 1-based on file."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "sparam.hfb"
+    p.write_text(
+        "# structured parameterized HFB\n"
+        "         1         1         0\n"
+        "spar hfb 3.0 1\n"
+        "1 1 1 1 2 0.7\n"  # k irow1 icol1 irow2 icol2 factor (1-based)
+        "1\n"
+        "spar\n"
+    )
+    hfb = MfUsgHfb.load(
+        str(p), _hfb_model(function_tmpdir, "s1", structured=True, ncol=2), nper=1
+    )
+    pdef = hfb.parameters["spar"]
+    assert list(pdef["data"]["k"]) == [0]  # 0-based internal
+    assert list(pdef["data"]["icol2"]) == [1]
+
+    out = function_tmpdir / "sparam_out.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    rows = [ln for ln in out.read_text().splitlines() if not ln.startswith("#")]
+    # the parameter barrier row is written 1-based
+    assert rows[2].split()[:5] == ["1", "1", "1", "1", "2"]
+
+    re = MfUsgHfb.load(
+        str(out), _hfb_model(function_tmpdir, "s2", structured=True, ncol=2), nper=1
+    )
+    assert list(re.parameters["spar"]["data"]["k"]) == [0]
+    assert list(re.parameters["spar"]["data"]["icol2"]) == [1]
+
+
+def test_mfusghfb_parameterized_with_nonparam(function_tmpdir):
+    """HFB mixes parameter-defined barriers (item 2-3) with non-parametric ones
+    (item 4), as the Fortran allows."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "mixed.hfb"
+    p.write_text(
+        "# params + non-parametric barriers\n"
+        "         1         1         1\n"  # NPHFB=1 MXFB=1 NHFBNP=1
+        "spar hfb 3.0 1\n"
+        "1 1 1 1 2 0.7\n"  # parameter barrier (k=1)
+        "2 1 1 1 2 9.9\n"  # non-parametric barrier (k=2)
+        "1\n"
+        "spar\n"
+    )
+    hfb = MfUsgHfb.load(
+        str(p),
+        _hfb_model(function_tmpdir, "m1", structured=True, nlay=2, ncol=2),
+        nper=1,
+    )
+    assert hfb.nphfb == 1 and hfb.nhfbnp == 1
+    assert list(hfb.parameters["spar"]["data"]["k"]) == [0]  # param barrier
+    assert list(hfb.hfb_data["k"]) == [1]  # non-parametric barrier
+    assert abs(float(hfb.hfb_data["hydchr"][0]) - 9.9) < 1e-6
+
+    out = function_tmpdir / "mixed_out.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    re = MfUsgHfb.load(
+        str(out),
+        _hfb_model(function_tmpdir, "m2", structured=True, nlay=2, ncol=2),
+        nper=1,
+    )
+    assert list(re.parameters["spar"]["data"]["k"]) == [0]
+    assert list(re.hfb_data["k"]) == [1]
+
+
+def test_mfusghfb_parameter_authoring_from_scratch_fails(function_tmpdir):
+    """Authoring HFB parameters from scratch (NPHFB>0, no defs) fails explicitly."""
+    from flopy.mfusg import MfUsgHfb
+
+    hfb = MfUsgHfb(_hfb_model(function_tmpdir, "fs"), nphfb=1, mxfb=1, nhfbnp=0)
+    hfb.fn_path = str(function_tmpdir / "fs.hfb")
+    with pytest.raises(NotImplementedError, match="from scratch"):
+        hfb.write_file()
+
+
+def test_mfusghfb_transient_with_parameters_fails(function_tmpdir):
+    """TRANSIENT_HFB combined with parameters (NPHFB>0) fails explicitly."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "tparam.hfb"
+    p.write_text(
+        "# transient + parameters\n"
+        "         1         1         0  TRANSIENT_HFB\n"
+        "tp hfb 1.0 1\n"
+        "1 2 0.5\n"
+        "1\n"
+        "tp\n"
+    )
+    with pytest.raises(NotImplementedError, match="TRANSIENT_HFB"):
+        MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "tp", nper=2), nper=2)
 
 
 def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):

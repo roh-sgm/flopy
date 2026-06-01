@@ -279,9 +279,28 @@ honest, upstream-ready USG-T 2.7 story.
   `NotImplementedError`, so ETS stays ⚠️ Partial / not `Full`. Tests: `-k
   mfusgets` **10 passed** (4 new preservation/instances tests; the old
   expand test now opts in via `expand_parameters=True`); focused **169**, exe
-  **4**, combined **173** (ARM). The list-parameter write path (SGB/DRT/QRT/HFB)
-  is designed in `USGT_STAGE4_04_PARAMETERS.md` but not yet implemented. See
+  **4**, combined **173** (ARM). The list-parameter write path was then
+  implemented for HFB (Stage 4.4B, below); SGB/DRT/QRT remain pending. See
   `USGT_STAGE4_04_PARAMETERS_ETS.md`.
+- **Stage 4.4B — HFB list-parameter preservation (executed):** HFB uses MODFLOW
+  *list* parameters (`UPARLSTRP`/`UPARLSTSUB`), a different grammar from ETS:
+  each parameter owns `NLST` barrier rows and its value scales `HYDCHR`.
+  `MfUsgHfb.load` now preserves parameterized files — it stores the definitions
+  (`self.parameters = {name: {"partyp","parval","nlst","data"}}`, barrier rows
+  0-based), the non-parametric barriers (`self.hfb_data`), and the
+  active-parameter names (`self.acthfb_names`); `write_file` re-emits the
+  definition blocks, the non-parametric barriers, and `NACTHFB` + active names
+  (barrier rows 1-based on file). The shared helper
+  `flopy/mfusg/_usgt_parameters.py` gains list-parameter header/activation
+  read+write functions (reusable by SGB/DRT/QRT later); the package keeps its own
+  barrier-row reader/writer. Not promoted to `Full`: from-scratch parameter
+  authoring, `TRANSIENT_HFB`+`NPHFB>0` (the Fortran would redefine params each SP
+  under `ITERP=1`), and parameter `INSTANCES` (the Fortran aborts) all raise
+  `NotImplementedError`; non-parametric HFB is unchanged. Tests: `-k mfusghfb`
+  **8 passed** (5 new: unstructured/structured round-trip, params+non-param mix,
+  from-scratch fail, transient+params fail; 3 non-parametric regressions kept);
+  focused **173**, exe **4**, combined **177** (ARM). See
+  `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

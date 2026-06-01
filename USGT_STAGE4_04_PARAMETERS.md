@@ -11,32 +11,40 @@ USG-T packages that currently expand parameters or fail explicitly.
   including `INSTANCES`). An opt-in expanded fallback (`expand_parameters=True`)
   keeps the old `NPETS=0` behavior; from-scratch parameter *authoring* still
   raises `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md`.
-- `HFB`: `NPHFB>0` fails explicitly.
+- `HFB`: **parameter-preserving (Stage 4.4B, executed)** — list parameters
+  (`UPARLSTRP`/`UPARLSTSUB`) now load → write → reload with their syntax intact
+  (`NPHFB>0`, definition blocks with `NLST` barrier rows, `NACTHFB` + active
+  names). From-scratch parameter authoring and `TRANSIENT_HFB`+`NPHFB>0` raise
+  `NotImplementedError`; `INSTANCES` are unsupported (matches the Fortran). See
+  `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - `SGB`: `NPSGB>0` fails explicitly.
 - `QRT`: `NPQRT>0` fails explicitly.
 - `DRT`: `NPDRT>0` fails explicitly.
 
-This is honest and safe. ETS array-parameter preservation is now implemented;
-the list-parameter packages remain explicit-fail pending the list-parameter
-write path.
+This is honest and safe. ETS (array) and HFB (list) parameter preservation are
+implemented; the remaining list-parameter packages (SGB/DRT/QRT) stay
+explicit-fail pending their own preservation.
 
-## Shared abstraction (Stage 4.4A)
+## Shared abstraction (Stage 4.4A/4.4B)
 
-`flopy/mfusg/_usgt_parameters.py` reuses the already-shared
-`flopy.modflow.ModflowParBc` *parser* and adds the missing **write** side for
-the **array-parameter** form (`UPARARRRP`/`UPARARRSUB2`):
-`write_array_parameter_defs`, `read_active_array_parameters`,
-`write_active_array_parameters`. The parsed `ModflowParBc.bc_parms` dict is the
-structured representation preserved on the package — no ad-hoc string
-preservation, no second parser.
+`flopy/mfusg/_usgt_parameters.py` holds two parameter-preservation paths:
 
-The analogous **list-parameter** write path (`UPARLSTRP`/`UPARLSTSUB`, for
-SGB/DRT/QRT and HFB-style barriers) is the next package step. It would: parse
-the `PARAMETER NP MXL` header, store the per-parameter `NLST` list rows plus
-multiplier (`PARVAL`) and instances, and on write emit the definition blocks
-plus per-period activation records (scaling rows by the parameter value on
-expansion, per `UPARLSTSUB`). Until implemented, those packages keep their
-explicit `NotImplementedError`.
+- **Array parameters** (`UPARARRRP`/`UPARARRSUB2`, ETS): reuses the already-shared
+  `flopy.modflow.ModflowParBc` *parser* and adds the missing **write** side —
+  `write_array_parameter_defs`, `read_active_array_parameters`,
+  `write_active_array_parameters`. The parsed `ModflowParBc.bc_parms` dict is the
+  structured representation preserved on the package.
+- **List parameters** (`UPARLSTRP`/`UPARLSTSUB`, HFB) — Stage 4.4B:
+  `read_list_parameter_header` / `write_list_parameter_header` (the
+  `PARNAM PARTYP PARVAL NLST [INSTANCES n]` header) and
+  `read_active_list_parameters` / `write_active_list_parameters` (the activation
+  names). The per-parameter `NLST` rows are package-specific, so the row
+  reader/writer stays in the package (HFB keeps `_read_hfb_rows`/`_write_hfb_rows`
+  with 0-based↔1-based conversion).
+
+No ad-hoc string preservation, no second parser. The list-parameter helpers are
+reusable by SGB/DRT/QRT when their preservation lands; until then those packages
+keep their explicit `NotImplementedError`.
 
 ## Fortran Sources
 
@@ -69,7 +77,7 @@ Package sources:
 
 1. ETS array parameters, because partial expansion already exists. **DONE
    (Stage 4.4A).**
-2. HFB named parameters.
+2. HFB named parameters. **DONE (Stage 4.4B).**
 3. SGB list parameters.
 4. DRT list parameters.
 5. QRT list parameters.
@@ -94,10 +102,12 @@ Update:
 - `USGT_improvements.md`.
 
 Promote only the package modes that preserve parameter syntax. ETS now
-**preserves** ETSR array parameters (Stage 4.4A) and is documented as
-parameter-preserving for that path; it is still not `Full` because from-scratch
-parameter authoring is unsupported. The list-parameter packages stay
-explicit-fail until their write path lands.
+**preserves** ETSR array parameters (Stage 4.4A) and HFB now **preserves** list
+parameters (Stage 4.4B); both are documented as parameter-preserving for those
+paths but stay not `Full` because from-scratch parameter authoring is
+unsupported (and, for HFB, `TRANSIENT_HFB`+`NPHFB>0` is unsupported). The
+remaining list-parameter packages (SGB/DRT/QRT) stay explicit-fail until their
+write path lands.
 
 ## Validation
 

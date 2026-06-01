@@ -7,6 +7,12 @@ import numpy as np
 from ..modflow.mfhfb import ModflowHfb
 from ..pakbase import Package
 from ..utils.recarray_utils import create_empty_recarray
+from ._usgt_parameters import (
+    read_active_list_parameters,
+    read_list_parameter_header,
+    write_active_list_parameters,
+    write_list_parameter_header,
+)
 
 
 class MfUsgHfb(ModflowHfb):
@@ -27,8 +33,23 @@ class MfUsgHfb(ModflowHfb):
         - Unstructured: ``node1``, ``node2``, ``hydchr``
         - Structured:   ``k``, ``irow1``, ``icol1``, ``irow2``, ``icol2``, ``hydchr``
         Indices are **zero-based** (converted to 1-based on write).
+    nphfb : int
+        Number of HFB barriers defined by named parameters (dataset 1). Set by
+        :meth:`load` when the file is parameterized; from-scratch parameter
+        authoring is not supported (see Notes).
+    mxfb : int
+        Maximum number of barriers defined by parameters (MXFBP in the Fortran).
+        Preserved on load/write.
     nacthfb : int
-        Number of active HFB parameters per stress period (default 0).
+        Number of active HFB parameters (dataset 5). Set by :meth:`load`.
+    parameters : dict or None
+        Preserved HFB list-parameter definitions, keyed by parameter name:
+        ``{name: {"partyp": str, "parval": str, "nlst": int, "data": recarray}}``
+        where ``data`` holds the NLST barrier rows (zero-based, same dtype as
+        *hfb_data*). Set by :meth:`load` when ``NPHFB > 0``.
+    acthfb_names : list of str or None
+        Names of the active parameters (dataset 6), in file order. Set by
+        :meth:`load`.
     options : list of str, optional
         Extra options written to the header line (e.g. ``['NOPRINT']``).
         Do **not** include ``TRANSIENT_HFB`` here; use *transient=True*.
@@ -48,7 +69,18 @@ class MfUsgHfb(ModflowHfb):
 
     Notes
     -----
-    Parameters (NPHFB > 0) are not yet supported; set NPHFB = 0 (default).
+    HFB uses MODFLOW **list** parameters (``UPARLSTRP`` / ``UPARLSTSUB`` in
+    ``parutl7.f``): each parameter owns NLST barrier rows and its value scales
+    the barrier ``HYDCHR`` factor. As of Stage 4.4B, parameterized HFB files are
+    **preserved** (load -> write -> reload keeps ``NPHFB``, the definition blocks,
+    and the active-parameter records). HFB does not support parameter
+    ``INSTANCES`` (the Fortran aborts), so neither does this class.
+
+    Two parameter modes are intentionally not supported and fail explicitly with
+    ``NotImplementedError``: from-scratch parameter *authoring* (``nphfb > 0``
+    with no loaded definitions) and ``TRANSIENT_HFB`` combined with parameters
+    (``NPHFB > 0``), which would re-read/redefine parameters each stress period.
+    Non-parametric HFB (static and ``TRANSIENT_HFB``) is unchanged.
 
     Examples
     --------
@@ -63,6 +95,10 @@ class MfUsgHfb(ModflowHfb):
         nhfbnp=0,
         hfb_data=None,
         nacthfb=0,
+        nphfb=0,
+        mxfb=0,
+        parameters=None,
+        acthfb_names=None,
         options=None,
         transient=False,
         stress_period_data=None,
@@ -98,6 +134,8 @@ class MfUsgHfb(ModflowHfb):
         # add_package is intercepted here so we can control it independently.
         super().__init__(
             model,
+            nphfb=nphfb,
+            mxfb=mxfb,
             nhfbnp=nhfbnp,
             hfb_data=hfb_data,
             nacthfb=nacthfb,
@@ -110,6 +148,11 @@ class MfUsgHfb(ModflowHfb):
         self.transient = transient
         self.stress_period_data = stress_period_data or {}
 
+        # Preserved HFB list-parameter definitions and active-parameter records
+        # (set by load when NPHFB > 0).
+        self.parameters = parameters
+        self.acthfb_names = acthfb_names if acthfb_names is not None else []
+
         # The parent always adds itself; remove then re-add only if requested.
         if not add_package:
             model.pop_package(self._ftype())
@@ -120,10 +163,21 @@ class MfUsgHfb(ModflowHfb):
 
     def write_file(self):
         """Write HFB6 package file honouring TRANSIENT_HFB when set."""
-        if self.nphfb > 0:
+        preserve = self.nphfb > 0 and self.parameters is not None
+        if self.nphfb > 0 and self.transient:
             raise NotImplementedError(
-                "MfUsgHfb.write_file does not yet support parameterized HFB "
-                "definitions (NPHFB > 0)."
+                "MfUsgHfb.write_file does not support TRANSIENT_HFB combined "
+                "with HFB parameters (NPHFB > 0): the Fortran re-reads the "
+                "parameter definitions every stress period (UPARLSTRP ITERP=1), "
+                "which would redefine them. Use non-transient parameterized HFB, "
+                "or NPHFB=0 for transient barriers."
+            )
+        if self.nphfb > 0 and self.parameters is None:
+            raise NotImplementedError(
+                "MfUsgHfb.write_file cannot author HFB parameter definitions "
+                "from scratch (NPHFB > 0 without loaded parameter data). "
+                "Parameter preservation is supported for files read by "
+                "MfUsgHfb.load; for from-scratch input use NPHFB=0."
             )
         structured = self.parent.structured
         nper = self.parent.nper
@@ -138,6 +192,20 @@ class MfUsgHfb(ModflowHfb):
             if self.transient:
                 header += "  TRANSIENT_HFB"
             f.write(header + "\n")
+
+            # Parameterized HFB (non-transient): dataset 2-3 parameter
+            # definitions, then dataset 4 non-parametric barriers, then
+            # dataset 5-6 active-parameter records.
+            if preserve:
+                for name, pdef in self.parameters.items():
+                    write_list_parameter_header(
+                        f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
+                    )
+                    self._write_hfb_rows(f, pdef["data"], structured)
+                self._write_hfb_rows(f, self.hfb_data, structured)
+                f.write(f"{self.nacthfb:10d}\n")
+                write_active_list_parameters(f, self.acthfb_names)
+                return
 
             if not self.transient:
                 self._write_hfb_rows(f, self.hfb_data, structured)
@@ -156,7 +224,9 @@ class MfUsgHfb(ModflowHfb):
                     continue
 
                 if not isinstance(sp_data, np.recarray):
-                    sp_data = np.array(sp_data, dtype=self.hfb_data.dtype).view(np.recarray)
+                    sp_data = np.array(sp_data, dtype=self.hfb_data.dtype).view(
+                        np.recarray
+                    )
                 if len(sp_data) != self.nhfbnp:
                     raise ValueError(
                         "Transient HFB stress_period_data entries must contain "
@@ -251,14 +321,44 @@ class MfUsgHfb(ModflowHfb):
             elif tok.upper() not in ("OPTIONS",):
                 options.append(tok)
 
-        if nphfb > 0:
-            raise NotImplementedError(
-                "MfUsgHfb.load: parametric HFBs (NPHFB > 0) not yet supported."
-            )
-
         dtype = cls.get_default_dtype(structured=structured)
         stress_period_data = {}
-        if transient:
+        parameters = None
+        acthfb_names = []
+        nacthfb = 0
+
+        if nphfb > 0:
+            if transient:
+                raise NotImplementedError(
+                    "MfUsgHfb.load does not support TRANSIENT_HFB combined with "
+                    "HFB parameters (NPHFB > 0): the Fortran re-reads/redefines "
+                    "the parameter definitions every stress period (UPARLSTRP "
+                    "ITERP=1). This combination is out of scope."
+                )
+            # Dataset 2-3: NPHFB list-parameter definitions (header + NLST rows).
+            parameters = {}
+            for _ in range(nphfb):
+                name, partyp, parval, nlst, numinst = read_list_parameter_header(
+                    f.readline()
+                )
+                if numinst > 0:
+                    raise NotImplementedError(
+                        "MfUsgHfb.load: HFB parameter INSTANCES are not "
+                        "supported (gwf2hfb7u1.f aborts when NUMINST>0)."
+                    )
+                data = cls._read_hfb_rows(f, nlst, dtype, structured)
+                parameters[name] = {
+                    "partyp": partyp,
+                    "parval": parval,
+                    "nlst": nlst,
+                    "data": data,
+                }
+            # Dataset 4: barriers not defined by parameters.
+            hfb_data = cls._read_hfb_rows(f, nhfbnp, dtype, structured)
+            # Dataset 5-6: number of active parameters and their names.
+            nacthfb = int(f.readline().split()[0])
+            acthfb_names = read_active_list_parameters(f, nacthfb)
+        elif transient:
             hfb_data = create_empty_recarray(0, dtype)
             for kper in range(nper):
                 line = f.readline()
@@ -285,9 +385,13 @@ class MfUsgHfb(ModflowHfb):
 
         return cls(
             model,
+            nphfb=nphfb,
+            mxfb=mxfb,
             nhfbnp=nhfbnp,
             hfb_data=hfb_data,
-            nacthfb=0,
+            nacthfb=nacthfb,
+            parameters=parameters,
+            acthfb_names=acthfb_names,
             options=options,
             transient=transient,
             stress_period_data=stress_period_data,

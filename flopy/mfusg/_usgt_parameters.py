@@ -18,10 +18,11 @@ Array-parameter ``bc_parms`` layout (from ``ModflowParBc.loadarray``)::
         {instance_name: [[mltarr, zonarr, [izone, ...]], ...nclu clusters]},
     ]
 
-Only the **array-parameter** write path is implemented here (used by ETS for
-the ETSR rate array). The analogous **list-parameter** write path (SGB/DRT/QRT)
-is documented in ``USGT_STAGE4_04_PARAMETERS.md`` and is intentionally not yet
-implemented; those packages still fail explicitly on ``NP*>0``.
+The **array-parameter** write path (ETS, for the ETSR rate array) and the
+**list-parameter** write path (HFB, Stage 4.4B) are both implemented here. The
+remaining list-parameter packages (SGB/DRT/QRT) can reuse the list-parameter
+helpers below when their preservation lands; until then they fail explicitly on
+``NP*>0``.
 
 Notes
 -----
@@ -103,3 +104,62 @@ def write_active_array_parameters(f, records):
             f.write(f"{name} {instance}\n")
         else:
             f.write(f"{name}\n")
+
+
+# ---------------------------------------------------------------------------
+# List parameters (UPARLSTRP / UPARLSTSUB) -- used by HFB (Stage 4.4B).
+# ---------------------------------------------------------------------------
+#
+# A list parameter owns NLST list rows; its value scales a designated column on
+# expansion. The definition header (UPARLSTRP) is
+# ``PARNAM PARTYP PARVAL NLST [INSTANCES n]``; the NLST rows that follow are
+# package-specific (e.g. HFB barrier rows ``LAYER IROW1 ICOL1 IROW2 ICOL2
+# FACTOR`` / ``NODE1 NODE2 FACTOR``), so the row reader/writer stays in the
+# package. Activation (UPARLSTSUB) reads one parameter name per active
+# parameter. HFB does not support INSTANCES (gwf2hfb7u1.f aborts when NUMINST>0),
+# so these helpers carry parameter names only.
+
+
+def read_list_parameter_header(line):
+    """Parse a list-parameter definition header (``UPARLSTRP`` grammar).
+
+    ``PARNAM PARTYP PARVAL NLST [INSTANCES n]``.
+
+    Returns
+    -------
+    (name, partyp, parval, nlst, numinst)
+        ``parval`` is kept as the original string (value text preserved);
+        ``numinst`` is 0 when there is no ``INSTANCES`` token.
+    """
+    t = line.split("#")[0].strip().split()
+    name = t[0]
+    partyp = t[1]
+    parval = t[2]
+    nlst = int(t[3])
+    numinst = 0
+    if len(t) > 4 and t[4].upper() == "INSTANCES":
+        numinst = int(t[5])
+    return name, partyp, parval, nlst, numinst
+
+
+def write_list_parameter_header(f, name, partyp, parval, nlst):
+    """Write a list-parameter definition header (no ``INSTANCES``)."""
+    f.write(f"{name} {partyp} {parval} {nlst}\n")
+
+
+def read_active_list_parameters(f, count):
+    """Read ``count`` active list-parameter names (``UPARLSTSUB`` activation).
+
+    Returns a list of names in file order (HFB activations carry only the name).
+    """
+    names = []
+    for _ in range(count):
+        t = f.readline().split("#")[0].strip().split()
+        names.append(t[0])
+    return names
+
+
+def write_active_list_parameters(f, names):
+    """Write active list-parameter names, one per line."""
+    for name in names:
+        f.write(f"{name}\n")

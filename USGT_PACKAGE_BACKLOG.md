@@ -438,33 +438,43 @@ FloPy class: `MfUsgHfb`
 
 Fortran: `gwf2hfb7u1.f`
 
-Status: semantic for non-parametric static/transient HFB; partial for
-parameterized HFB. **Tests cover** (2026-05-30): static, structured static,
-transient `IHFBRD=>0/0/-1`, and explicit `NPHFB>0` load failure.
+Status: **parameter-preserving for HFB list parameters (Stage 4.4B, executed)**;
+semantic for non-parametric static/transient HFB. **Tests cover**: static,
+structured static, transient `IHFBRD=>0/0/-1`, parameterized load → write →
+reload (unstructured + structured), parameters mixed with non-parametric
+barriers, and the explicit-failure cases.
 
-Problem:
+Resolution (Stage 4.4B): HFB uses MODFLOW **list** parameters
+(`UPARLSTRP`/`UPARLSTSUB`) — each parameter owns `NLST` barrier rows and its value
+scales `HYDCHR`. `MfUsgHfb.load` now *preserves* them: it stores the definitions
+(`self.parameters = {name: {"partyp","parval","nlst","data"}}`, barrier rows
+0-based), the non-parametric barriers (`self.hfb_data`), and the active-parameter
+names (`self.acthfb_names`); `write_file` re-emits the definition blocks, the
+non-parametric barriers, and `NACTHFB` + the active names. Shared list-parameter
+helpers live in `flopy/mfusg/_usgt_parameters.py`. See
+`USGT_STAGE4_04_PARAMETERS_HFB.md`.
 
-- `NPHFB>0` is not supported.
-- Non-parametric Fortran semantics around `IHFBRD` must remain protected.
+Not `Full`: from-scratch parameter authoring (`NPHFB>0` without loaded defs),
+`TRANSIENT_HFB`+`NPHFB>0` (the Fortran redefines params each SP under `ITERP=1`),
+and parameter `INSTANCES` (the Fortran aborts) all raise `NotImplementedError`.
+`SFAC`/`EXTERNAL`/`OPEN/CLOSE` inside barrier lists are not parsed (same inline
+assumption as the existing non-parametric loader).
 
-Tasks:
+Required tests (all green, `-k mfusghfb` 8 passed):
 
-- Audit parameter read/active behavior in Fortran.
-- Decide expanded valid write versus parameter preservation.
-- Add parameter storage or explicit unsupported failure.
-- Preserve current non-parametric behavior.
-
-Required tests:
-
-- Static non-parametric authoring.
-- Transient non-parametric authoring.
-- `IHFBRD=-1`, `0`, and `>0`.
-- Structured and DISU formats where applicable.
-- Parameterized input behavior: expanded or explicit fail.
+- Static non-parametric authoring. (Done.)
+- Transient non-parametric authoring; `IHFBRD=-1`, `0`, `>0`. (Done.)
+- Structured and unstructured. (Done.)
+- Parameterized load → write → reload preserves defs + activations. (Done.)
+- Parameters mixed with non-parametric barriers. (Done.)
+- 0-based internal / 1-based file for parameter barrier rows. (Done.)
+- From-scratch parametric authoring → `NotImplementedError`. (Done.)
+- `TRANSIENT_HFB`+`NPHFB>0` → `NotImplementedError`. (Done.)
 
 Acceptance:
 
-- Parameterized HFB behavior is no longer ambiguous.
+- Parameterized HFB is preserved (load → write → reload), with the unsupported
+  variants failing explicitly. No silent partial writes.
 
 ### BAS6 - niche options
 

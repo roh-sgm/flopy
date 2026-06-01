@@ -46,7 +46,7 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | RCH | `RCH` | `MfUsgRch` | ✅ Full | `gwf2rch8u1.f` | INRCHZONES crash bug fixed (2026-05-20). INCONC/INIRCH spacing fixed. **Verified** |
 | EVT | `EVT` | `MfUsgEvt` | ✅ | `gwf2evt8u1.f` | EVT Fullness Card B (Stage 4): from-scratch authoring + round-trip tested for `NEVTOP`=1/2/3 (structured + unstructured `NEVTOP=2` with `MXNDEVT`; `IEVT` 0-based internal / 1-based file, layer-range (structured) and node-range (unstructured) validated), transport `IETFACTOR` 0/<0/>0 with per-`MCOMP` `ETFACTOR` (scalar or array), and per-SP reuse (`-1`). Fixed a real round-trip bug (`load` dropped `IETFACTOR`) and made the writer emit 3 dataset-1 ints whenever transport is active. Plus a USG-T 2.7 executable smoke (`test_usgt_exe_evt_from_scratch`). Kept `✅` not `Full` — explicit gaps: ETS zonal time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError`; `NPEVT` parameters are expanded-valid-write (loaded as arrays, `NP=0` on write), authoring-with-params unsupported. See `USGT_STAGE4_EVT_FULLNESS.md`. **Verified** |
 | ETS | `ETS` | `MfUsgEts` | ⚠️ Partial | `gwf2ets8u1.f` | Authoring tested for NETSEG=1, NETSEG>1 (PXDP/PETM), NETSOP=2 (IEVT), and IESFACTOR transport flag. **Stage 4.4A: ETSR array parameters are now preserved** (load → write → reload keeps `NPETS>0` in item 2a, the definition blocks, and per-period activation records, incl. `INSTANCES`; ETSS/ETSX/IETS/PXDP/PETM stay plain arrays — the mix the Fortran allows). USG-T reads `NPETS` from item 2a (`UPARARRAL` called with `IN=-1`), so no `PARAMETER` line is written. Opt-in expanded fallback (`expand_parameters=True`) still writes `NPETS=0`; from-scratch parameter *authoring* (`npets>0` without loaded defs) fails explicitly. Shared write helper `flopy/mfusg/_usgt_parameters.py` reuses `ModflowParBc` (no second parser). Not `Full` (no from-scratch param authoring). See `USGT_STAGE4_04_PARAMETERS_ETS.md`. **Verified** |
-| HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static, structured static, and `TRANSIENT_HFB` IHFBRD = >0/0/-1 semantics implemented and tested. `NPHFB>0` (named parameters) fails explicitly on load/write. **Verified** |
+| HFB | `HFB6` | `MfUsgHfb` | ⚠️ Partial | `gwf2hfb7u1.f` | Node-based. Non-parametric static, structured static, and `TRANSIENT_HFB` IHFBRD = >0/0/-1 semantics implemented and tested. **Stage 4.4B: HFB list parameters (`NPHFB>0`) are now preserved** (load → write → reload keeps the definition blocks with `NLST` barrier rows, `NACTHFB`, and the active names; barriers 0-based internal / 1-based file; parameter-defined and non-parametric barriers can mix). Uses the shared list-parameter helpers in `flopy/mfusg/_usgt_parameters.py` (`UPARLSTRP`/`UPARLSTSUB`). Not `Full`: from-scratch parameter authoring, `TRANSIENT_HFB`+`NPHFB>0`, and parameter `INSTANCES` raise `NotImplementedError` (the last matches the Fortran). See `USGT_STAGE4_04_PARAMETERS_HFB.md`. **Verified** |
 | GNC | `GNC` | `MfUsgGnc` | ✅ | `disu2gncn1.f` | **Verified** |
 | LAK | `LAK` | `MfUsgLak` | ✅ | `gwf2lak7u1.f` | LAK Fullness Card D (Stage 4): from-scratch authoring + round-trip tested for no-transport, classic transport (`CPPT`/`CRNF`), `TRANSPORTBOUNDARY` (one `CLAKE(1:NSOL)` line per lake, MCOMP>1), and `TABLEINPUT` (per-lake tab unit + external registration). Fixed six authoring bugs (conc_data mis-assignment; `flux_data=None` crash; conc_data accessed without transport; TRANSPORTBOUNDARY 9b written per-component instead of one-line-per-lake; load stored conc as strings; `transportboundary` flag not synced to the header keyword) and added validation (flux_data required; TRANSPORTBOUNDARY needs transport; clake nlakes×mcomp; transport needs conc_data). A review follow-up further validates authoring inputs in `__init__` so malformed input fails with a clear `ValueError` instead of crashing in `write_file()`: TABLEINPUT requires exactly one `tab_file`/`tab_unit` per lake; `conc_data` is checked per written period (every `(lake, component)` present; classic 2 values for `WTHDRW>=0` / 3 for `WTHDRW<0`; TRANSPORTBOUNDARY a single value); `flux_data` requires one dataset-9a entry per lake. `Ex8_Lake` real-model round-trip/run kept. Kept `✅` not `Full` — gaps: sill/connectivity (ds 7/8) and multi-lake systems round-trip but aren't authored from scratch in tests; `TABLEINPUT` bathymetry table contents are external; GAGE coupling separate. See `USGT_STAGE4_LAK_FULLNESS.md`. |
 | CLN | `CLN` | `MfUsgCln` | ✅ Full | `cln2basu1.f`, `cln2props1.f` | From-scratch authoring + round-trip tested for `PROCESSCCF`/`ICLNGWCB`, the 9-field `ISHAPE` node records, and `GENERAL_SEC` tabular shapes; also exercised by the Ex3 CLN conduit real models. Promoted to Full (Stage 3 Card 8). **Verified** |
@@ -92,7 +92,7 @@ landed), consistent with the coverage table above.
 | TIB | ✅ Full (authoring) | Promoted in Stage 4.1: semantic `stress_period_data` authoring + `parse=True` load for flow (`NIB0/NIB1/NIBM1`) and transport (`NICB0/NICB1/NICBM1`) blocks; `load` default stays byte-exact raw round-trip, with raw fallback on unsupported `U1DINT` (`EXTERNAL`/`OPEN-CLOSE`). |
 | GSF | ✅ Full (authoring) | Promoted in Stage 4.2: semantic `vertices`+`node_data` authoring + `parse=True` load (0-based internal / 1-based file), `from_grid` (requires per-vertex z), `to_grid()` via `from_gridspec`; `load` default stays raw round-trip. GSF is not solver input. |
 | ETS | Parameter-preserving (ETSR) | Stage 4.4A: ETSR array parameters load → write → reload with syntax intact (`NPETS>0`, defs, per-period activation records, `INSTANCES`). Opt-in expanded fallback (`expand_parameters=True` → `NPETS=0`); from-scratch parameter authoring fails explicitly. See `USGT_STAGE4_04_PARAMETERS_ETS.md`. |
-| HFB | Partial | Non-parametric static/transient is Full-quality; `NPHFB>0` (parameters) fails explicitly. |
+| HFB | Parameter-preserving (list) | Stage 4.4B: `NPHFB>0` list parameters load → write → reload with syntax intact (defs + `NLST` barrier rows + `NACTHFB` + active names). From-scratch authoring, `TRANSIENT_HFB`+`NPHFB>0`, and `INSTANCES` fail explicitly. See `USGT_STAGE4_04_PARAMETERS_HFB.md`. |
 | DPT | Partial | `A-W_ADSORBIM` immobile air-water adsorption explicitly unsupported (fails before any shifted read); `DLIM` conditional correct. |
 | SFR / STR / GAGE / FHB / SUB / SWT | Compatibility-only | Base MODFLOW-2005 classes; CLN is the project coupling. FHB/GAGE load via base in Ex8; SFR/STR/SUB/SWT used by no target model. |
 
@@ -268,15 +268,24 @@ Remaining (keeps ETS not `Full`): from-scratch parameter *authoring*
 `MfUsgEts.load(..., expand_parameters=True)` (writes `NPETS=0`). See
 `USGT_STAGE4_04_PARAMETERS_ETS.md`.
 
-### Gap §9 — HFB: parameterized barriers are not supported
+### Gap §9 — HFB: parameterized barriers (RESOLVED via preservation, Stage 4.4B)
 
 For non-parametric HFB, the implementation matches `gwf2hfb7u1.f`: static HFB
 reads/writes `NHFBNP` rows once, and transient HFB reads `IHFBRD` for every stress
 period, using `IHFBRD <= 0` as reuse/no-read and `IHFBRD > 0` as the flag to read
 exactly `NHFBNP` rows.
 
-Parameterized HFB (`NPHFB > 0`) is not implemented yet. Load and write fail
-explicitly for that case until parameter expansion/preservation is added.
+Parameterized HFB (`NPHFB > 0`) is now **preserved**: `MfUsgHfb.load` keeps the
+list-parameter definitions (`self.parameters`), the non-parametric barriers
+(`self.hfb_data`), and the active-parameter names (`self.acthfb_names`); and
+`write_file` re-emits the definition blocks, the non-parametric barriers, and the
+`NACTHFB` + active-name records. Barrier rows are 0-based internally / 1-based on
+file. Uses the shared list-parameter helpers (`UPARLSTRP`/`UPARLSTSUB`).
+
+Remaining (keeps HFB not `Full`): from-scratch parameter authoring,
+`TRANSIENT_HFB` combined with `NPHFB>0` (the Fortran would redefine parameters
+each stress period under `ITERP=1`), and parameter `INSTANCES` (the Fortran
+aborts) all raise `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 
 ---
 
