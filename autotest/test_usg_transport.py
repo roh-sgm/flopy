@@ -5102,3 +5102,163 @@ def test_mfusgmdt_tshiftmd_threshold(function_tmpdir):
     MfUsgMdt(_mdt_model(function_tmpdir, "dp_ok", idpf=1), tshiftmd=1e-12, **base)
     with pytest.raises(ValueError, match="IDPF"):
         MfUsgMdt(_mdt_model(function_tmpdir, "dp_bad", idpf=1), tshiftmd=1e-6, **base)
+
+
+# ---------------------------------------------------------------------------
+# MfUsgLak tests (Lake package, gwf2lak7u1.f)
+# ---------------------------------------------------------------------------
+
+
+def _lak_model(function_tmpdir, name, mcomp=0):
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=1, nrow=3, ncol=3, nper=1, nstp=1, steady=False)
+    if mcomp:
+        m.itrnsp = 1
+        m.mcomp = mcomp
+    return m
+
+
+def _lak_grids():
+    lakarr = np.zeros((1, 3, 3), dtype=int)
+    lakarr[0, 1, 1] = 1
+    return {0: lakarr}, {0: np.ones((1, 3, 3), dtype=float) * 0.1}
+
+
+def test_mfusglak_minimal_authoring_roundtrip(function_tmpdir):
+    """A minimal LAK (no transport) authors from scratch and round-trips."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "m1"),
+        nlakes=1,
+        stages=100.0,
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+    )
+    lak.fn_path = str(function_tmpdir / "m1.lak")
+    lak.write_file()
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "m1b"))
+    assert re.nlakes == 1 and not re.transportboundary
+
+
+def test_mfusglak_classic_transport_roundtrip(function_tmpdir):
+    """Classic lake transport (CPPT/CRNF per lake-component) round-trips."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "ct", mcomp=1),
+        nlakes=1,
+        stages=100.0,
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+        clake=[[5.0]],
+        conc_data={0: {(0, 0): [3.0, 1.0]}},  # CPPT, CRNF
+    )
+    lak.fn_path = str(function_tmpdir / "ct.lak")
+    lak.write_file()
+    assert "TRANSPORTBOUNDARY" not in Path(lak.fn_path).read_text()
+
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "ct2", mcomp=1))
+    assert not re.transportboundary
+    assert [float(x) for x in re.conc_data[0][(0, 0)]] == [3.0, 1.0]
+
+
+def test_mfusglak_transportboundary_roundtrip(function_tmpdir):
+    """TRANSPORTBOUNDARY writes one CLAKE line per lake (NSOL values) and reloads.
+
+    Regression: the writer previously emitted one line per component and the
+    `transportboundary` flag did not add the header keyword, so the file did not
+    round-trip.
+    """
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "tb", mcomp=2),
+        nlakes=1,
+        stages=100.0,
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+        transportboundary=True,
+        clake=[[5.0, 6.0]],
+        conc_data={0: {(0, 0): 5.0, (0, 1): 6.0}},
+    )
+    lak.fn_path = str(function_tmpdir / "tb.lak")
+    lak.write_file()
+    text = Path(lak.fn_path).read_text()
+    assert "TRANSPORTBOUNDARY" in text  # header keyword emitted
+    # exactly one dataset-9b line for the single lake (not one per component)
+    assert sum("Data set 9b" in ln for ln in text.splitlines()) == 1
+
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "tb2", mcomp=2))
+    assert re.transportboundary
+    assert re.conc_data[0][(0, 0)] == 5.0 and re.conc_data[0][(0, 1)] == 6.0
+
+
+def test_mfusglak_tableinput_authoring(function_tmpdir):
+    """TABLEINPUT authoring emits the keyword + per-lake tab unit, registered."""
+    from flopy.mfusg import MfUsgLak
+
+    model = _lak_model(function_tmpdir, "tab")
+    lakarr, bdlknc = _lak_grids()
+    lak = MfUsgLak(
+        model,
+        nlakes=1,
+        stages=100.0,
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+        options=["TABLEINPUT"],
+        tab_files=["lake1.tab"],
+    )
+    lak.fn_path = str(function_tmpdir / "tab.lak")
+    lak.write_file()
+    assert "TABLEINPUT" in Path(lak.fn_path).read_text()
+    assert lak.tabdata and lak.iunit_tab and lak.iunit_tab[0] > 0
+    # the tab file is registered as an external unit on the model
+    assert lak.iunit_tab[0] in model.external_units
+
+
+def test_mfusglak_rejects_invalid(function_tmpdir):
+    """LAK fails explicitly on missing flux_data, bad transport options/lengths."""
+    from flopy.mfusg import MfUsgLak
+
+    def build(name, mcomp=0, **kw):
+        lakarr, bdlknc = _lak_grids()
+        return MfUsgLak(
+            _lak_model(function_tmpdir, name, mcomp=mcomp),
+            nlakes=1,
+            stages=100.0,
+            lakarr=lakarr,
+            bdlknc=bdlknc,
+            **kw,
+        )
+
+    # flux_data (dataset 9) is required
+    with pytest.raises(ValueError, match="flux_data"):
+        build("n1", flux_data=None)
+
+    # TRANSPORTBOUNDARY needs active transport
+    with pytest.raises(ValueError, match="TRANSPORTBOUNDARY"):
+        build("n2", flux_data={0: {0: [0, 0, 0, 0]}}, transportboundary=True)
+
+    # clake must be nlakes x mcomp
+    with pytest.raises(ValueError, match="clake"):
+        build(
+            "n3",
+            mcomp=2,
+            flux_data={0: {0: [0, 0, 0, 0]}},
+            clake=[[1.0]],
+            conc_data={0: {(0, 0): 1.0, (0, 1): 1.0}},
+        )
+
+    # active transport requires conc_data (dataset 9b)
+    with pytest.raises(ValueError, match="conc_data"):
+        build("n4", mcomp=1, flux_data={0: {0: [0, 0, 0, 0]}}, clake=[[1.0]])

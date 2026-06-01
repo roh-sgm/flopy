@@ -279,12 +279,22 @@ honest, upstream-ready USG-T 2.7 story.
   authoring deferred until a target model needs it. → **Superseded by Stage 4.1**
   (semantic authoring + `parse=True` load now implemented; raw round-trip kept as
   the `load` default).
-- **Card 5 — LAK:** decision is **keep `✅` not Full**. `MfUsgLak` already
-  parses/preserves `TABLEINPUT` and the `transportboundary` flag and round-trips
-  the Ex8 real model; from-scratch authoring (full lake connectivity / bathymetry
-  tables / per-lake transport boundary) is deferred given LAK's size (largest
-  MODFLOW package) and that GUIs normally generate it. Rationale recorded in the
-  backlog; a dedicated card would be opened if a target model needs it.
+- **Card 5 — LAK → executed as Stage 4 LAK Fullness Card D; decision is still
+  keep `✅` not Full.** From-scratch authoring is now real and tested for the main
+  branches (no-transport, classic transport `CPPT`/`CRNF`, `TRANSPORTBOUNDARY`
+  with MCOMP>1, `TABLEINPUT`), and six authoring bugs were fixed: `conc_data`
+  mis-assignment (`{0: sill_data}` → `{0: conc_data}`); `write_file` crash when
+  `flux_data` is None (now required); `conc_data` accessed when `mcomp==0`;
+  `TRANSPORTBOUNDARY` dataset-9b written per-component instead of one
+  `CLAKE(1:NSOL)` line per lake; load stored conc as strings (now float); and the
+  `transportboundary` flag not being synced to the header keyword (so the file
+  used the boundary layout without the keyword and would not reload). Added
+  validation (flux_data required; TRANSPORTBOUNDARY needs transport; clake
+  nlakes×mcomp; transport needs conc_data). `Ex8_Lake` real-model round-trip/run
+  kept. Stays `✅` not Full — gaps: sill/connectivity (ds 7/8) + multi-lake
+  systems round-trip but aren't authored from scratch; TABLEINPUT bathymetry
+  table contents are external; GAGE coupling separate. See
+  `USGT_STAGE4_LAK_FULLNESS.md`. `-k mfusglak` 5 passed.
 - **Card 6 — base-class compatibility (SFR/STR/GAGE/FHB/SUB/SWT):** all six
   classified **Compatibility-only** in the roadmap (base MODFLOW-2005 classes;
   CLN is the project's coupling). Usage scan: only **FHB and GAGE** appear in a
@@ -394,9 +404,11 @@ explicitly rather than producing incomplete or mis-parsed files.
 - **CHD/RIV/GHB/DRN, WEL, CLN, DPF, TVM** already carry from-scratch authoring
   and/or round-trip tests; reviewed and left as-is.
 - **Scope decisions (Priority 4):** `GSF` text round-trip + `to_grid()` is
-  sufficient (tested). `LAK` is sufficient for project use and validated via
-  the `Ex8_Lake` round-trip; from-scratch `TABLEINPUT`/`TRANSPORTBOUNDARY`
-  authoring is deferred. `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility-only**
+  sufficient (tested). `LAK` now carries from-scratch `TABLEINPUT` /
+  `TRANSPORTBOUNDARY` / classic-transport authoring + round-trip tests (Stage 4
+  Card D; six bugs fixed) plus the `Ex8_Lake` round-trip, but stays `✅` not Full
+  (sill/connectivity + multi-lake authoring, TABLEINPUT table contents, and GAGE
+  remain out of scope). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility-only**
   (base MODFLOW-2005 classes; USG-T unstructured records not validated; CLN is
   the preferred coupling) — documented, not silently "supported".
 - **Post-processing (Priority 5):** `MfusgTransportListBudget` old/new format

@@ -36,7 +36,8 @@ All priority tiers below have been worked through. Commits on `develop`:
 - **P3 — review:** BCT (1-species/IDISP=2/multi-species) and DDF (NONLINEAR
   table) from-scratch authoring tests added; other Full packages reviewed.
 - **P4 — base-class packages:** GSF text round-trip in P4, promoted to **Full
-  (authoring)** in Stage 4.2; LAK validated via Ex8 (authoring deferred);
+  (authoring)** in Stage 4.2; LAK from-scratch authoring + round-trip tested in
+  Stage 4 Card D (six bugs fixed; kept `✅` not Full, gaps listed) plus Ex8;
   SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented).
 - **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
   real-model run-validation is a documented manual tier (Ex* loads in CI).
@@ -773,28 +774,41 @@ Class: `MfUsgLak`
 
 Fortran: `gwf2lak7u1.f`
 
-Status: **Decision confirmed (Stage 3 Card 5): keep `✅` not Full.** Current
-support is sufficient for project use; from-scratch authoring deferred.
+Status: **Stage 4 LAK Fullness Card D executed; decision stays `✅` not Full
+(hardened).** From-scratch authoring is now real and tested for the main
+branches; six authoring bugs were fixed; bounded gaps keep it `✅`, not `Full`.
 
 Audit (`gwf2lak7u1.f`, ≈4630 lines — the largest MODFLOW package): the option
 line is parsed at `GWF2LAK7U1AR` (L83 `TABLEINPUT`, L89 `TRANSPORTBOUNDARY`);
 the per-SP geometry/connectivity/gage data is read across `GWF2LAK7U1RP/RPS/RPU`.
-`MfUsgLak` already parses and preserves the `TABLEINPUT` option and the
-`transportboundary` flag, and load/write round-trips the `Ex8_Lake` real model.
+Dataset 9b is the transport concentration block: with `TRANSPORTBOUNDARY`
+(`ILKTRNSPT=0`) it is **one `CLAKE(1:NSOL)` line per lake** (`gwf2lak7u1.f:1060`);
+classic transport (`ILKTRNSPT=1`) is per (lake, component) `CPPT, CRNF [, CAUG]`.
 
-Why deferred: a from-scratch authoring test must build complete lake
-connectivity, bathymetry/stage tables, and (with transport) per-lake boundary
-concentrations — a large surface for a package GUIs normally generate. Per the
-Stage 3 priority guidance ("a clean, well-tested core beats full support for
-rare packages"), this is **deferred**, not blocked. If a target model needs
-from-scratch LAK authoring, open a dedicated card to add a minimal synthetic
-lake plus a round-trip test and only then promote toward `Full`.
+Card D (Stage 4) outcome: fixed six authoring bugs — `conc_data` mis-assignment
+(`{0: sill_data}` → `{0: conc_data}`); `write_file` crash when `flux_data` is
+None (now required); `conc_data` accessed when `mcomp==0`; `TRANSPORTBOUNDARY`
+9b written per-component instead of one line per lake; load stored conc as
+strings (now float); `transportboundary` flag not synced to the header keyword.
+Added validation (flux_data required; TRANSPORTBOUNDARY needs transport; clake
+nlakes×mcomp; transport needs conc_data). Five synthetic from-scratch/round-trip
+tests (no-transport, classic transport, TRANSPORTBOUNDARY MCOMP>1, TABLEINPUT,
+negatives) plus the `Ex8_Lake` real-model round-trip/run. See
+`USGT_STAGE4_LAK_FULLNESS.md`.
+
+Why still not `Full`: sill/connectivity (datasets 7/8) and multi-lake sublake
+systems round-trip (and run via Ex8) but aren't authored from scratch in the
+tests; `TABLEINPUT` bathymetry table *contents* are external (FloPy only
+registers the per-lake tab unit / external file); GAGE coupling is a separate
+package.
 
 Tasks:
 
-- Verify `TABLEINPUT` and `TRANSPORTBOUNDARY` authoring. (Deferred — see above.)
-- Verify lake transport concentration behavior. (Covered by Ex8 round-trip.)
-- Decide whether current support is full enough for project use. (Yes.)
+- Verify `TABLEINPUT` and `TRANSPORTBOUNDARY` authoring. (Done — Card D.)
+- Verify lake transport concentration behavior. (Done — classic + boundary 9b
+  authoring tests + Ex8 round-trip.)
+- Decide whether current support is full enough for project use. (Yes; kept `✅`
+  not Full with the gaps above listed precisely.)
 
 ### SFR / STR / GAGE / FHB / SUB / SWT
 

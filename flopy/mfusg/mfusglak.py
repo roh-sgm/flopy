@@ -414,6 +414,12 @@ class MfUsgLak(Package):
                     err = "sill_data must be a dictionary"
                     raise Exception(err)
 
+        if flux_data is None:
+            raise ValueError(
+                "LAK requires flux_data (dataset 9: PRCPLK/EVAPLK/RNF/WTHDRW per "
+                "lake, keyed by 0-based stress period); USG-T reads it for every "
+                "lake, so a LAK file cannot be written without it."
+            )
         if flux_data is not None:
             if not isinstance(flux_data, dict):
                 # convert array to a dictionary
@@ -457,21 +463,49 @@ class MfUsgLak(Package):
         self.flux_data = flux_data
         self.sill_data = sill_data
 
+        # Keep the transportboundary flag and the dataset-1a options in sync:
+        # the header keyword drives both the dataset-9b layout and what load
+        # detects, so authoring with transportboundary=True must emit the
+        # TRANSPORTBOUNDARY keyword (and vice-versa).
+        has_tb_opt = any("TRANSPORTBOUNDARY" in str(o).upper() for o in self.options)
+        transportboundary = bool(transportboundary) or has_tb_opt
         self.transportboundary = transportboundary
+        if transportboundary and not has_tb_opt:
+            self.options.append("TRANSPORTBOUNDARY")
+        # TRANSPORTBOUNDARY is only valid with active transport: USG-T sets
+        # ILKTRNSPT from IUNITGWT and rejects the option when transport is off.
+        if transportboundary and model.mcomp <= 0:
+            raise ValueError(
+                "LAK TRANSPORTBOUNDARY requires active transport (mcomp>0); "
+                "USG-T rejects the option when transport is inactive."
+            )
 
         mcomp = model.mcomp
         if isinstance(clake, (int, float)):
             self.clake = [[clake] * mcomp for _ in range(self.nlakes)]
+        elif clake is None:
+            self.clake = [[0.0] * mcomp for _ in range(self.nlakes)]
         else:
             self.clake = clake
+            if mcomp > 0 and (
+                len(clake) != self.nlakes or any(len(row) != mcomp for row in clake)
+            ):
+                raise ValueError(
+                    f"LAK clake must be nlakes x mcomp ({self.nlakes} x {mcomp})."
+                )
 
         if conc_data is not None:
             if not isinstance(conc_data, dict):
                 try:
-                    conc_data = {0: sill_data}
+                    conc_data = {0: conc_data}
                 except:
                     err = "conc_data must be a dictionary"
                     raise Exception(err)
+        if model.mcomp > 0 and conc_data is None:
+            raise ValueError(
+                "LAK with active transport (mcomp>0) requires conc_data "
+                "(dataset 9b: lake concentrations per stress period)."
+            )
         self.conc_data = conc_data
 
         self.parent.add_package(self)
@@ -548,7 +582,7 @@ class MfUsgLak(Package):
             f.write(write_fixed_var(t, ipos=ipos, free=self.parent.free_format_input))
 
         ds8_keys = list(self.sill_data.keys()) if self.sill_data is not None else []
-        ds9_keys = list(self.flux_data.keys())
+        ds9_keys = list(self.flux_data.keys()) if self.flux_data is not None else []
         nper = self.dis.steady.shape[0]
         for kper in range(nper):
             itmp, file_entry_lakarr = self.lakarr.get_kper_entry(kper)
@@ -605,7 +639,8 @@ class MfUsgLak(Package):
 
             if itmp2 > 0:
                 ds9 = self.flux_data[kper]
-                ds9b = self.conc_data[kper]
+                # dataset 9b (concentrations) only exists with active transport
+                ds9b = self.conc_data[kper] if mcomp > 0 else None
                 for n in range(self.nlakes):
                     try:
                         steady = self.dis.steady[kper]
@@ -622,14 +657,27 @@ class MfUsgLak(Package):
                     )
                     f.write(s)
                     if mcomp > 0:
-                        for icomp in range(mcomp):
-                            t = ds9b[n, icomp]
-                            s = write_fixed_var(
-                                t,
-                                free=self.parent.free_format_input,
-                                comment="Data set 9b",
+                        if self.transportboundary:
+                            # USG-T reads one line per lake with CLAKE(1:NSOL).
+                            t = [ds9b[n, icomp] for icomp in range(mcomp)]
+                            f.write(
+                                write_fixed_var(
+                                    t,
+                                    free=self.parent.free_format_input,
+                                    comment="Data set 9b",
+                                )
                             )
-                            f.write(s)
+                        else:
+                            # classic transport: one line per (lake, component)
+                            # with CPPT, CRNF [, CAUG].
+                            for icomp in range(mcomp):
+                                f.write(
+                                    write_fixed_var(
+                                        ds9b[n, icomp],
+                                        free=self.parent.free_format_input,
+                                        comment="Data set 9b",
+                                    )
+                                )
 
         # close the lak file
         f.close()
@@ -895,11 +943,11 @@ class MfUsgLak(Package):
                             ds9b[n, icomp] = tds
 
                     if mcomp > 0 and transportboundary:
-                        # CLAKBC The concentration of solute for lake boundary
+                        # CLAKBC: one line per lake with CLAKE(1:NSOL).
                         line = f.readline().rstrip()
                         t = line.split()
                         for icomp in range(mcomp):
-                            ds9b[n, icomp] = t[icomp]
+                            ds9b[n, icomp] = float(t[icomp])
 
                 flux_data[iper] = ds9
                 conc_data[iper] = ds9b

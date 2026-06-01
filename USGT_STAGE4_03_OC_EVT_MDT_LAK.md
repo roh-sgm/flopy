@@ -125,7 +125,7 @@ values are not rounded to 0.0). Nine synthetic tests; `-k mfusgmdt` 9 passed.
 Kept MDT `✅ (intentionally not Full)` (gaps: species count uses MCOMP, AI1/AI2
 output binaries not read). LAK (Card D) remains not started.
 
-### Card D - LAK Fullness
+### Card D - LAK Fullness — EXECUTED
 
 Required:
 
@@ -134,6 +134,21 @@ Required:
 - add from-scratch authoring for `TABLEINPUT` and `TRANSPORTBOUNDARY`,
 - test load/write/reload,
 - only add executable validation if the synthetic LAK model is stable and cheap.
+
+**Done.** Audit, bug fixes, tests, and the Full/not-Full decision are recorded in
+**`USGT_STAGE4_LAK_FULLNESS.md`**: Fortran-audited the datasets; fixed six
+authoring bugs (conc_data mis-assignment; `flux_data=None` crash; conc_data read
+without transport; TRANSPORTBOUNDARY 9b written per-component instead of
+one-line-per-lake; load stored conc as strings; `transportboundary` flag not
+synced to the header keyword); added validation; from-scratch authoring +
+round-trip for no-transport, classic transport, `TRANSPORTBOUNDARY` (MCOMP>1),
+and `TABLEINPUT`. Kept the `Ex8_Lake` real-model round-trip/run (no synthetic LAK
+exe smoke — Ex8 covers execution). Five synthetic tests; `-k mfusglak` 5 passed.
+Kept LAK `✅ (intentionally not Full)` (gaps: sill/connectivity + multi-lake
+systems not authored from scratch; TABLEINPUT table contents external; GAGE
+separate).
+
+**Theme complete:** OC, EVT, MDT, and LAK (Cards A–D) are all executed.
 
 ## Documentation Updates
 
