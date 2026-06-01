@@ -31,6 +31,11 @@ from ..modflow.mfparbc import ModflowParBc as mfparbc
 from ..pakbase import Package
 from ..utils import Transient2d, Util2d
 from ..utils.utils_def import get_pak_vals_shape
+from ._usgt_parameters import (
+    read_active_array_parameters,
+    write_active_array_parameters,
+    write_array_parameter_defs,
+)
 
 
 class MfUsgEts(Package):
@@ -81,10 +86,36 @@ class MfUsgEts(Package):
     filenames : str or list of str or None
         Filenames for package and CBC output files.
 
+    parameters : flopy.modflow.ModflowParBc or None
+        Parsed ETS array-parameter definitions (set by :meth:`load` when
+        ``npets > 0`` and parameters are preserved). When present, the writer
+        emits the parameter definition blocks and per-period active-parameter
+        records instead of expanded ETSR arrays. Authoring this from scratch is
+        not supported; see Notes.
+    evtr_parm : dict or None
+        Per-stress-period active-parameter records for ETSR, keyed by 0-based
+        stress period: ``{kper: [(name, instance_or_None), ...]}``. Set by
+        :meth:`load`. A period absent from the dict reuses the previous
+        period's ETSR (``INETSR < 0``).
+
     Notes
     -----
-    Parameters (npets > 0) are supported for ETSR only (same as EVT). PXDP
-    and PETM with parameters are not currently supported.
+    Only the ETSR (max ET rate) array can be parameterized in USG-T
+    (``gwf2ets8u1.f``); ETSS/ETSX/IETS/PXDP/PETM are always plain arrays, so a
+    parameterized ETS file naturally mixes a parameterized ETSR with
+    non-parameterized arrays.
+
+    USG-T reads ``NPETS`` from item 2a and calls ``UPARARRAL`` with ``IN=-1``
+    (``parutl7.f``), so -- unlike MODFLOW-2005 ETS -- there is **no** separate
+    ``PARAMETER N`` line. The writer puts ``NPETS`` in item 2a and follows it
+    with the parameter definition blocks. The loader still tolerates a leading
+    ``PARAMETER`` line for back-compatibility.
+
+    Parameter *preservation* (load -> write -> reload with parameter syntax
+    intact) is supported for ETSR. Parameter *authoring* from scratch
+    (``npets > 0`` with no loaded definitions) raises ``NotImplementedError``.
+    Loading with ``expand_parameters=True`` keeps the older "Expanded valid
+    write" behavior (parameters expanded to arrays, ``NPETS=0`` on output).
 
     Examples
     --------
@@ -109,6 +140,8 @@ class MfUsgEts(Package):
         esfactor=None,
         pxdp=None,
         petm=None,
+        parameters=None,
+        evtr_parm=None,
         extension="ets",
         unitnumber=None,
         filenames=None,
@@ -162,18 +195,28 @@ class MfUsgEts(Package):
 
         self.pxdp = [
             Transient2d(
-                model, get_pak_vals_shape(model, pxdp[i]),
-                np.float32, pxdp[i], name=f"pxdp{i}"
+                model,
+                get_pak_vals_shape(model, pxdp[i]),
+                np.float32,
+                pxdp[i],
+                name=f"pxdp{i}",
             )
             for i in range(nseg_int)
         ]
         self.petm = [
             Transient2d(
-                model, get_pak_vals_shape(model, petm[i]),
-                np.float32, petm[i], name=f"petm{i}"
+                model,
+                get_pak_vals_shape(model, petm[i]),
+                np.float32,
+                petm[i],
+                name=f"petm{i}",
             )
             for i in range(nseg_int)
         ]
+
+        # Preserved MODFLOW array-parameter definitions for ETSR (set by load).
+        self.parameters = parameters
+        self.evtr_parm = evtr_parm if evtr_parm is not None else {}
 
         self.np = 0
         self.parent.add_package(self)
@@ -192,11 +235,14 @@ class MfUsgEts(Package):
 
     def write_file(self, f=None):
         """Write the ETS package file."""
-        if self.npets > 0:
+        preserve = self.npets > 0 and self.parameters is not None
+        if self.npets > 0 and self.parameters is None:
             raise NotImplementedError(
-                "MfUsgEts.write_file cannot preserve ETS parameter definitions. "
-                "Load parameterized ETS files with MfUsgEts.load, which expands "
-                "parameters to arrays and writes NPETS=0."
+                "MfUsgEts.write_file cannot author ETS parameter definitions "
+                "from scratch (npets>0 without loaded parameter data). "
+                "Parameter preservation is supported for files read by "
+                "MfUsgEts.load; for from-scratch input use npets=0 (expanded "
+                "arrays)."
             )
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         close_on_exit = f is None
@@ -214,9 +260,7 @@ class MfUsgEts(Package):
 
         # Item 2b – MXNDETS (unstructured + NETSOP==2 only)
         if not self.parent.structured and self.netsop == 2:
-            mxndets = max(
-                u2d.array.size for _, u2d in self.ievt.transient_2ds.items()
-            )
+            mxndets = max(u2d.array.size for _, u2d in self.ievt.transient_2ds.items())
             f.write(f"{mxndets:10d}\n")
 
         # Item 2c – ESFACTOR(MCOMP) (transport active and IESFACTOR==1)
@@ -232,23 +276,36 @@ class MfUsgEts(Package):
                 f.write(f"{val:10.6f}")
             f.write("\n")
 
+        # Items 3-4: ETS parameter definitions (preserved from load)
+        if preserve:
+            write_array_parameter_defs(f, self.parameters)
+
         nseg_int = max(0, self.netseg - 1)
         use_5a = (self.netsop == 2) or (self.netseg > 1)
 
         # Prepare 1-based layer indices for IEVT output
         if self.netsop == 2:
             ievt_out = {
-                kper: u2d.array + 1
-                for kper, u2d in self.ievt.transient_2ds.items()
+                kper: u2d.array + 1 for kper, u2d in self.ievt.transient_2ds.items()
             }
             ievt_t2d = Transient2d(
-                self.parent, self.ievt.shape, self.ievt.dtype,
-                ievt_out, self.ievt.name,
+                self.parent,
+                self.ievt.shape,
+                self.ievt.dtype,
+                ievt_out,
+                self.ievt.name,
             )
 
         for n in range(nper):
             insurf, surf_str = self.surf.get_kper_entry(n)
-            inevtr, evtr_str = self.evtr.get_kper_entry(n)
+            if preserve:
+                # ETSR is defined by active parameters: INETSR = count (>=1),
+                # or -1 to reuse the previous period.
+                recs = self.evtr_parm.get(n)
+                inevtr = len(recs) if recs else -1
+                evtr_str = None
+            else:
+                inevtr, evtr_str = self.evtr.get_kper_entry(n)
             inexdp, exdp_str = self.exdp.get_kper_entry(n)
 
             inievt = -1
@@ -279,7 +336,11 @@ class MfUsgEts(Package):
             if insurf >= 0:
                 f.write(surf_str)
             if inevtr >= 0:
-                f.write(evtr_str)
+                if preserve:
+                    # active-parameter records replace the ETSR array
+                    write_active_array_parameters(f, self.evtr_parm[n])
+                else:
+                    f.write(evtr_str)
             if inexdp >= 0:
                 f.write(exdp_str)
             if self.netsop == 2 and inievt >= 0:
@@ -301,7 +362,7 @@ class MfUsgEts(Package):
     # ------------------------------------------------------------------
 
     @classmethod
-    def load(cls, f, model, nper=None, ext_unit_dict=None):
+    def load(cls, f, model, nper=None, ext_unit_dict=None, expand_parameters=False):
         """
         Load an existing ETS package file.
 
@@ -315,6 +376,13 @@ class MfUsgEts(Package):
             Number of stress periods (obtained from model if None).
         ext_unit_dict : dict or None
             External unit dictionary from parsenamefile.
+        expand_parameters : bool
+            When ``False`` (default) and the file is parameterized
+            (``NPETS > 0``), the ETSR array parameters are *preserved*: the
+            returned package keeps ``npets`` and writes the parameter syntax
+            back. When ``True``, parameters are expanded to concrete ETSR
+            arrays and the package writes ``NPETS=0`` (the older "Expanded
+            valid write" behavior).
 
         Returns
         -------
@@ -385,6 +453,7 @@ class MfUsgEts(Package):
             u2d_shape = (nrow, ncol)
 
         surf_d, evtr_d, exdp_d, ievt_d = {}, {}, {}, {}
+        evtr_parm_d = {}
         pxdp_d = [{} for _ in range(nseg_int)]
         petm_d = [{} for _ in range(nseg_int)]
 
@@ -434,17 +503,12 @@ class MfUsgEts(Package):
                         f, model, u2d_shape, np.float32, "evtr", ext_unit_dict
                     )
                 else:
-                    parm_dict = {}
-                    for _ in range(inevtr):
-                        tl = f.readline().strip().split()
-                        pname = tl[0].lower()[:10]
-                        try:
-                            c2 = tl[1].lower()
-                            inst = pak_parms.bc_parms[pname][1]
-                            iname = c2 if c2 in inst else "static"
-                        except Exception:
-                            iname = "static"
-                        parm_dict[pname] = iname
+                    records = read_active_array_parameters(f, inevtr, pak_parms)
+                    evtr_parm_d[iper] = records
+                    parm_dict = {
+                        name.lower(): (inst if inst else "static")
+                        for name, inst in records
+                    }
                     cur_evtr = mfparbc.parameter_bcfill(
                         model, u2d_shape, parm_dict, pak_parms
                     )
@@ -466,9 +530,7 @@ class MfUsgEts(Package):
                 t_ievt = Util2d.load(
                     f, model, u2d_shape, np.int32, "ievt", ext_unit_dict
                 )
-                cur_ievt = Util2d(
-                    model, u2d_shape, np.int32, t_ievt.array - 1, "ievt"
-                )
+                cur_ievt = Util2d(model, u2d_shape, np.int32, t_ievt.array - 1, "ievt")
             if netsop == 2:
                 ievt_d[iper] = cur_ievt
 
@@ -476,22 +538,14 @@ class MfUsgEts(Package):
             if nseg_int > 0 and insgdf >= 0:
                 for i in range(nseg_int):
                     if model.verbose:
-                        print(
-                            f"   loading pxdp seg {i} "
-                            f"stress period {iper + 1:3d}..."
-                        )
+                        print(f"   loading pxdp seg {i} stress period {iper + 1:3d}...")
                     cur_pxdp[i] = Util2d.load(
-                        f, model, u2d_shape, np.float32,
-                        f"pxdp{i}", ext_unit_dict
+                        f, model, u2d_shape, np.float32, f"pxdp{i}", ext_unit_dict
                     )
                     if model.verbose:
-                        print(
-                            f"   loading petm seg {i} "
-                            f"stress period {iper + 1:3d}..."
-                        )
+                        print(f"   loading petm seg {i} stress period {iper + 1:3d}...")
                     cur_petm[i] = Util2d.load(
-                        f, model, u2d_shape, np.float32,
-                        f"petm{i}", ext_unit_dict
+                        f, model, u2d_shape, np.float32, f"petm{i}", ext_unit_dict
                     )
 
             for i in range(nseg_int):
@@ -510,9 +564,16 @@ class MfUsgEts(Package):
             )
             _, filenames[1] = model.get_ext_dict_attr(ext_unit_dict, unit=ipakcb)
 
-        # Parameter definitions are expanded to concrete ETSR arrays on load.
-        # The returned package writes a valid non-parametric ETS file.
-        npets_out = 0 if pak_parms is not None else npets
+        # If the file is parameterized, either preserve the parameter syntax
+        # (default) or expand it to concrete ETSR arrays (expand_parameters).
+        if pak_parms is not None and not expand_parameters:
+            npets_out = npets
+            parameters = pak_parms
+            evtr_parm = evtr_parm_d
+        else:
+            npets_out = 0 if pak_parms is not None else npets
+            parameters = None
+            evtr_parm = None
 
         return cls(
             model,
@@ -528,6 +589,8 @@ class MfUsgEts(Package):
             esfactor=esfactor,
             pxdp=pxdp_d if nseg_int > 0 else None,
             petm=petm_d if nseg_int > 0 else None,
+            parameters=parameters,
+            evtr_parm=evtr_parm,
             unitnumber=unitnumber,
             filenames=filenames,
         )

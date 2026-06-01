@@ -201,7 +201,8 @@ can be built from Python/numpy without first loading an existing model.
   `ETFACTOR`, and the negative cases; plus a USG-T 2.7 executable smoke
   (`test_usgt_exe_evt_from_scratch`). **Decision: kept `✅ (intentionally not
   Full)`** — gaps: ETS zonal time-series (unsupported) and `NPEVT` parameters
-  (expanded-valid-write, like ETS). OC/MDT/LAK untouched. See
+  (expanded-valid-write; note ETS array parameters are now *preserved* as of
+  Stage 4.4A, but EVT's `NPEVT` still expands). OC/MDT/LAK untouched. See
   `USGT_STAGE4_EVT_FULLNESS.md`. `-k mfusgevt` **7 passed**, focused suite
   **144 passed**, exe **4 passed**, combined **148 passed** under the USG-T 2.7
   ARM binary.
@@ -255,15 +256,32 @@ honest, upstream-ready USG-T 2.7 story.
 - **Card 1 — status audit:** added a per-package decision table to
   `USGT_roadmap.md`; relabeled `TIB` and `GSF` as `Raw/text round-trip` (no
   semantic constructor by design) rather than a bare checkmark.
-- **Card 2 — parameter strategy (ETS/HFB/SGB/QRT/DRT):** decision is to keep
-  `Expanded valid write` (ETS array parameters expand to concrete arrays and
-  write `NPETS=0`) and explicit `NotImplementedError` for list parameters
-  (`NPSGB`/`NPQRT`/`NPDRT` via `UPARLSTAL`, `NPHFB`). Parameter *preservation*
-  is deferred by design (no real target model needs it). Fortran audit:
-  `parutl7.f` (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB` list params) and
-  `mfparbc` (ETS/EVT array params). Tests: a new parameterized-ETS
-  load→expand→`NPETS=0` test plus the existing explicit-failure tests for all
-  four list-parameter packages. Nothing writes incomplete parametric syntax.
+- **Card 2 — parameter strategy (ETS/HFB/SGB/QRT/DRT):** original decision was
+  to keep `Expanded valid write` (ETS array parameters expand to concrete arrays
+  and write `NPETS=0`) and explicit `NotImplementedError` for list parameters
+  (`NPSGB`/`NPQRT`/`NPDRT` via `UPARLSTAL`, `NPHFB`). Fortran audit: `parutl7.f`
+  (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB` list params) and `mfparbc` (ETS/EVT
+  array params). Nothing writes incomplete parametric syntax. → **Superseded for
+  ETS by Stage 4.4A** (below): ETS array parameters are now *preserved* on
+  write/reload; the list-parameter packages still keep their explicit failures.
+- **Stage 4.4A — ETS array-parameter preservation (executed):** ETS no longer
+  expands by default — `MfUsgEts.load` preserves the parsed parameter
+  definitions (`self.parameters`) and per-period activation records
+  (`self.evtr_parm`), and `write_file` re-emits `NPETS>0` in item 2a, the
+  definition blocks, and the activation records (incl. `INSTANCES`), while
+  ETSS/ETSX/IETS/PXDP/PETM stay plain arrays (the mix the Fortran allows). USG-T
+  reads `NPETS` from item 2a (`UPARARRAL` called with `IN=-1`), so no
+  `PARAMETER` line is written. New shared helper
+  `flopy/mfusg/_usgt_parameters.py` adds the array-parameter **write** side and
+  reuses `ModflowParBc` as the parser (no second parser; no ad-hoc strings).
+  Opt-in `expand_parameters=True` keeps the legacy expanded path; from-scratch
+  parameter *authoring* (`npets>0` without loaded defs) still raises
+  `NotImplementedError`, so ETS stays ⚠️ Partial / not `Full`. Tests: `-k
+  mfusgets` **10 passed** (4 new preservation/instances tests; the old
+  expand test now opts in via `expand_parameters=True`); focused **169**, exe
+  **4**, combined **173** (ARM). The list-parameter write path (SGB/DRT/QRT/HFB)
+  is designed in `USGT_STAGE4_04_PARAMETERS.md` but not yet implemented. See
+  `USGT_STAGE4_04_PARAMETERS_ETS.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

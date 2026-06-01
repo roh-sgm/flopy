@@ -395,37 +395,42 @@ FloPy class: `MfUsgEts`
 
 Fortran: `gwf2ets8u1.f`
 
-Status: expanded valid write for parameterized input; semantic for
-non-parametric ETS. **Authoring tests added** (2026-05-30): NETSEG=1,
-NETSEG>1, NETSOP=2, IESFACTOR, and explicit `npets>0` write failure.
+Status: **parameter-preserving for the ETSR array parameter (Stage 4.4A,
+executed)**; semantic for non-parametric ETS. **Authoring tests added**
+(2026-05-30): NETSEG=1, NETSEG>1, NETSOP=2, IESFACTOR, and explicit `npets>0`
+write failure.
 
-Problem:
+Resolution (Stage 4.4A): `MfUsgEts.load` now *preserves* ETSR array parameters
+by default — it keeps the parsed definitions (`self.parameters`, a
+`ModflowParBc`) and the per-period activation records (`self.evtr_parm`), and
+`write_file` re-emits `NPETS>0` in item 2a, the definition blocks, and the
+activation records (with `INSTANCES`), while ETSS/ETSX/IETS/PXDP/PETM stay plain
+arrays. USG-T reads `NPETS` from item 2a (`UPARARRAL` is called with `IN=-1`),
+so there is no `PARAMETER` line. The shared write helper is
+`flopy/mfusg/_usgt_parameters.py` (reuses `ModflowParBc`; no second parser).
+Opt-in `expand_parameters=True` keeps the legacy expanded path (`NPETS=0`).
+Still not `Full`: from-scratch parameter *authoring* (`npets>0` without loaded
+defs) raises `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md`.
 
-- Parameterized files can be loaded and expanded.
-- Original parameter syntax is not preserved.
-- Programmatic `NPETS>0` should not write misleading incomplete syntax.
+Required tests (all green, `-k mfusgets` 10 passed):
 
-Tasks:
-
-- Decide product direction: preserve parameter syntax or formally keep expanded
-  valid write as v1.
-- If preserving parameters, design parameter object storage and active-parameter
-  records.
-- If not preserving parameters, ensure explicit failure paths stay covered.
-
-Required tests:
-
-- `NETSEG=1` authoring.
-- `NETSEG>1` authoring.
-- `NETSOP=2` authoring.
-- `IESFACTOR` authoring.
-- Parameterized load writes expanded `NPETS=0`.
-- Programmatic `npets>0` fails explicitly.
+- `NETSEG=1` authoring. (Done.)
+- `NETSEG>1` authoring. (Done.)
+- `NETSOP=2` authoring. (Done.)
+- `IESFACTOR` authoring. (Done.)
+- Parameterized load **preserves** (`npets`, defs, per-SP records). (Done.)
+- Write **preserves** parameter syntax + mixes plain ETSS/ETSX arrays. (Done.)
+- Reload of the preserved file round-trips. (Done.)
+- Time-varying parameter (`INSTANCES`) round-trips. (Done.)
+- Expanded fallback (`expand_parameters=True`) writes `NPETS=0`. (Done —
+  regression.)
+- Programmatic `npets>0` (no defs) fails explicitly. (Done.)
 
 Acceptance:
 
-- Users can author non-parametric ETS from scratch.
-- Parameter behavior is explicit and documented.
+- Users can author non-parametric ETS from scratch. (Yes.)
+- Loaded ETSR parameters are preserved on write/reload; from-scratch parameter
+  authoring is an explicit, documented `NotImplementedError`. (Yes.)
 
 ### HFB - parameterized barriers
 

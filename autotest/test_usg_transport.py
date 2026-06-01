@@ -4208,11 +4208,12 @@ def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
 # --- Stage 3 Card 2: parameter strategy (Expanded valid write for ETS) ----
 
 def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
-    """A parameterized ETS file loads, expands the parameter to a concrete
-    ETSR array, and writes valid non-parametric input (NPETS=0, no PARAMETER).
+    """Opt-in `expand_parameters=True` keeps the legacy Expanded-valid-write path.
 
-    This is the documented `Expanded valid write` policy: ETS reads MODFLOW
-    array-parameter syntax but does not preserve it on output.
+    A parameterized ETS file loads, expands the parameter to a concrete ETSR
+    array, and writes valid non-parametric input (NPETS=0, no PARAMETER). This
+    is the documented fallback; preservation (the new default) is tested
+    separately.
     """
     from flopy.mfusg import MfUsgEts
     from flopy.modflow import ModflowDis
@@ -4231,7 +4232,7 @@ def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
         "etsrate\n"              # ETSR via parameter "etsrate"
         "CONSTANT 5.0\n"         # ETSX extinction depth
     )
-    ets = MfUsgEts.load(str(param_ets), ml, nper=1)
+    ets = MfUsgEts.load(str(param_ets), ml, nper=1, expand_parameters=True)
     # Parameter expanded on load -> NPETS reset to 0, ETSR filled with parval.
     assert ets.npets == 0
     assert np.allclose(ets.evtr[0].array, 5.0e-4)
@@ -4243,6 +4244,122 @@ def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
     assert "PARAMETER" not in content
     item2a = next(ln for ln in content.splitlines() if not ln.startswith("#"))
     assert item2a.split()[2] == "0"  # NPETS field expanded to 0
+
+
+# --- Stage 4.4A: ETS MODFLOW array-parameter preservation -------------------
+
+
+def _param_ets_model(function_tmpdir, name):
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
+    return ml
+
+
+# Canonical single-parameter ETS file (USG-T style: NPETS in item 2a, no
+# PARAMETER line). ETSR is parameterized; ETSS/ETSX are plain arrays.
+_PARAM_ETS_TEXT = (
+    "# parameterized ETS (NPETS=1)\n"
+    "1 0 1 1 0\n"              # NETSOP IETSCB NPETS NETSEG IESFACTOR
+    "etsrate ets 5.0E-4 1\n"   # param: name type value nclu
+    "NONE ALL\n"               # cluster: no multiplier, all cells
+    "0 1 0\n"                  # SP1: INSURF INETSR INEXDP (INETSR=1 param)
+    "CONSTANT 10.0\n"          # ETSS surface
+    "etsrate\n"                # ETSR via parameter "etsrate"
+    "CONSTANT 5.0\n"           # ETSX extinction depth
+)
+
+
+def test_mfusgets_parameterized_load_preserves(function_tmpdir):
+    """Default load preserves ETS array parameters (npets, defs, per-SP record)."""
+    from flopy.mfusg import MfUsgEts
+
+    p = function_tmpdir / "param.ets"
+    p.write_text(_PARAM_ETS_TEXT)
+    ets = MfUsgEts.load(str(p), _param_ets_model(function_tmpdir, "p1"), nper=1)
+    assert ets.npets == 1
+    assert ets.parameters is not None
+    assert "etsrate" in ets.parameters.bc_parms
+    # per-stress-period active-parameter record preserved
+    assert ets.evtr_parm[0] == [("etsrate", None)]
+    # the parameter value is still expanded into the in-memory ETSR array
+    assert np.allclose(ets.evtr[0].array, 5.0e-4)
+
+
+def test_mfusgets_parameterized_write_preserves_syntax(function_tmpdir):
+    """Write keeps NPETS>0 + parameter syntax and mixes a parameterized ETSR
+    with plain ETSS/ETSX arrays; no PARAMETER line (NPETS is in item 2a)."""
+    from flopy.mfusg import MfUsgEts
+
+    p = function_tmpdir / "param.ets"
+    p.write_text(_PARAM_ETS_TEXT)
+    ets = MfUsgEts.load(str(p), _param_ets_model(function_tmpdir, "p2"), nper=1)
+    out = function_tmpdir / "preserved.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    content = out.read_text()
+
+    # NPETS preserved in item 2a; no MODFLOW-2005 PARAMETER line
+    item2a = next(ln for ln in content.splitlines() if not ln.startswith("#"))
+    assert item2a.split()[2] == "1"
+    assert "PARAMETER" not in content
+    # parameter definition block + cluster
+    assert "etsrate ets 5.0E-4 1" in content
+    assert "NONE ALL" in content
+    # the parameterized ETSR mixes with plain ETSS/ETSX arrays
+    lines = [ln.strip() for ln in content.splitlines()]
+    assert "etsrate" in lines  # active-parameter record (replaces ETSR array)
+    assert sum(ln.startswith("CONSTANT") for ln in lines) == 2  # ETSS + ETSX
+
+
+def test_mfusgets_parameterized_roundtrip(function_tmpdir):
+    """Load -> write -> reload keeps the parameter syntax and value intact."""
+    from flopy.mfusg import MfUsgEts
+
+    p = function_tmpdir / "param.ets"
+    p.write_text(_PARAM_ETS_TEXT)
+    ets = MfUsgEts.load(str(p), _param_ets_model(function_tmpdir, "r1"), nper=1)
+    out = function_tmpdir / "preserved.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+
+    re = MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "r2"), nper=1)
+    assert re.npets == 1
+    assert re.evtr_parm[0] == [("etsrate", None)]
+    assert re.parameters.bc_parms["etsrate"][0]["parval"] == "5.0E-4"
+    assert np.allclose(re.evtr[0].array, 5.0e-4)
+
+
+def test_mfusgets_parameter_instances_roundtrip(function_tmpdir):
+    """A time-varying ETS parameter (INSTANCES) preserves its active instance."""
+    from flopy.mfusg import MfUsgEts
+
+    p = function_tmpdir / "inst.ets"
+    p.write_text(
+        "# ETS with two instances\n"
+        "1 0 1 1 0\n"
+        "etsrate ets 5.0E-4 1 INSTANCES 2\n"
+        "spring\n"
+        "NONE ALL\n"
+        "fall\n"
+        "NONE ALL\n"
+        "0 1 0\n"
+        "CONSTANT 10.0\n"
+        "etsrate spring\n"
+        "CONSTANT 5.0\n"
+    )
+    ets = MfUsgEts.load(str(p), _param_ets_model(function_tmpdir, "in1"), nper=1)
+    assert ets.evtr_parm[0] == [("etsrate", "spring")]
+    out = function_tmpdir / "inst_out.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    content = out.read_text()
+    assert "INSTANCES 2" in content
+    assert "etsrate spring" in content
+
+    re = MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "in2"), nper=1)
+    assert re.evtr_parm[0] == [("etsrate", "spring")]
 
 
 # --- Stage 3 Card 7: recipient-node U1DINT controls (INTERNAL/CONSTANT) -----

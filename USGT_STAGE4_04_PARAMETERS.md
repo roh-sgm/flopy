@@ -5,14 +5,38 @@ USG-T packages that currently expand parameters or fail explicitly.
 
 ## Current State
 
-- `ETS`: parameterized input loads and writes expanded non-parametric arrays with
-  `NPETS=0`.
+- `ETS`: **parameter-preserving (Stage 4.4A, executed)** — array parameters for
+  the ETSR rate now load → write → reload with their parameter syntax intact
+  (`NPETS>0` in item 2a, definition blocks, per-period activation records,
+  including `INSTANCES`). An opt-in expanded fallback (`expand_parameters=True`)
+  keeps the old `NPETS=0` behavior; from-scratch parameter *authoring* still
+  raises `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md`.
 - `HFB`: `NPHFB>0` fails explicitly.
 - `SGB`: `NPSGB>0` fails explicitly.
 - `QRT`: `NPQRT>0` fails explicitly.
 - `DRT`: `NPDRT>0` fails explicitly.
 
-This is honest and safe, but not literal full support.
+This is honest and safe. ETS array-parameter preservation is now implemented;
+the list-parameter packages remain explicit-fail pending the list-parameter
+write path.
+
+## Shared abstraction (Stage 4.4A)
+
+`flopy/mfusg/_usgt_parameters.py` reuses the already-shared
+`flopy.modflow.ModflowParBc` *parser* and adds the missing **write** side for
+the **array-parameter** form (`UPARARRRP`/`UPARARRSUB2`):
+`write_array_parameter_defs`, `read_active_array_parameters`,
+`write_active_array_parameters`. The parsed `ModflowParBc.bc_parms` dict is the
+structured representation preserved on the package — no ad-hoc string
+preservation, no second parser.
+
+The analogous **list-parameter** write path (`UPARLSTRP`/`UPARLSTSUB`, for
+SGB/DRT/QRT and HFB-style barriers) is the next package step. It would: parse
+the `PARAMETER NP MXL` header, store the per-parameter `NLST` list rows plus
+multiplier (`PARVAL`) and instances, and on write emit the definition blocks
+plus per-period activation records (scaling rows by the parameter value on
+expansion, per `UPARLSTSUB`). Until implemented, those packages keep their
+explicit `NotImplementedError`.
 
 ## Fortran Sources
 
@@ -43,7 +67,8 @@ Package sources:
 
 ## Recommended Implementation Order
 
-1. ETS array parameters, because partial expansion already exists.
+1. ETS array parameters, because partial expansion already exists. **DONE
+   (Stage 4.4A).**
 2. HFB named parameters.
 3. SGB list parameters.
 4. DRT list parameters.
@@ -68,8 +93,11 @@ Update:
 - `USGT_PACKAGE_BACKLOG.md`,
 - `USGT_improvements.md`.
 
-Promote only the package modes that preserve parameter syntax. If ETS continues
-to expand, leave it as `Expanded valid write`.
+Promote only the package modes that preserve parameter syntax. ETS now
+**preserves** ETSR array parameters (Stage 4.4A) and is documented as
+parameter-preserving for that path; it is still not `Full` because from-scratch
+parameter authoring is unsupported. The list-parameter packages stay
+explicit-fail until their write path lands.
 
 ## Validation
 
