@@ -3680,20 +3680,274 @@ def test_mfusgdrt_nam_registry():
     assert ml.mfnam_packages["drt"] is MfUsgDrt
 
 
-def test_mfusgdrt_parameters_fail_explicitly(function_tmpdir):
-    """Named DRT parameters (NPDRT>0) raise NotImplementedError on load."""
+# --- Stage 4.4D: DRT MODFLOW list-parameter preservation -------------------
+#
+# DRT is internally consistent in USG-T 2.7 (definitions and activations both
+# use PARTYP='DRT': gwf2drt8u.f:135 / :1108), unlike SGB. So active DRT
+# parameters are valid and preserved (load -> write -> reload), including their
+# RETURNFLOW recipients / spreading blocks. INSTANCES and from-scratch parameter
+# authoring are unsupported (explicit NotImplementedError).
+
+
+def _drt_model(function_tmpdir, name, nper=1):
     from flopy.modflow import ModflowDis
 
-    drt_param = function_tmpdir / "param.drt"
-    drt_param.write_text(
-        "# drt params\n"
-        "        10 0 1 5 RETURNFLOW\n"
-        " 0    Stress Period 1\n"
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=nper)
+    return ml
+
+
+def test_mfusgdrt_parameterized_roundtrip(function_tmpdir):
+    """DRT NPDRT>0 preserves item-1 NPDRT/MXL, the definition (with its inline
+    RETURNFLOW recipient), and the per-SP active record; 0-based / 1-based."""
+    p = function_tmpdir / "param.drt"
+    p.write_text(
+        "# drt param\n"
+        "         1 0 1 5 RETURNFLOW\n"  # MXADRT IDRTCB NPDRT MXL RETURNFLOW
+        "drtpar DRT 2.0 1\n"  # PARNAM PARTYP PARVAL NLST
+        " 11  5.000000e+00  1.000000e+01  9  7.000000e-01\n"  # NR=9 inline recip
+        " 1 1    Stress Period 1\n"  # ITMP NP
+        " 21  4.000000e+00  2.000000e+01  0\n"  # non-parametric drain
+        "drtpar\n"  # active parameter
     )
-    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
-    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-    with pytest.raises(NotImplementedError):
-        MfUsgDrt.load(str(drt_param), ml, nper=1, ext_unit_dict={})
+    ml = _drt_model(function_tmpdir, "p1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert drt.mxl == 5
+    pdef = drt.parameters["drtpar"]
+    assert pdef["partyp"] == "DRT" and pdef["parval"] == "2.0" and pdef["nlst"] == 1
+    assert list(pdef["data"]["node"]) == [10]  # 0-based internal
+    assert pdef["recipient_nodes"] == [[8]]  # 1-based 9 -> 0-based 8
+    assert drt.active_params[0] == ["drtpar"]
+    assert list(drt.stress_period_data[0]["node"]) == [20]
+
+    out = function_tmpdir / "param_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    content = out.read_text()
+    item1 = next(ln for ln in content.splitlines() if not ln.startswith("#"))
+    assert item1.split()[:4] == ["1", "0", "1", "5"]  # MXADRT IDRTCB NPDRT MXL
+    assert "drtpar DRT 2.0 1" in content
+    assert "drtpar" in [ln.strip() for ln in content.splitlines()]  # activation
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "p2"), nper=1)
+    assert re.mxl == 5 and list(re.parameters) == ["drtpar"]
+    assert list(re.parameters["drtpar"]["data"]["node"]) == [10]
+    assert re.parameters["drtpar"]["recipient_nodes"] == [[8]]
+    assert re.active_params[0] == ["drtpar"]
+    assert list(re.stress_period_data[0]["node"]) == [20]
+
+
+def test_mfusgdrt_parameter_spread_recipients(function_tmpdir):
+    """A parameter definition row keeps its SPREAD (multi-node U1DINT) recipients,
+    plus CHANGEC and AUX, through load -> write -> reload."""
+    p = function_tmpdir / "spread.drt"
+    p.write_text(
+        "# drt spread param\n"
+        "         1 0 1 10 RETURNFLOW CHANGEC AUX C01\n"
+        "dp DRT 2.0 1\n"
+        " 11  5.000000e+00  1.000000e+01  -2  7.000000e-01  3  9.000000e-01\n"
+        "INTERNAL  1  (FREE)  -1\n"
+        " 21 22\n"
+        " 1 1    Stress Period 1\n"
+        " 31  4.000000e+00  2.000000e+01  0  0.0  0  1.000000e-01\n"
+        "dp\n"
+    )
+    ml = _drt_model(function_tmpdir, "s1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    pdef = drt.parameters["dp"]
+    assert pdef["recipient_nodes"] == [[20, 21]]  # 0-based spreading nodes
+    assert list(pdef["data"]["idchngtyp"]) == [3]
+    assert np.isclose(pdef["data"]["C01"][0], 0.9)
+
+    out = function_tmpdir / "spread_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "s2"), nper=1)
+    assert re.parameters["dp"]["recipient_nodes"] == [[20, 21]]
+    assert list(re.parameters["dp"]["data"]["idchngtyp"]) == [3]
+    assert np.isclose(re.parameters["dp"]["data"]["C01"][0], 0.9)
+
+
+def test_mfusgdrt_parameter_mixed_and_active(function_tmpdir):
+    """A stress period mixes non-parametric drains (ITMP) with active parameters
+    (NP); the per-SP header carries ITMP NP and both round-trip."""
+    p = function_tmpdir / "mix.drt"
+    p.write_text(
+        "# drt mixed\n"
+        "         2 0 1 5 RETURNFLOW\n"
+        "dp DRT 2.0 1\n"
+        " 5  5.000000e+00  1.000000e+01  0\n"
+        " 2 1    Stress Period 1\n"
+        " 21  4.000000e+00  2.000000e+01  0\n"
+        " 22  4.000000e+00  3.000000e+01  0\n"
+        "dp\n"
+    )
+    ml = _drt_model(function_tmpdir, "mx1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert list(drt.stress_period_data[0]["node"]) == [20, 21]
+    assert drt.active_params[0] == ["dp"]
+
+    out = function_tmpdir / "mix_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    sp_line = next(
+        ln for ln in out.read_text().splitlines() if "Stress Period 1" in ln
+    )
+    assert sp_line.split()[:2] == ["2", "1"]  # ITMP NP
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "mx2"), nper=1)
+    assert list(re.stress_period_data[0]["node"]) == [20, 21]
+    assert re.active_params[0] == ["dp"]
+
+
+def test_mfusgdrt_parameter_reuse_with_active(function_tmpdir):
+    """ITMP<0 reuses the previous period's non-parametric drains while a new
+    active parameter applies (NP>0); data round-trips."""
+    p = function_tmpdir / "reuse.drt"
+    p.write_text(
+        "# drt reuse\n"
+        "         1 0 1 5 RETURNFLOW\n"
+        "dp DRT 1.0 1\n"
+        " 5  5.000000e+00  1.000000e+01  0\n"
+        " 1 1    Stress Period 1\n"
+        " 21  4.000000e+00  2.000000e+01  0\n"
+        "dp\n"
+        " -1 1    Stress Period 2\n"
+        "dp\n"
+    )
+    ml = _drt_model(function_tmpdir, "r1", nper=2)
+    drt = MfUsgDrt.load(str(p), ml, nper=2, ext_unit_dict={})
+    assert list(drt.stress_period_data[1]["node"]) == [20]  # reused from SP1
+    assert drt.active_params[1] == ["dp"]
+
+    out = function_tmpdir / "reuse_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "r2", nper=2), nper=2)
+    assert list(re.stress_period_data[1]["node"]) == [20]
+    assert re.active_params[1] == ["dp"]
+
+
+def test_mfusgdrt_parameter_sfac_scales_cond(function_tmpdir):
+    """SFAC inside a parameter's row block scales COND (Fortran ISCLOC=5)."""
+    p = function_tmpdir / "sfacp.drt"
+    p.write_text(
+        "# drt sfac param\n"
+        "         0 0 1 5 RETURNFLOW\n"
+        "dp DRT 1.0 1\n"
+        " SFAC 3.0\n"
+        " 11  5.000000e+00  1.000000e+01  0\n"
+        " 0 1    Stress Period 1\n"
+        "dp\n"
+    )
+    ml = _drt_model(function_tmpdir, "sf1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert np.isclose(drt.parameters["dp"]["data"]["cond"][0], 30.0)  # 10 * SFAC 3
+
+
+def test_mfusgdrt_parameter_instances_unsupported(function_tmpdir):
+    """DRT parameter INSTANCES are Fortran-supported but not yet by FloPy."""
+    p = function_tmpdir / "inst.drt"
+    p.write_text(
+        "# drt instances\n"
+        "         0 0 1 10 RETURNFLOW\n"
+        "dp DRT 1.0 2 INSTANCES 2\n"
+        "spring\n 11  5.0e0  1.0e1  0\n"
+        "fall\n 12  5.0e0  1.0e1  0\n"
+        " 0 1    Stress Period 1\n"
+        "dp spring\n"
+    )
+    ml = _drt_model(function_tmpdir, "in1")
+    with pytest.raises(NotImplementedError, match="INSTANCES"):
+        MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+
+
+def test_mfusgdrt_parameter_from_scratch_fails(function_tmpdir):
+    """Active parameters with no loaded definitions fail explicitly, no file."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "fs"),
+        options=["RETURNFLOW"],
+        active_params={0: ["p1"]},
+    )
+    out = function_tmpdir / "fs.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(NotImplementedError, match="from scratch"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_mxl_too_small_fails(function_tmpdir):
+    """MXL below the total parameter list entries raises ValueError, no file."""
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True, changec=False)
+    rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {
+            "partyp": "DRT", "parval": "1.0", "nlst": 1,
+            "data": rows, "recipient_nodes": [[]],
+        },
+        "p2": {
+            "partyp": "DRT", "parval": "1.0", "nlst": 1,
+            "data": rows, "recipient_nodes": [[]],
+        },
+    }
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "mx"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        mxl=1,
+    )
+    out = function_tmpdir / "mx.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="MXL"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_inconsistent_fails(function_tmpdir):
+    """A definition whose nlst != len(data) raises ValueError, no file."""
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True, changec=False)
+    rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {
+            "partyp": "DRT", "parval": "1.0", "nlst": 2,  # declares 2, has 1
+            "data": rows, "recipient_nodes": [[]],
+        }
+    }
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "ic"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        mxl=5,
+    )
+    out = function_tmpdir / "ic.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="nlst"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_active_undefined_fails(function_tmpdir):
+    """An active parameter name not present in definitions raises ValueError."""
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True, changec=False)
+    rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {
+            "partyp": "DRT", "parval": "1.0", "nlst": 1,
+            "data": rows, "recipient_nodes": [[]],
+        }
+    }
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "ud"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        mxl=5,
+        active_params={0: ["px"]},  # not defined
+    )
+    out = function_tmpdir / "ud.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="not defined"):
+        drt.write_file()
+    assert not out.exists()
 
 
 # ---------------------------------------------------------------------------

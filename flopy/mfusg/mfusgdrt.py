@@ -38,9 +38,24 @@ Constructing ``MfUsgDrt`` on a structured (DIS) model raises
 structured DRT. (On load, ``MfUsgDrt.load`` delegates structured files to
 ``ModflowDrt.load``, which returns a base-class object.)
 
+Named parameters (``NPDRT > 0``) are **preserved** (load -> write -> reload) as of
+Stage 4.4D. DRT is internally consistent in USG-T 2.7: definitions and
+activations both use ``PARTYP='DRT'`` (``UPARLSTRP`` at ``gwf2drt8u.f:135`` and
+``SGWF2DRT8LS`` at ``gwf2drt8u.f:1108``), so an active DRT parameter is valid
+(unlike SGB, whose ``'SGB'`` vs ``'G'`` mismatch aborts the run). The
+``PARAMETER`` count lives in item 1 (``MXADRT IDRTCB NPDRT MXL``); each parameter
+owns ``NLST`` drain rows (with their RETURNFLOW recipients / spreading blocks),
+and its value scales ``COND`` (Fortran ``IPVL=5``). Per stress period, ``ITMP NP``
+gives the non-parametric count and the number of active parameters; each
+activation is a parameter name.
+
 Not supported (explicit failure rather than partial write):
 
-* Named parameters (``NPDRT > 0``).
+* Parameter ``INSTANCES`` (``NUMINST>0``): the Fortran supports them, but FloPy
+  does not yet (instances combined with per-row recipient lists) -> load raises
+  ``NotImplementedError``.
+* From-scratch parameter authoring (active parameters with no loaded
+  definitions) -> ``NotImplementedError``.
 * ``EXTERNAL`` / ``OPEN/CLOSE`` spreading-node lists.
 """
 
@@ -49,6 +64,12 @@ import numpy as np
 from ..modflow.mfdrt import ModflowDrt
 from ..pakbase import Package
 from ._usgt_list import begin_list_block
+from ._usgt_parameters import (
+    read_active_list_parameters,
+    read_list_parameter_header,
+    write_active_list_parameters,
+    write_list_parameter_header,
+)
 from ._usgt_returnflow import read_u1dint_list, write_u1dint_list
 from .mfusg import MfUsg
 
@@ -94,6 +115,9 @@ class MfUsgDrt(ModflowDrt):
         recipient_nodes=None,
         dtype=None,
         options=None,
+        parameters=None,
+        mxl=0,
+        active_params=None,
         extension="drt",
         unitnumber=None,
         filenames=None,
@@ -158,6 +182,15 @@ class MfUsgDrt(ModflowDrt):
         }
         self.recipient_nodes = recipient_nodes or {}
 
+        # Preserved DRT list-parameter state (set by load when NPDRT > 0):
+        #   parameters: {name: {"partyp", "parval", "nlst", "data", "recipient_nodes"}}
+        #     (rows 0-based; recipient_nodes is one 0-based list per definition row)
+        #   mxl:        MXL from item 1 (max parameter list entries)
+        #   active_params: {kper: [name, ...]} active parameters per stress period
+        self.parameters = parameters
+        self.mxl = mxl
+        self.active_params = active_params if active_params is not None else {}
+
         if add_package:
             self.parent.add_package(self)
 
@@ -213,7 +246,7 @@ class MfUsgDrt(ModflowDrt):
         return n
 
     def _aux_field_names(self):
-        return list(self.dtype.names[self._base_field_count():])
+        return list(self.dtype.names[self._base_field_count() :])
 
     def _to_recarray(self, data):
         if data is None:
@@ -248,47 +281,136 @@ class MfUsgDrt(ModflowDrt):
             )
         return recips
 
+    def _validate_parameter_write(self):
+        """Validate preserved DRT parameter state before a parameterized write.
+
+        Raises ``NotImplementedError`` for from-scratch authoring (active
+        parameters with no loaded definitions) and ``ValueError`` for
+        inconsistent definitions, so a parameterized item 1 is never written
+        without a complete, consistent body. Validation runs before the file is
+        opened, so no partial file is produced.
+        """
+        if not self.parameters:
+            raise NotImplementedError(
+                "MfUsgDrt.write_file cannot author DRT parameter definitions "
+                "from scratch (active parameters without loaded definitions). "
+                "Parameter preservation is supported for files read by "
+                "MfUsgDrt.load; for from-scratch input use no parameters."
+            )
+        total = 0
+        for name, pdef in self.parameters.items():
+            missing = [
+                k
+                for k in ("partyp", "parval", "nlst", "data", "recipient_nodes")
+                if k not in pdef
+            ]
+            if missing:
+                raise ValueError(
+                    f"MfUsgDrt.write_file: parameter '{name}' is missing keys "
+                    f"{missing} (needs partyp, parval, nlst, data, "
+                    "recipient_nodes)."
+                )
+            if len(pdef["data"]) != pdef["nlst"]:
+                raise ValueError(
+                    f"MfUsgDrt.write_file: parameter '{name}' declares nlst="
+                    f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
+                )
+            if len(pdef["recipient_nodes"]) != pdef["nlst"]:
+                raise ValueError(
+                    f"MfUsgDrt.write_file: parameter '{name}' has "
+                    f"{len(pdef['recipient_nodes'])} recipient lists but nlst="
+                    f"{pdef['nlst']} (need one per definition row)."
+                )
+            total += pdef["nlst"]
+        if self.mxl <= 0:
+            raise ValueError(
+                "MfUsgDrt.write_file: MXL (item 1) must be > 0 when DRT "
+                f"parameter definitions are present; got mxl={self.mxl}."
+            )
+        if self.mxl < total:
+            raise ValueError(
+                f"MfUsgDrt.write_file: MXL ({self.mxl}) must be >= the total "
+                f"number of parameter list entries ({total})."
+            )
+        defined = {name.lower() for name in self.parameters}
+        for kper, names in self.active_params.items():
+            for nm in names:
+                if nm.lower() not in defined:
+                    raise ValueError(
+                        f"MfUsgDrt.write_file: active parameter '{nm}' (stress "
+                        f"period {kper}) is not defined in parameters."
+                    )
+
     def write_file(self):
         """Write the package file in MODFLOW-USG-T DRT8 format.
 
         Unstructured only; ``__init__`` rejects structured models, so there is
         no structured-delegation path here.
         """
+        preserve = bool(self.parameters) or any(self.active_params.values())
+        if preserve:
+            self._validate_parameter_write()
         nper = self.parent.nper
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
 
         mxadrt = max((len(v) for v in self.stress_period_data.values()), default=0)
         mxspread = self._max_spread_nodes()
+        npdrt = len(self.parameters) if preserve else 0
+        mxl = self.mxl if preserve else 0
 
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
 
             # Item 1: MXADRT IDRTCB NPDRT MXL [options]
-            line = f" {mxadrt:9d} {self.ipakcb} 0 0"
+            line = f" {mxadrt:9d} {self.ipakcb} {npdrt} {mxl}"
             for opt in self.options:
                 line += f" {opt}"
             if mxspread > 0:
                 line += f" SPREAD {mxspread}"
             f.write(line + "\n")
 
+            # Items 2-3: parameter definitions (UPARLSTRP header + NLST rows,
+            # each with its RETURNFLOW recipients / spreading block).
+            if preserve:
+                for name, pdef in self.parameters.items():
+                    write_list_parameter_header(
+                        f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
+                    )
+                    recips = pdef["recipient_nodes"]
+                    for i, rec in enumerate(pdef["data"]):
+                        self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
+
             for kper in range(nper):
+                active = self.active_params.get(kper, []) if preserve else []
                 if kper not in self.stress_period_data:
-                    f.write(f" -1    Stress Period {kper + 1}\n")
+                    f.write(f" -1 {len(active)}    Stress Period {kper + 1}\n")
+                    write_active_list_parameters(f, active)
                     continue
                 recarray = self.stress_period_data[kper]
                 recips = self._validated_recipients(kper, len(recarray))
-                f.write(f" {len(recarray)} 0    Stress Period {kper + 1}\n")
+                f.write(f" {len(recarray)} {len(active)}    Stress Period {kper + 1}\n")
                 for i, rec in enumerate(recarray):
                     self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
+                # Active-parameter records (SGWF2DRT8LS) follow the non-param rows.
+                write_active_list_parameters(f, active)
 
     def _max_spread_nodes(self):
-        """Max total spreading-recipient nodes in any stress period."""
+        """Max total spreading-recipient nodes (non-parametric per SP, and the
+        parameter definitions, which the Fortran also stores in NodDRT)."""
         mx = 0
         for kper, recarray in self.stress_period_data.items():
             recips = self.recipient_nodes.get(kper, [])
             total = sum(len(r) for r in recips if len(r) > 1)
             mx = max(mx, total)
+        if self.parameters:
+            def_total = sum(
+                len(r)
+                for pdef in self.parameters.values()
+                for r in pdef.get("recipient_nodes", [])
+                if len(r) > 1
+            )
+            mx = max(mx, def_total)
         return mx
 
     def _write_drain_line(self, f, rec, rnodes, has_aux, aux_names):
@@ -317,6 +439,34 @@ class MfUsgDrt(ModflowDrt):
         if self.returnflow and n > 1:
             write_u1dint_list(f, [int(x) + 1 for x in rnodes])
 
+    @classmethod
+    def _read_drain_rows(
+        cls, f, count, returnflow, changec, naux, dtype, model, ext_unit_dict
+    ):
+        """Read ``count`` drain rows (+ interleaved spreading U1DINT blocks) into
+        a recarray and a per-row recipient list. Honors leading SFAC / EXTERNAL /
+        OPEN-CLOSE list controls; SFAC scales COND (Fortran ISCLOC=5)."""
+        if count == 0:
+            return np.array([], dtype=dtype).view(np.recarray), []
+        source, sfac, first_line, to_close = begin_list_block(
+            f, model, ext_unit_dict, package="DRT"
+        )
+        records = []
+        recip_lists = []
+        for idx in range(count):
+            row = first_line if idx == 0 else source.readline()
+            rec, recips = cls._parse_drain_tokens(
+                row.split(), returnflow, changec, naux, source
+            )
+            records.append(rec)
+            recip_lists.append(recips)
+        if to_close is not None:
+            source.close()
+        recarray = np.array(records, dtype=dtype).view(np.recarray)
+        if sfac != 1.0 and len(recarray) > 0:
+            recarray["cond"] = recarray["cond"] * sfac
+        return recarray, recip_lists
+
     # ------------------------------------------------------------------
     # load
     # ------------------------------------------------------------------
@@ -342,14 +492,42 @@ class MfUsgDrt(ModflowDrt):
         while line.startswith("#"):
             line = f.readline()
 
-        options, aux_names, ipakcb, returnflow, changec = cls._parse_header(line)
+        options, aux_names, ipakcb, returnflow, changec, npdrt, mxl = cls._parse_header(
+            line
+        )
         dtype = cls.get_usg_dtype(
             returnflow=returnflow, changec=changec, aux_names=aux_names
         )
         naux = len(aux_names)
 
+        # Items 2-3: NPDRT parameter definitions (UPARLSTRP header + NLST rows).
+        parameters = None
+        if npdrt > 0:
+            parameters = {}
+            for _ in range(npdrt):
+                name, partyp, parval, nlst, numinst = read_list_parameter_header(
+                    f.readline()
+                )
+                if numinst > 0:
+                    raise NotImplementedError(
+                        "MfUsgDrt.load: DRT parameter INSTANCES (NUMINST>0) are "
+                        "supported by the Fortran but not yet by FloPy (instances "
+                        "combined with per-row recipient lists)."
+                    )
+                data, recips = cls._read_drain_rows(
+                    f, nlst, returnflow, changec, naux, dtype, model, ext_unit_dict
+                )
+                parameters[name] = {
+                    "partyp": partyp,
+                    "parval": parval,
+                    "nlst": nlst,
+                    "data": data,
+                    "recipient_nodes": recips,
+                }
+
         spd = {}
         recipient_nodes = {}
+        active_params = {}
         prev_recarray = None
         prev_recips = None
 
@@ -357,44 +535,34 @@ class MfUsgDrt(ModflowDrt):
             line = f.readline()
             if not line:
                 break
-            itmp = int(line.split()[0])
+            parts = line.split()
+            itmp = int(parts[0])
+            # The per-SP header is "ITMP NP" only when parameters exist; with
+            # NPDRT==0 it is just "ITMP" (parts[1:] may be an inline comment).
+            np_sp = int(parts[1]) if (npdrt > 0 and len(parts) > 1) else 0
 
             if itmp < 0:
+                # Reuse the previous period's non-parametric drains + recipients.
                 if prev_recarray is not None:
                     spd[kper] = prev_recarray.copy()
                     recipient_nodes[kper] = [list(r) for r in prev_recips]
-                continue
-
-            # Honor leading SFAC / EXTERNAL / OPEN-CLOSE list controls; drain
-            # rows and their interleaved spreading U1DINT blocks are read from
-            # the (possibly redirected) source. SFAC scales COND (Fortran
-            # ISCLOC=5).
-            source, sfac, first_line, to_close = (f, 1.0, None, None)
-            if itmp > 0:
-                source, sfac, first_line, to_close = begin_list_block(
-                    f, model, ext_unit_dict, package="DRT"
+            else:
+                recarray, recip_lists = cls._read_drain_rows(
+                    f, itmp, returnflow, changec, naux, dtype, model, ext_unit_dict
                 )
+                spd[kper] = recarray
+                recipient_nodes[kper] = recip_lists
+                prev_recarray = recarray
+                prev_recips = recip_lists
 
-            records = []
-            recip_lists = []
-            for idx in range(itmp):
-                row = first_line if idx == 0 else source.readline()
-                rec, recips = cls._parse_drain_tokens(
-                    row.split(), returnflow, changec, naux, source
-                )
-                records.append(rec)
-                recip_lists.append(recips)
-
-            if to_close is not None:
-                source.close()
-
-            recarray = np.array(records, dtype=dtype).view(np.recarray)
-            if sfac != 1.0 and len(recarray) > 0:
-                recarray["cond"] = recarray["cond"] * sfac
-            spd[kper] = recarray
-            recipient_nodes[kper] = recip_lists
-            prev_recarray = recarray
-            prev_recips = recip_lists
+            # Active-parameter records (SGWF2DRT8LS) for this stress period.
+            if np_sp > 0:
+                if not parameters:
+                    raise NotImplementedError(
+                        "MfUsgDrt.load: active DRT parameters (NP>0) without "
+                        "NPDRT parameter definitions are not supported."
+                    )
+                active_params[kper] = read_active_list_parameters(f, np_sp)
 
         if openfile:
             f.close()
@@ -417,6 +585,9 @@ class MfUsgDrt(ModflowDrt):
             recipient_nodes=recipient_nodes,
             dtype=dtype,
             options=options,
+            parameters=parameters,
+            mxl=mxl,
+            active_params=active_params,
             extension="drt",
             unitnumber=unitnumber,
             filenames=filenames,
@@ -424,14 +595,15 @@ class MfUsgDrt(ModflowDrt):
 
     @staticmethod
     def _parse_header(line):
-        """Parse DRT item 1: MXADRT IDRTCB NPDRT MXL [options]."""
+        """Parse DRT item 1: MXADRT IDRTCB NPDRT MXL [options].
+
+        Returns (options, aux_names, ipakcb, returnflow, changec, npdrt, mxl).
+        NPDRT/MXL come from item 1 directly (DRT has no separate PARAMETER line).
+        """
         tokens = line.split()
-        npdrt = int(tokens[2]) if len(tokens) > 2 else 0
-        if npdrt > 0:
-            raise NotImplementedError(
-                "MfUsgDrt does not support named DRT parameters (NPDRT > 0)."
-            )
         ipakcb = int(tokens[1]) if len(tokens) > 1 else 0
+        npdrt = int(tokens[2]) if len(tokens) > 2 else 0
+        mxl = int(tokens[3]) if len(tokens) > 3 else 0
 
         options = []
         aux_names = []
@@ -466,7 +638,7 @@ class MfUsgDrt(ModflowDrt):
                 i += 1
 
         changec = changec and returnflow
-        return options, aux_names, ipakcb, returnflow, changec
+        return options, aux_names, ipakcb, returnflow, changec, npdrt, mxl
 
     @staticmethod
     def _parse_drain_tokens(toks, returnflow, changec, naux, f):

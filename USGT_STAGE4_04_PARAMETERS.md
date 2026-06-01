@@ -31,12 +31,21 @@ USG-T packages that currently expand parameters or fail explicitly.
   So `NP>0` and `INSTANCES` raise `NotImplementedError`; the writer validates
   `MXS` and inconsistent state raises `ValueError` (no partial file). See
   `USGT_STAGE4_04_PARAMETERS_SGB.md`.
+- `DRT`: **parameter-preserving (Stage 4.4D, executed)** — list parameters
+  (`UPARLSTRP`/`SGWF2DRT8LS`) load → write → reload with their syntax intact
+  (`NPDRT`/`MXL` in item 1, definitions with `NLST` drain rows **and their
+  RETURNFLOW recipients / spreading blocks**, per-SP `ITMP NP` + active names).
+  DRT is internally consistent — definition and activation both use
+  `PARTYP='DRT'` (`gwf2drt8u.f:135` / `:1108`), so active parameters are valid
+  (unlike SGB). Parameter value scales `COND` (Fortran `IPVL=5`); AUX/CHANGEC
+  preserved; `ITMP<0` reuse kept. `INSTANCES` and from-scratch authoring raise
+  `NotImplementedError`; `MXL`/consistency validated (`ValueError`, no partial
+  file). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 - `QRT`: `NPQRT>0` fails explicitly.
-- `DRT`: `NPDRT>0` fails explicitly.
 
-This is honest and safe. ETS (array) and HFB + SGB (list) parameter preservation
-are implemented; the remaining list-parameter packages (DRT/QRT) stay
-explicit-fail pending their own preservation.
+This is honest and safe. ETS (array) and HFB + SGB + DRT (list) parameter
+preservation are implemented; the remaining list-parameter package (QRT) stays
+explicit-fail pending its own preservation (and a `PARTYP` audit like SGB/DRT).
 
 ## Shared abstraction (Stage 4.4A/4.4B/4.4C)
 
@@ -55,11 +64,13 @@ explicit-fail pending their own preservation.
   `read_active_list_parameters` / `write_active_list_parameters` (the activation
   names). The per-parameter `NLST` rows are package-specific, so the row
   reader/writer stays in the package (HFB `_read_hfb_rows`/`_write_hfb_rows`; SGB
-  `_read_sgb_rows`/`_write_sgb_rows`), each with 0-based↔1-based conversion.
+  `_read_sgb_rows`/`_write_sgb_rows`; DRT `_read_drain_rows`/`_write_drain_line`,
+  the last carrying per-row RETURNFLOW recipients), each with 0-based↔1-based
+  conversion.
 
 No ad-hoc string preservation, no second parser. The list-parameter helpers are
-reusable by DRT/QRT when their preservation lands; until then those packages keep
-their explicit `NotImplementedError`.
+reusable by QRT when its preservation lands; until then it keeps its explicit
+`NotImplementedError`.
 
 ## Fortran Sources
 
@@ -93,8 +104,10 @@ Package sources:
 1. ETS array parameters, because partial expansion already exists. **DONE
    (Stage 4.4A).**
 2. HFB named parameters. **DONE (Stage 4.4B).**
-3. SGB list parameters. **DONE (Stage 4.4C).**
-4. DRT list parameters.
+3. SGB list parameters. **DONE (Stage 4.4C; definition-preserving only —
+   active SGB params abort the Fortran).**
+4. DRT list parameters. **DONE (Stage 4.4D; full active-parameter preservation —
+   DRT is consistent).**
 5. QRT list parameters.
 
 ## Required Tests
@@ -119,12 +132,13 @@ Update:
 Promote only the package modes that preserve parameter syntax. ETS now
 **preserves** ETSR array parameters (Stage 4.4A); HFB **preserves** list
 parameters (Stage 4.4B); SGB is **definition-preserving only** (Stage 4.4C +
-review follow-up). All three stay not `Full` because from-scratch parameter
-authoring is unsupported (and, for HFB, `TRANSIENT_HFB`+`NPHFB>0`; for SGB,
-**active parameters and `INSTANCES`** — USG-T 2.7 rejects an SGB activation with
-a `PARTYP='SGB'` vs `'G'` type conflict). The remaining list-parameter packages
-(DRT/QRT) stay explicit-fail until their write path
-lands.
+review follow-up — USG-T 2.7 rejects an SGB activation with a `PARTYP='SGB'` vs
+`'G'` type conflict); DRT **preserves** list parameters including activations
+and recipients (Stage 4.4D — DRT is internally consistent, both `'DRT'`). All
+stay not `Full` because from-scratch parameter authoring is unsupported (and,
+per package: HFB `TRANSIENT_HFB`+`NPHFB>0`; SGB active parameters; DRT/HFB/SGB
+`INSTANCES`). The remaining list-parameter package (QRT) stays explicit-fail
+until its write path lands (and a `PARTYP` audit like SGB/DRT).
 
 ## Validation
 

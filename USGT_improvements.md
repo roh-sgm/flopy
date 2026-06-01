@@ -369,6 +369,31 @@ honest, upstream-ready USG-T 2.7 story.
   MXS/consistency + constructed-active fail); `-k "mfusgsgb or usgt_list"`
   **18**; focused **193**, exe **4**, combined **197** (ARM). See
   `USGT_STAGE4_04_PARAMETERS_SGB.md`.
+- **Stage 4.4D — DRT list-parameter preservation (executed):** following the SGB
+  lesson, the Fortran was audited *first*: DRT defines parameters with
+  `PARTYP='DRT'` (`UPARLSTRP`, gwf2drt8u.f:135) and activates them with the same
+  `PARTYP='DRT'` (`SGWF2DRT8LS`, gwf2drt8u.f:1108/1133) — **consistent**, so
+  active DRT parameters are valid (unlike SGB). DRT `NPDRT>0` parameters now
+  load → write → reload with their syntax intact, including **activations** and
+  **per-row RETURNFLOW recipients / spreading blocks** (the crucial bit: a
+  parameter definition's drain rows carry their own recipient lists). `NPDRT`/
+  `MXL` live in item 1 (no separate `PARAMETER` line); the parameter value scales
+  `COND` (`IPVL=5`); AUX/CHANGEC preserved; `ITMP<0` reuse kept. Implementation
+  reuses the shared list-parameter header/activation helpers and factors the
+  drain-row reader into `_read_drain_rows` (shared by definitions and
+  non-parametric rows, so recipients are parsed identically). Not promoted to
+  `Full` on the parametric axis: from-scratch authoring and `INSTANCES`
+  (Fortran-supported) raise `NotImplementedError`; `MXL<=0`/`MXL`-too-small and
+  inconsistent definitions raise `ValueError` (no partial file). A latent bug was
+  fixed in passing: the per-SP header is `ITMP NP` only when `NPDRT>0`, else just
+  `ITMP` (the old loader read `NP` unconditionally; it now reads it only with
+  parameters, so inline `Stress Period` comments no longer misparse).
+  Non-parametric DRT unchanged. Tests: `-k mfusgdrt` **21 passed** (10 new:
+  round-trip, spread recipients, mixed+active, reuse+active, SFAC, INSTANCES fail,
+  from-scratch fail, MXL fail, inconsistent fail, undefined-active fail);
+  `-k "mfusgdrt or usgt_list"` **24**; focused **202**, exe **4**, combined
+  **206** (ARM). QRT remains explicit-fail. See
+  `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

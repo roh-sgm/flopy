@@ -252,8 +252,22 @@ Fortran: `gwf2drt8u.f`
 
 Status: **DONE** (2026-05-30). `MfUsgDrt` (subclass of `ModflowDrt`) added and
 registered. Node-based EL+COND, RETURNFLOW single/spread recipients,
-`CHANGEC`/`IDCHNGTYP`, AUX, reuse; `NPDRT>0` fails explicitly; structured
-delegates to base. Authoring + round-trip + reuse tests added.
+`CHANGEC`/`IDCHNGTYP`, AUX, reuse; structured delegates to base. Authoring +
+round-trip + reuse tests added.
+
+**DONE** (Stage 4.4D): `NPDRT>0` list parameters are now **preserved**
+(load → write → reload, including activations and per-row recipients). Fortran
+audit confirmed DRT is internally consistent — definition and activation both
+use `PARTYP='DRT'` (`gwf2drt8u.f:135` / `:1108`), unlike SGB's `'SGB'`/`'G'`
+mismatch — so active DRT parameters are valid. `load` keeps `NPDRT`/`MXL`
+(item 1) and the per-parameter definitions (`UPARLSTRP` header + `NLST` drain
+rows + RETURNFLOW recipients/spreading via the shared `_read_drain_rows`) in
+`self.parameters`, and the per-SP active names (`SGWF2DRT8LS`) in
+`self.active_params`; the parameter value scales `COND` (`IPVL=5`). `write_file`
+re-emits all of it after validating up front (no partial file). Not `Full` on
+the parametric axis: from-scratch authoring and `INSTANCES` raise
+`NotImplementedError`; `MXL`/consistency → `ValueError`. 10 parameter tests
+(`-k mfusgdrt` 21 passed). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 
 Problem:
 
