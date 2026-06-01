@@ -4319,6 +4319,172 @@ def test_mfusgevt_transport_etfactor_authoring(function_tmpdir):
     assert evt.ietfactor == 1
 
 
+def _evt_struct_model(function_tmpdir, name, nlay=1, nrow=2, ncol=2, nper=1):
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=nlay, nrow=nrow, ncol=ncol, nper=nper)
+    return m
+
+
+def _usgt_unstructured_model_ncol(function_tmpdir, name, ncol=4, nper=1):
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=1, nrow=1, ncol=ncol, nper=nper)
+    return m
+
+
+def test_mfusgevt_nevtop1_and_3_authoring_roundtrip(function_tmpdir):
+    """NEVTOP=1 and NEVTOP=3 author from scratch and round-trip."""
+    from flopy.mfusg import MfUsgEvt
+
+    for nevtop in (1, 3):
+        evt = MfUsgEvt(
+            _evt_struct_model(function_tmpdir, f"n{nevtop}"),
+            nevtop=nevtop,
+            surf=10.0,
+            evtr=1.0e-4,
+            exdp=2.0,
+        )
+        evt.fn_path = str(function_tmpdir / f"n{nevtop}.evt")
+        evt.write_file()
+        re = MfUsgEvt.load(
+            evt.fn_path, _evt_struct_model(function_tmpdir, f"n{nevtop}b")
+        )
+        assert re.nevtop == nevtop
+
+
+def test_mfusgevt_nevtop2_structured_roundtrip(function_tmpdir):
+    """NEVTOP=2 structured: ievt is 0-based internal and 1-based in the file."""
+    from flopy.mfusg import MfUsgEvt
+
+    ievt = np.array([[0, 1], [2, 0]])  # 0-based layer indices
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "n2", nlay=3),
+        nevtop=2,
+        ievt=ievt,
+        surf=5.0,
+        evtr=1.0e-4,
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "n2.evt")
+    evt.write_file()
+    # the file carries 1-based layers (max 0-based 2 -> 3)
+    assert " 3" in Path(evt.fn_path).read_text()
+
+    re = MfUsgEvt.load(evt.fn_path, _evt_struct_model(function_tmpdir, "n2b", nlay=3))
+    assert re.nevtop == 2
+    np.testing.assert_array_equal(re.ievt[0].array, ievt)  # back to 0-based
+
+
+def test_mfusgevt_nevtop2_unstructured_mxndevt(function_tmpdir):
+    """NEVTOP=2 unstructured writes MXNDEVT and node-index IEVT (0-based/1-based)."""
+    from flopy.mfusg import MfUsgEvt
+
+    grid_ievt = np.array([[0, 1, 2, 3]])
+    evt = MfUsgEvt(
+        _usgt_unstructured_model_ncol(function_tmpdir, "u1", ncol=4),
+        nevtop=2,
+        ievt=grid_ievt,
+        surf=5.0,
+        evtr=1.0e-4,
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "u1.evt")
+    evt.write_file()
+    lines = Path(evt.fn_path).read_text().splitlines()
+    assert lines[2].split() == ["4"]  # MXNDEVT line
+
+    re = MfUsgEvt.load(
+        evt.fn_path, _usgt_unstructured_model_ncol(function_tmpdir, "u2", ncol=4)
+    )
+    np.testing.assert_array_equal(re.ievt[0].array.ravel(), [0, 1, 2, 3])
+
+
+def test_mfusgevt_multi_period_reuse(function_tmpdir):
+    """Repeated arrays across stress periods reuse via negative flags (-1)."""
+    from flopy.mfusg import MfUsgEvt
+
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "rs", nper=3),
+        nevtop=1,
+        surf=5.0,
+        evtr={0: 1.0e-4, 1: 2.0e-4, 2: 2.0e-4},
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "rs.evt")
+    evt.write_file()
+    # SP3 repeats SP2's evtr -> a reuse flag (-1) appears in a later period header
+    headers = [
+        ln.split()[:3]
+        for ln in Path(evt.fn_path).read_text().splitlines()
+        if ln and ln.split() and ln.split()[0].lstrip("-").isdigit()
+    ]
+    assert any("-1" in h for h in headers)
+    re = MfUsgEvt.load(evt.fn_path, _evt_struct_model(function_tmpdir, "rs2", nper=3))
+    assert len(re.evtr.transient_2ds) == 3
+
+
+def test_mfusgevt_transport_ietfactor_roundtrip(function_tmpdir):
+    """Transport ietfactor 0/<0/>0 (incl. MCOMP>1) round-trips, preserving values."""
+    from flopy.mfusg import MfUsgEvt
+
+    def tmodel(name, mcomp=1):
+        m = _evt_struct_model(function_tmpdir, name)
+        m.itrnsp = 1
+        m.mcomp = mcomp
+        return m
+
+    for ietf, etf in ((0, 0.0), (-1, 0.0), (1, [2.5])):
+        evt = MfUsgEvt(
+            tmodel(f"t{ietf}"), nevtop=1, evtr=1.0e-4, ietfactor=ietf, etfactor=etf
+        )
+        evt.fn_path = str(function_tmpdir / f"t{ietf}.evt")
+        evt.write_file()
+        # transport always writes 3 integers on dataset 1
+        assert len(Path(evt.fn_path).read_text().splitlines()[1].split()) == 3
+        re = MfUsgEvt.load(evt.fn_path, tmodel(f"t{ietf}b"))
+        assert re.ietfactor == ietf
+
+    # MCOMP > 1 with a per-component ETFACTOR array
+    evt = MfUsgEvt(
+        tmodel("mc", mcomp=2), nevtop=1, evtr=1.0e-4, ietfactor=1, etfactor=[2.5, 3.5]
+    )
+    evt.fn_path = str(function_tmpdir / "mc.evt")
+    evt.write_file()
+    re = MfUsgEvt.load(evt.fn_path, tmodel("mc2", mcomp=2))
+    assert re.ietfactor == 1 and np.allclose(re.etfactor, [2.5, 3.5])
+
+
+def test_mfusgevt_rejects_invalid(function_tmpdir):
+    """EVT fails explicitly on invalid NEVTOP, unsupported ETS, and bad inputs."""
+    from flopy.mfusg import MfUsgEvt
+
+    with pytest.raises(ValueError, match="NEVTOP"):
+        MfUsgEvt(_evt_struct_model(function_tmpdir, "b1"), nevtop=5)
+
+    with pytest.raises(NotImplementedError, match="ETS"):
+        MfUsgEvt(_evt_struct_model(function_tmpdir, "b2"), nevtop=1, mxetzones=3)
+
+    def tm(name, mcomp=2):
+        m = _evt_struct_model(function_tmpdir, name)
+        m.itrnsp = 1
+        m.mcomp = mcomp
+        return m
+
+    with pytest.raises(ValueError, match="MCOMP"):
+        MfUsgEvt(tm("b3"), nevtop=1, ietfactor=1, etfactor=[2.5])  # len 1 != mcomp 2
+
+    # NEVTOP=2 structured layer index out of range (only 2 layers) -> write raises
+    with pytest.raises(ValueError, match="0-based layer"):
+        MfUsgEvt(
+            _evt_struct_model(function_tmpdir, "b4", nlay=2),
+            nevtop=2,
+            ievt=np.array([[5, 0], [0, 0]]),
+        ).write_file()
+
+
 def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
     from flopy.mfusg import MfUsgOc

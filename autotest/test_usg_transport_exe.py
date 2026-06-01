@@ -30,6 +30,7 @@ from flopy.mfusg import (
     MfUsg,
     MfUsgBas,
     MfUsgBct,
+    MfUsgEvt,
     MfUsgLpf,
     MfUsgOc,
     MfUsgPcb,
@@ -166,4 +167,42 @@ def test_usgt_exe_tib_prescribed_head_from_scratch(function_tmpdir):
     inc, _cum = MfusgListBudget(
         os.path.join(ml.model_ws, "tibflow.list")
     ).get_budget()
+    assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
+
+
+@requires_exe(USGT_EXE)
+def test_usgt_exe_evt_from_scratch(function_tmpdir):
+    """A from-scratch EVT package runs under USG-T 2.7.
+
+    The same steady CHD flow model plus a NEVTOP=1 EVT (surface above the head
+    range, finite extinction depth) terminates normally, reports an ET term in
+    the volumetric budget, and closes — proving the executable reads and applies
+    the FloPy-authored EVT input."""
+    ml = MfUsg(
+        modelname="evtflow",
+        model_ws=str(function_tmpdir),
+        exe_name=USGT_EXE,
+        structured=True,
+    )
+    ModflowDis(
+        ml, nlay=1, nrow=1, ncol=5, nper=1, perlen=1.0, nstp=1, steady=True,
+        delr=10.0, delc=10.0, top=10.0, botm=0.0,
+    )
+    MfUsgBas(ml, ibound=1, strt=5.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ipakcb=0)
+    MfUsgSms(ml, linmeth=1)
+    MfUsgOc(ml, stress_period_data={(0, 0): ["save head", "print budget"]})
+    ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 8.0, 8.0],
+                                           [0, 0, 4, 2.0, 2.0]]})
+    MfUsgEvt(ml, nevtop=1, ipakcb=0, surf=10.0, exdp=8.0, evtr=1.0e-3)
+    ml.write_input()
+
+    success, _ = ml.run_model(silent=True)
+    assert success, "USG-T EVT run did not terminate normally"
+
+    inc, _cum = MfusgListBudget(
+        os.path.join(ml.model_ws, "evtflow.list")
+    ).get_budget()
+    # ET is reported in the budget (ET removes water -> ET_OUT) and it closes.
+    assert any("ET" in name for name in inc.dtype.names)
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1

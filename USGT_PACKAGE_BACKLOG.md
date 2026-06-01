@@ -952,6 +952,23 @@ require a value, else flagged) instead of false "ignored" warnings, and emits a
 specific warning that `SAVE IBOUND` is preserved by FloPy but rejected by
 USG-T 2.7. Four tests added; `-k mfusgoc` 11 passed.
 
+### EVT — Fullness Card B (Stage 4)
+
+Audited `MfUsgEvt` against `gwf2evt8u1.f`. Implemented/fixed: from-scratch
+authoring + round-trip for all `NEVTOP` modes (structured + unstructured
+`NEVTOP=2` with `MXNDEVT`; `IEVT` 0-based internal / 1-based file with layer-range
+validation), transport `IETFACTOR` 0/<0/>0 with per-`MCOMP` `ETFACTOR`, and per-SP
+reuse (`-1`). Fixed a real round-trip bug (`load` dropped `IETFACTOR`) and made
+the writer emit the 3-integer dataset-1 line whenever transport is active. Added
+a USG-T 2.7 EVT executable smoke (`test_usgt_exe_evt_from_scratch`). Six
+synthetic tests + one exe test.
+
+Decision: **kept `✅ (intentionally not Full)`** — explicit gaps: ETS zonal
+time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError`; `NPEVT`
+parameters are *Expanded valid write* (loaded as arrays, `NP=0` on write,
+authoring-with-params unsupported) — same treatment as ETS. See
+`USGT_STAGE4_EVT_FULLNESS.md`. (OC / MDT / LAK untouched beyond docs.)
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

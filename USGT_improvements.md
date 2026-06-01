@@ -187,6 +187,24 @@ can be built from Python/numpy without first loading an existing model.
     Four tests added; `-k mfusgoc` **11 passed**, focused suite **138 passed**,
     exe **3 passed**, combined **141 passed** under the ARM binary. OC stays
     `✅ (intentionally not Full)`.
+- **Stage 4 — EVT Fullness Card B (2026-06-01):** audited `MfUsgEvt` against
+  `gwf2evt8u1.f` and hardened it. Fixed a real round-trip bug — `load` read
+  `IETFACTOR` but never passed it to the constructor, so it reset to 0 (and the
+  `ETFACTOR` array was lost on the next write) — and made `write_file` emit the
+  dataset-1 3-integer line (`NEVTOP IEVTCB IETFACTOR`) whenever transport is
+  active and the `ETFACTOR` array when `ietfactor>0`. Added validation
+  (`NEVTOP` 1..3, `ETFACTOR` length == MCOMP, `NEVTOP=2` structured `IEVT` layer
+  range) and made the unsupported `ETS` zonal time-series fail explicitly
+  (`NotImplementedError`). Six synthetic tests cover NEVTOP=1/2/3 (structured +
+  unstructured `NEVTOP=2` with `MXNDEVT`; `IEVT` 0-based internal / 1-based
+  file), per-SP reuse, transport `IETFACTOR` 0/<0/>0 with per-`MCOMP`
+  `ETFACTOR`, and the negative cases; plus a USG-T 2.7 executable smoke
+  (`test_usgt_exe_evt_from_scratch`). **Decision: kept `✅ (intentionally not
+  Full)`** — gaps: ETS zonal time-series (unsupported) and `NPEVT` parameters
+  (expanded-valid-write, like ETS). OC/MDT/LAK untouched. See
+  `USGT_STAGE4_EVT_FULLNESS.md`. `-k mfusgevt` **7 passed**, focused suite
+  **144 passed**, exe **4 passed**, combined **148 passed** under the USG-T 2.7
+  ARM binary.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

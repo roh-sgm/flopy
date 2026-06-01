@@ -134,10 +134,31 @@ class MfUsgEvt(Package):
         self._generate_heading()
         self.url = "evt.html"
         self.nevtop = nevtop
+        if nevtop not in (1, 2, 3):
+            raise ValueError(
+                f"EVT NEVTOP must be 1, 2, or 3 (gwf2evt8u1.f); got {nevtop}."
+            )
 
-        self.mxetzones = mxetzones
-        self.ietfactor = ietfactor
+        self.mxetzones = int(mxetzones) if mxetzones else 0
+        if self.mxetzones > 0:
+            raise NotImplementedError(
+                "EVT ETS zonal time-series is not supported by MfUsgEvt: the "
+                "'ETS MXZNEVT' header and the per-stress-period IZNEVT zone "
+                "arrays are neither authored nor parsed (USG-T also requires "
+                "ATS for ETS). Remove the ETS option."
+            )
+
+        self.ietfactor = int(ietfactor or 0)
         self.etfactor = etfactor
+        # Transport ET factor: USG-T reads MCOMP ETFACTOR values when
+        # ietfactor>0 (ietfactor==0 -> implicit 0.0, ietfactor<0 -> implicit 1.0).
+        if getattr(model, "itrnsp", 0) and self.ietfactor > 0:
+            netf = np.atleast_1d(etfactor).size
+            if netf != model.mcomp:
+                raise ValueError(
+                    f"EVT etfactor must have MCOMP={model.mcomp} value(s) when "
+                    f"ietfactor>0; got {netf}."
+                )
 
         self.external = external
         if self.external is False:
@@ -194,16 +215,27 @@ class MfUsgEvt(Package):
         f_evt.write(f"{self.heading}\n")
         f_evt.write(f"{self.nevtop:10d}{self.ipakcb:10d}")
 
-        if self.parent.itrnsp and self.ietfactor != 0:
+        # USG-T's reader takes 3 integers (NEVTOP IEVTCB IETFACTOR) whenever
+        # transport (BCT) is active, so IETFACTOR must always be present then.
+        if self.parent.itrnsp:
             f_evt.write(f"{self.ietfactor:10d}")
-        if self.mxetzones > 0:
-            f_evt.write(f"ETS {self.mxetzones:10d}")
         f_evt.write("\n")
 
         if self.nevtop == 2:
             ievt = {}
             for kper, u2d in self.ievt.transient_2ds.items():
-                ievt[kper] = u2d.array + 1
+                arr1 = u2d.array + 1  # 0-based internal -> 1-based file
+                # USG-T validates the structured layer index in 1..NLAY.
+                if (
+                    self.parent.structured
+                    and arr1.size
+                    and (arr1.min() < 1 or arr1.max() > nlay)
+                ):
+                    raise ValueError(
+                        f"EVT ievt (0-based layer) must be in [0, {nlay - 1}] for "
+                        f"NEVTOP=2; stress period {kper} is out of range."
+                    )
+                ievt[kper] = arr1
             ievt = Transient2d(
                 self.parent,
                 self.ievt.shape,
@@ -217,7 +249,8 @@ class MfUsgEvt(Package):
                 )
                 f_evt.write(f"{mxndevt:10d}\n")
 
-        if self.parent.itrnsp and self.ietfactor == 1:
+        # USG-T reads the MCOMP ETFACTOR array only when ietfactor>0.
+        if self.parent.itrnsp and self.ietfactor > 0:
             mcomp = self.parent.mcomp
             for icomp in range(mcomp):
                 f_evt.write(f"{self.etfactor[icomp]:10.2e}")
@@ -462,6 +495,7 @@ class MfUsgEvt(Package):
         args["ipakcb"] = ipakcb
 
         args["mxetzones"] = mxetzones
+        args["ietfactor"] = ietfactor
         args["etfactor"] = etfactor
         # args["inznevt"] = inznevt
         # args["iznevt"] = iznevt
