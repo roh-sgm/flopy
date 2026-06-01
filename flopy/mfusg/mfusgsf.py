@@ -145,7 +145,7 @@ class MfUsgGsf(Package):
             self.node_data = nodes
             self.nnodes = nnodes
             self.nlay = nlay
-            self.header = header
+            self.header = self._normalize_header(header)
             self.extra_header = (
                 tuple(int(x) for x in extra_header)
                 if extra_header is not None
@@ -207,64 +207,218 @@ class MfUsgGsf(Package):
                 }
             )
 
+        ids = [r["node"] for r in nodes]
+        if len(set(ids)) != len(ids):
+            raise ValueError("GSF node ids must be unique.")
+
         nnodes = len(nodes)
+        max_layer = max((r["layer"] for r in nodes), default=-1)
         if nlay is None:
-            nlay = max((r["layer"] for r in nodes), default=-1) + 1
+            nlay = max_layer + 1
+        elif int(nlay) < max_layer + 1:
+            raise ValueError(
+                f"GSF nlay={int(nlay)} is incompatible with the data: "
+                f"max layer {max_layer} requires nlay >= {max_layer + 1}."
+            )
         return verts, nodes, nnodes, int(nlay)
+
+    @staticmethod
+    def _normalize_header(header):
+        """Validate the GSF header (only UNSTRUCTURED / UNSTRUCTURED GWF)."""
+        norm = " ".join(str(header).upper().split())
+        if norm not in ("UNSTRUCTURED", "UNSTRUCTURED GWF"):
+            raise ValueError(
+                "GSF header must be 'UNSTRUCTURED' or 'UNSTRUCTURED GWF'; "
+                f"got {header!r}."
+            )
+        return norm
+
+    @staticmethod
+    def _strip_closing(vids):
+        """Drop a trailing closing vertex that duplicates the first (if any)."""
+        if len(vids) > 1 and vids[0] == vids[-1]:
+            return list(vids[:-1])
+        return list(vids)
 
     @classmethod
     def from_grid(
-        cls, model, grid, zverts=None, header="UNSTRUCTURED", extra_header=None
+        cls,
+        model,
+        grid,
+        zverts=None,
+        top_zverts=None,
+        bot_zverts=None,
+        header="UNSTRUCTURED",
+        extra_header=None,
     ):
         """Build a semantic GSF from an ``UnstructuredGrid``.
 
-        Per-vertex Z elevations are **not** retained by ``UnstructuredGrid``
-        (``from_gridspec`` collapses them into per-cell top/botm), so they must
-        be supplied via ``zverts`` (one value per grid vertex); otherwise this
-        raises rather than inventing elevations. The per-node ``zc`` is taken as
-        the cell midpoint ``(top + botm) / 2`` from the grid, and the layer of
-        each cell is derived from ``grid.ncpl``.
+        ``UnstructuredGrid`` does not retain per-vertex Z (``from_gridspec``
+        collapses it into per-cell top/botm), so elevations must be supplied:
+
+        * **3D top/bottom (recommended)** — pass ``top_zverts`` and ``bot_zverts``
+          (each length ``nverts``). The written GSF doubles the vertices (all top
+          first, then all bottom) and each node lists its top vertex ids followed
+          by the matching bottom ids (top id + ``nverts``). This is the USG-T
+          convention that ``from_gridspec(..., split_vertices=True)`` reconstructs
+          into correct top/botm — the pattern used by the teaching notebook.
+        * **single surface (legacy)** — pass ``zverts`` (length ``nverts``) for a
+          flat single-surface GSF. This does **not** encode layer thickness; use
+          top/bottom for real 3D geometry.
+
+        A per-cell closing vertex that duplicates the first is dropped
+        automatically. The cell layer is derived from ``grid.ncpl``.
         """
         verts_xy = np.asarray(grid.verts, dtype=float)
         nverts = verts_xy.shape[0]
-        if zverts is None:
-            raise ValueError(
-                "from_grid requires per-vertex z elevations via 'zverts' "
-                f"(length {nverts}); UnstructuredGrid does not retain vertex z "
-                "(from_gridspec collapses it into per-cell top/botm)."
-            )
-        zverts = np.asarray(zverts, dtype=float).ravel()
-        if len(zverts) != nverts:
-            raise ValueError(
-                f"'zverts' has length {len(zverts)}; expected {nverts} (one per "
-                "grid vertex)."
-            )
-        vertices = [(verts_xy[i, 0], verts_xy[i, 1], zverts[i]) for i in range(nverts)]
-
-        top = np.asarray(grid.top, dtype=float).ravel()
-        bot = np.asarray(grid.botm, dtype=float).ravel()
+        iverts = [cls._strip_closing(list(iv)) for iv in grid.iverts]
         xc = np.asarray(grid.xcellcenters, dtype=float).ravel()
         yc = np.asarray(grid.ycellcenters, dtype=float).ravel()
         ncpl = np.asarray(grid.ncpl).ravel()
         layers = np.repeat(np.arange(len(ncpl)), ncpl)  # 0-based layer per cell
 
-        node_data = [
-            {
-                "node": c,
-                "xc": float(xc[c]),
-                "yc": float(yc[c]),
-                "zc": float((top[c] + bot[c]) / 2.0),
-                "layer": int(layers[c]),
-                "vertices": [int(v) for v in iv],
-            }
-            for c, iv in enumerate(grid.iverts)
-        ]
+        have_topbot = top_zverts is not None and bot_zverts is not None
+        if have_topbot and zverts is not None:
+            raise ValueError(
+                "Pass either 'zverts' (single surface) or "
+                "'top_zverts'+'bot_zverts' (3D), not both."
+            )
+        if (top_zverts is None) != (bot_zverts is None):
+            raise ValueError("'top_zverts' and 'bot_zverts' must be supplied together.")
+
+        if have_topbot:
+            tz = np.asarray(top_zverts, dtype=float).ravel()
+            bz = np.asarray(bot_zverts, dtype=float).ravel()
+            if len(tz) != nverts or len(bz) != nverts:
+                raise ValueError(
+                    f"'top_zverts'/'bot_zverts' must each have length {nverts} "
+                    "(one per grid vertex)."
+                )
+            vertices = [(verts_xy[i, 0], verts_xy[i, 1], tz[i]) for i in range(nverts)]
+            vertices += [(verts_xy[i, 0], verts_xy[i, 1], bz[i]) for i in range(nverts)]
+            node_data = [
+                {
+                    "node": c,
+                    "xc": float(xc[c]),
+                    "yc": float(yc[c]),
+                    "zc": float((np.mean(tz[iv]) + np.mean(bz[iv])) / 2.0),
+                    "layer": int(layers[c]),
+                    "vertices": [int(v) for v in iv] + [int(v) + nverts for v in iv],
+                }
+                for c, iv in enumerate(iverts)
+            ]
+        elif zverts is not None:
+            zv = np.asarray(zverts, dtype=float).ravel()
+            if len(zv) != nverts:
+                raise ValueError(
+                    f"'zverts' has length {len(zv)}; expected {nverts} (one per "
+                    "grid vertex)."
+                )
+            vertices = [(verts_xy[i, 0], verts_xy[i, 1], zv[i]) for i in range(nverts)]
+            node_data = [
+                {
+                    "node": c,
+                    "xc": float(xc[c]),
+                    "yc": float(yc[c]),
+                    "zc": float(np.mean(zv[iv])),
+                    "layer": int(layers[c]),
+                    "vertices": [int(v) for v in iv],
+                }
+                for c, iv in enumerate(iverts)
+            ]
+        else:
+            raise ValueError(
+                "from_grid requires elevations: pass 'top_zverts'+'bot_zverts' "
+                f"(3D) or 'zverts' (single surface), each length {nverts}. "
+                "UnstructuredGrid does not retain per-vertex z."
+            )
+
         return cls(
             model,
             vertices=vertices,
             node_data=node_data,
             header=header,
             nlay=len(ncpl),
+            extra_header=extra_header,
+        )
+
+    @classmethod
+    def from_disv_gridprops(
+        cls,
+        model,
+        disv_gridprops,
+        top=1.0,
+        botm=0.0,
+        skip_degenerate=False,
+        header="UNSTRUCTURED",
+        extra_header=None,
+    ):
+        """Build a single-layer GSF from MODFLOW 6 ``disv_gridprops``.
+
+        Mirrors the teaching-notebook workflow: the DISV 2D cell template
+        (``ncpl`` cells) becomes one GSF layer with doubled top/bottom vertices,
+        so ``from_gridspec(..., split_vertices=True)`` recovers ``top``/``botm``.
+
+        Parameters
+        ----------
+        disv_gridprops : dict
+            Must contain ``"vertices"`` (``(iv, x, y)`` records) and ``"cell2d"``
+            (``[node, xc, yc, ncvert, v0, v1, ...]`` records; vertex ids 0-based).
+        top, botm : float or array-like
+            Top/bottom elevation, a scalar applied to every vertex or an
+            array-like of length ``nvert``.
+        skip_degenerate : bool, optional
+            If True, cells with fewer than 3 unique vertices are dropped and the
+            remaining nodes renumbered consecutively. If False (default) such a
+            cell raises ``ValueError``.
+
+        Notes
+        -----
+        A per-cell closing vertex that duplicates the first is removed
+        automatically. The result is a single layer (``nlay = 1``).
+        """
+        verts2d = disv_gridprops["vertices"]
+        cell2d = disv_gridprops["cell2d"]
+        nvert = len(verts2d)
+
+        vx = np.array([float(v[1]) for v in verts2d])
+        vy = np.array([float(v[2]) for v in verts2d])
+        top_z = np.broadcast_to(np.asarray(top, dtype=float), (nvert,))
+        bot_z = np.broadcast_to(np.asarray(botm, dtype=float), (nvert,))
+
+        vertices = [(vx[i], vy[i], top_z[i]) for i in range(nvert)]
+        vertices += [(vx[i], vy[i], bot_z[i]) for i in range(nvert)]
+
+        node_data = []
+        node = 0
+        for rec in cell2d:
+            ncvert = int(rec[3])
+            ids = cls._strip_closing([int(v) for v in rec[4 : 4 + ncvert]])
+            if len(set(ids)) < 3:
+                if skip_degenerate:
+                    continue
+                raise ValueError(
+                    f"DISV cell {int(rec[0])} has {len(set(ids))} unique "
+                    "vertices (< 3); pass skip_degenerate=True to drop it."
+                )
+            node_data.append(
+                {
+                    "node": node,
+                    "xc": float(rec[1]),
+                    "yc": float(rec[2]),
+                    "zc": float((np.mean(top_z[ids]) + np.mean(bot_z[ids])) / 2.0),
+                    "layer": 0,
+                    "vertices": ids + [v + nvert for v in ids],
+                }
+            )
+            node += 1
+
+        return cls(
+            model,
+            vertices=vertices,
+            node_data=node_data,
+            header=header,
+            nlay=1,
             extra_header=extra_header,
         )
 
@@ -427,6 +581,12 @@ class MfUsgGsf(Package):
                     "layer": int(float(p[4])) - 1,
                     "vertices": vids,
                 }
+            )
+
+        if idx < len(filtered):
+            raise ValueError(
+                f"GSF has {len(filtered) - idx} unexpected non-comment line(s) "
+                f"after the {nnodes} node record(s)."
             )
 
         return {

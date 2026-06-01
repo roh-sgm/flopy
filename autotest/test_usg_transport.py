@@ -2559,6 +2559,163 @@ def test_mfusggsf_from_grid(function_tmpdir):
     assert isinstance(gsf.to_grid(), UnstructuredGrid)
 
 
+def test_mfusggsf_unstructured_gwf_header(function_tmpdir):
+    """An 'UNSTRUCTURED GWF' header loads, writes, and round-trips to_grid().
+
+    Regression: from_gridspec previously rejected the valid two-token header
+    'UNSTRUCTURED GWF' due to an operator-precedence bug.
+    """
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    text = "UNSTRUCTURED GWF\n" + "".join(_MINIMAL_GSF_LINES[1:])
+    src = function_tmpdir / "gwf.gsf"
+    src.write_text(text)
+
+    # The grid parser itself must accept the two-token header.
+    assert isinstance(
+        UnstructuredGrid.from_gridspec(str(src)), UnstructuredGrid
+    )
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(src), ml, parse=True)
+    assert gsf.header == "UNSTRUCTURED GWF"
+    gsf.fn_path = str(function_tmpdir / "gwf_out.gsf")
+    gsf.write_file()
+    assert "UNSTRUCTURED GWF" in Path(gsf.fn_path).read_text()
+    assert isinstance(gsf.to_grid(), UnstructuredGrid)
+
+
+def test_mfusggsf_parse_rejects_trailing_content(function_tmpdir):
+    """parse=True with extra non-comment content falls back to the raw lines."""
+    from flopy.modflow import ModflowDis
+
+    src = function_tmpdir / "trailing.gsf"
+    src.write_text("".join(_MINIMAL_GSF_LINES) + "EXTRA UNEXPECTED LINE\n")
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.load(str(src), ml, parse=True)
+
+    assert gsf.node_data is None  # not parsed semantically
+    assert gsf.lines is not None  # raw fallback
+    gsf.fn_path = str(function_tmpdir / "trailing_out.gsf")
+    gsf.write_file()
+    assert "EXTRA UNEXPECTED LINE" in Path(gsf.fn_path).read_text()
+
+
+def test_mfusggsf_from_grid_top_bottom(function_tmpdir):
+    """from_grid with top/bottom elevations writes the USG-T doubled-vertex GSF."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    src = function_tmpdir / "tri.gsf"
+    src.write_text("".join(_MINIMAL_GSF_LINES))
+    grid = UnstructuredGrid.from_gridspec(str(src))
+    nverts = grid.verts.shape[0]  # 3
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
+    gsf = MfUsgGsf.from_grid(
+        ml, grid, top_zverts=[10.0, 10.0, 10.0], bot_zverts=[0.0, 0.0, 0.0]
+    )
+    gsf.fn_path = str(function_tmpdir / "tb.gsf")
+    gsf.write_file()
+
+    lines = [ln for ln in Path(gsf.fn_path).read_text().splitlines() if ln.strip()]
+    assert lines[2].split()[0] == str(2 * nverts)  # NVERTS doubled
+    node = lines[-1].split()
+    assert node[5] == str(2 * 3)  # 2 * ncell_vertices
+    assert node[6:9] == ["1", "2", "3"]  # top ids, 1-based
+    # bottom ids = top ids + totalverts (nverts)
+    assert node[9:12] == [str(1 + nverts), str(2 + nverts), str(3 + nverts)]
+
+    # split_vertices=True reconstructs the correct top/botm
+    grid2 = gsf.to_grid()
+    assert isinstance(grid2, UnstructuredGrid)
+    assert np.allclose(grid2.top, 10.0)
+    assert np.allclose(grid2.botm, 0.0)
+
+    # top_zverts without bot_zverts is rejected
+    with pytest.raises(ValueError, match="together"):
+        MfUsgGsf.from_grid(ml, grid, top_zverts=[1.0, 1.0, 1.0])
+
+
+def test_mfusggsf_from_disv_gridprops(function_tmpdir):
+    """from_disv_gridprops builds a single-layer GSF (notebook workflow)."""
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    # 6 vertices; cell 0 is a square with a closing duplicate vertex.
+    disv = {
+        "vertices": [
+            (0, 0.0, 0.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 1.0),
+            (3, 0.0, 1.0),
+            (4, 2.0, 0.0),
+            (5, 2.0, 1.0),
+        ],
+        "cell2d": [
+            [0, 0.5, 0.5, 5, 0, 1, 2, 3, 0],  # closing dup -> 4 unique verts
+            [1, 1.5, 0.5, 3, 1, 4, 5],  # triangle, 3 unique verts
+        ],
+    }
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    gsf = MfUsgGsf.from_disv_gridprops(ml(), disv, top=10.0, botm=0.0)
+    assert gsf.nlay == 1
+    assert len(gsf.vertices) == 12  # 2 * 6 (top + bottom)
+    # square cell: closing dup dropped, bottom ids shifted by nvert (6)
+    assert gsf.node_data[0]["vertices"] == [0, 1, 2, 3, 6, 7, 8, 9]
+    gsf.fn_path = str(function_tmpdir / "disv.gsf")
+    gsf.write_file()
+    assert isinstance(gsf.to_grid(), UnstructuredGrid)
+
+    # a degenerate cell (< 3 unique vertices) is rejected by default,
+    disv_deg = {
+        "vertices": disv["vertices"],
+        "cell2d": [[0, 0.5, 0.5, 5, 0, 1, 2, 3, 0], [1, 1.5, 0.5, 2, 4, 5]],
+    }
+    with pytest.raises(ValueError, match="unique vertices"):
+        MfUsgGsf.from_disv_gridprops(ml(), disv_deg, top=10.0, botm=0.0)
+    # ... or skipped (with consecutive node renumbering) on request
+    gsf2 = MfUsgGsf.from_disv_gridprops(
+        ml(), disv_deg, top=10.0, botm=0.0, skip_degenerate=True
+    )
+    assert gsf2.nnodes == 1
+    assert gsf2.node_data[0]["node"] == 0
+
+
+def test_mfusggsf_hardening_rejects(function_tmpdir):
+    """Semantic constructor rejects bad header, duplicate nodes, and small nlay."""
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    v = _MINIMAL_GSF_VERTICES
+    nd = [{"node": 0, "xc": 0.5, "yc": 0.3, "layer": 0, "vertices": [0, 1, 2]}]
+
+    with pytest.raises(ValueError, match="header"):
+        MfUsgGsf(ml(), vertices=v, node_data=nd, header="STRUCTURED")
+    with pytest.raises(ValueError, match="unique"):
+        MfUsgGsf(ml(), vertices=v, node_data=[nd[0], dict(nd[0])])
+    with pytest.raises(ValueError, match="nlay"):
+        MfUsgGsf(
+            ml(),
+            vertices=v,
+            node_data=[{"xc": 0.5, "yc": 0.3, "layer": 2, "vertices": [0, 1, 2]}],
+            nlay=1,
+        )
+
+
 # ---------------------------------------------------------------------------
 # MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
 # ---------------------------------------------------------------------------

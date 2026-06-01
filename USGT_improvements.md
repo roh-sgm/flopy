@@ -74,6 +74,24 @@ can be built from Python/numpy without first loading an existing model.
   invalid-ref + mixed-mode rejection, `from_grid`) join the three existing raw
   tests. Focused suite **114 passed**, exe suite **3 passed**, combined
   **117 passed** under the USG-T 2.7 ARM binary.
+  - **Review follow-up (resolved):** (1) fixed an operator-precedence bug in
+    `UnstructuredGrid.from_gridspec` that wrongly rejected the valid
+    `UNSTRUCTURED GWF` header (now accepts exactly `UNSTRUCTURED` /
+    `UNSTRUCTURED GWF`, rejects others); (2) `parse=True` now rejects trailing
+    non-comment content after the node records, so such files fall back to the
+    raw round-trip instead of being rewritten without the extra lines;
+    (3) generalised `from_grid` to the USG-T **top/bottom doubled-vertex**
+    convention (`top_zverts` + `bot_zverts`) that `from_gridspec(...,
+    split_vertices=True)` reconstructs into correct top/botm — the teaching-
+    notebook pattern — keeping single-surface `zverts` as an explicit legacy
+    mode and auto-dropping per-cell closing-duplicate vertices; (4) added
+    `from_disv_gridprops(model, disv_gridprops, top, botm, skip_degenerate=...)`
+    mapping a MODFLOW 6 DISV 2D template to a single-layer GSF (closing-vertex
+    removal, degenerate-cell skip + node renumbering). Hardening: header,
+    unique-node-id, and `nlay >= max(layer)+1` validation in the semantic
+    constructor. Five follow-up tests added; focused suite **119 passed**, exe
+    **3 passed**, combined **122 passed** under the ARM binary. GSF stays
+    `Full (authoring)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

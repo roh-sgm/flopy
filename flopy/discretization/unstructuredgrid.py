@@ -1369,9 +1369,10 @@ class UnstructuredGrid(Grid):
             header = split_line()
             while header[0][0] == "#":
                 header = split_line()
-            if not (len(header) == 1 and header[0] == "UNSTRUCTURED") or (
+            valid_header = (len(header) == 1 and header[0] == "UNSTRUCTURED") or (
                 len(header) == 2 and header == ["UNSTRUCTURED", "GWF"]
-            ):
+            )
+            if not valid_header:
                 raise ValueError("Invalid GSF file, no header")
 
             nnodes = int(split_line()[0])

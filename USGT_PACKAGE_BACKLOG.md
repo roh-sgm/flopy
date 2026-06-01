@@ -869,6 +869,22 @@ Acceptance:
 - From-scratch authoring works without first loading a `.gsf`; `load` defaults
   to the safe raw round-trip; status is honest (Full for authoring).
 
+Stage 4.2 review follow-up (resolved): (1) fixed an operator-precedence bug in
+`UnstructuredGrid.from_gridspec` so `UNSTRUCTURED GWF` headers parse (accepts
+exactly `UNSTRUCTURED` / `UNSTRUCTURED GWF`); (2) `parse=True` rejects trailing
+non-comment content (falls back to raw round-trip); (3) `from_grid` now supports
+the USG-T top/bottom doubled-vertex convention (`top_zverts`+`bot_zverts`, the
+teaching-notebook pattern that `from_gridspec(..., split_vertices=True)`
+reconstructs), keeps single-surface `zverts` as explicit legacy, and auto-drops
+per-cell closing-duplicate vertices; (4) added
+`from_disv_gridprops(model, disv_gridprops, top, botm, skip_degenerate=...)`
+(closing-vertex removal, degenerate-cell skip with node renumbering). Hardening:
+header / unique-node-id / `nlay >= max(layer)+1` validation. Five tests added
+(`test_mfusggsf_unstructured_gwf_header`,
+`test_mfusggsf_parse_rejects_trailing_content`,
+`test_mfusggsf_from_grid_top_bottom`, `test_mfusggsf_from_disv_gridprops`,
+`test_mfusggsf_hardening_rejects`). Status unchanged: Full (authoring).
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

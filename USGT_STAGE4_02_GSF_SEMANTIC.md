@@ -188,3 +188,41 @@ Tests added in `autotest/test_usg_transport.py`:
 
 Validation: focused **114 passed**, exe **3 passed**, combined **117 passed**
 under the USG-T 2.7 ARM binary; `git diff --check` clean.
+
+## Stage 4.2 review follow-up — resolved
+
+Incorporated the teaching notebook's practical GSF authoring pattern
+(`Advanced3_geopandas.ipynb`, cells 29/30/36/55) and closed four findings. GSF
+stays `Full (authoring)`.
+
+1. **`UNSTRUCTURED GWF` header (P2).** `UnstructuredGrid.from_gridspec` had an
+   operator-precedence bug (`not (A) or (B)`) that rejected the valid two-token
+   header. Fixed to accept exactly `UNSTRUCTURED` / `UNSTRUCTURED GWF` and reject
+   anything else; the freyberg GSF and comment-prefixed headers still parse.
+2. **Trailing content under `parse=True` (P2).** `_parse_semantic` now raises if
+   non-comment lines remain after the `NVERTS + NNODES` records, so `load`
+   falls back to the raw round-trip rather than rewriting the file without the
+   extra lines.
+3. **Notebook top/bottom convention (P2).** `from_grid` gained
+   `top_zverts` + `bot_zverts`: the writer doubles the vertices (all top, then
+   all bottom) and each node lists its top ids followed by the matching bottom
+   ids (top id + `totalverts`), so `from_gridspec(..., split_vertices=True)`
+   reconstructs correct top/botm. Single-surface `zverts` is kept as an explicit
+   legacy mode; a per-cell closing-duplicate vertex is dropped automatically.
+4. **DISV mapping (P2/P3).** Added
+   `from_disv_gridprops(model, disv_gridprops, top, botm, skip_degenerate=False)`
+   building a single-layer GSF from a MODFLOW 6 DISV 2D template, with
+   automatic closing-vertex removal and (optional) degenerate-cell skipping plus
+   consecutive node renumbering.
+
+Hardening in the semantic constructor: the header must be `UNSTRUCTURED` /
+`UNSTRUCTURED GWF`; node ids must be unique; `nlay` must be `>= max(layer) + 1`.
+
+Tests added (`autotest/test_usg_transport.py`):
+`test_mfusggsf_unstructured_gwf_header`,
+`test_mfusggsf_parse_rejects_trailing_content`,
+`test_mfusggsf_from_grid_top_bottom`, `test_mfusggsf_from_disv_gridprops`,
+`test_mfusggsf_hardening_rejects`.
+
+Validation: focused **119 passed**, exe **3 passed**, combined **122 passed**
+under the USG-T 2.7 ARM binary; `git diff --check` clean.
