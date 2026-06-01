@@ -2691,6 +2691,79 @@ def test_mfusggsf_from_disv_gridprops(function_tmpdir):
     assert gsf2.node_data[0]["node"] == 0
 
 
+def test_mfusggsf_vertex_modes(function_tmpdir):
+    """shared vs cell vertex modes (the two GRIDGEN2GSF layouts).
+
+    Two adjacent quad cells share an edge (vertices 1 and 2). The parsimonious
+    'shared' mode reuses those vertex ids across the neighbouring cells; the
+    non-parsimonious 'cell' mode gives every cell its own unique vertices
+    (8 per quad), with the top half then the bottom half so that
+    from_gridspec(split_vertices=True) recovers top/botm.
+    """
+    from flopy.discretization import UnstructuredGrid
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
+        return m
+
+    disv = {
+        "vertices": [
+            (0, 0.0, 0.0),
+            (1, 1.0, 0.0),
+            (2, 1.0, 1.0),
+            (3, 0.0, 1.0),
+            (4, 2.0, 0.0),
+            (5, 2.0, 1.0),
+        ],
+        "cell2d": [
+            [0, 0.5, 0.5, 4, 0, 1, 2, 3],
+            [1, 1.5, 0.5, 4, 1, 4, 5, 2],  # shares verts 1, 2 with cell 0
+        ],
+    }
+
+    # parsimonious / shared: neighbouring cells reuse vertex ids
+    shared = MfUsgGsf.from_disv_gridprops(
+        ml(), disv, top=10.0, botm=0.0, vertex_mode="parsimonious"
+    )
+    assert len(shared.vertices) == 12  # 2 * 6 shared
+    common = set(shared.node_data[0]["vertices"]) & set(
+        shared.node_data[1]["vertices"]
+    )
+    assert common  # ids are shared between neighbours
+
+    # non-parsimonious / cell: no shared ids, 8 unique vertices per quad
+    cell = MfUsgGsf.from_disv_gridprops(
+        ml(), disv, top=10.0, botm=0.0, vertex_mode="nonparsimonious"
+    )
+    assert len(cell.vertices) == 2 * 8  # 8 unique per quad cell
+    assert not (
+        set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"])
+    )
+    v0 = cell.node_data[0]["vertices"]
+    assert len(v0) == 8  # quad -> 8 vertices
+    # top half then bottom half (split_vertices convention)
+    assert v0[:4] == [0, 1, 2, 3] and v0[4:] == [4, 5, 6, 7]
+
+    # both modes reconstruct correct top/botm through from_gridspec
+    for gsf, name in ((shared, "shared"), (cell, "cell")):
+        gsf.fn_path = str(function_tmpdir / f"{name}.gsf")
+        gsf.write_file()
+        grid = gsf.to_grid()
+        assert isinstance(grid, UnstructuredGrid)
+        assert np.allclose(grid.top, 10.0)
+        assert np.allclose(grid.botm, 0.0)
+
+    # cell mode requires real top/bottom elevations (not a single surface)
+    src = function_tmpdir / "tri.gsf"
+    src.write_text("".join(_MINIMAL_GSF_LINES))
+    tgrid = UnstructuredGrid.from_gridspec(str(src))
+    nv = tgrid.verts.shape[0]
+    with pytest.raises(ValueError, match="vertex_mode='cell'"):
+        MfUsgGsf.from_grid(ml(), tgrid, zverts=[1.0] * nv, vertex_mode="cell")
+
+
 def test_mfusggsf_hardening_rejects(function_tmpdir):
     """Semantic constructor rejects bad header, duplicate nodes, and small nlay."""
     from flopy.modflow import ModflowDis

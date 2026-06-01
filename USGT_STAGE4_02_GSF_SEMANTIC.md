@@ -226,3 +226,39 @@ Tests added (`autotest/test_usg_transport.py`):
 
 Validation: focused **119 passed**, exe **3 passed**, combined **122 passed**
 under the USG-T 2.7 ARM binary; `git diff --check` clean.
+
+### Vertex-mode follow-up — parsimonious / non-parsimonious
+
+Secondary reference: `gridgen2gsf.f90` (`GRIDGEN2GSF`) — used only to emulate
+geometry-generation patterns, not as a format spec; the primary spec remains
+gwutil_a section 2.17 (which also confirms the line-2 fields are
+`NNODES NLAY IZ IC`, with `IZ`/`IC` both 1 — the default `extra_header=(1, 1)`).
+
+`GRIDGEN2GSF` writes two GSF flavours; both use `UNSTRUCTURED` + line 2
+`ncell_act nlay 1 1` and a node record listing the 4 top vertices then the 4
+bottom vertices (`i1,i4,i3,i2,i5,i8,i7,i6`):
+
+* **vertex-parsimonious** — a shared vertex mesh; only used vertices are kept and
+  ids are compacted/remapped, so neighbouring cells reuse vertex ids.
+* **non-parsimonious** — 8 vertices per active cell, never shared (`nvert =
+  ncell_act * 8`), with flat per-cell top/bottom.
+
+Added `vertex_mode` to `from_grid` and `from_disv_gridprops`:
+
+* `vertex_mode="shared"` (alias `"parsimonious"`, default) — neighbouring cells
+  reuse vertex ids (the existing shared-vertex layout).
+* `vertex_mode="cell"` (alias `"nonparsimonious"`) — every cell owns unique
+  top/bottom vertices (8 per quad), never shared.
+
+Both layouts list each node's top vertices (first half) then bottom vertices
+(second half), so `from_gridspec(..., split_vertices=True)` recovers top/botm.
+For non-quad DISV polygons the `"cell"` mode generalises the non-parsimonious
+idea as unique per-cell top/bottom vertices; it keeps the caller's polygon order
+within each half and is **not** byte-equivalent to the GRIDGEN2GSF quadtree
+winding. `vertex_mode="cell"` requires real top/bottom elevations (it raises on
+a single-surface `zverts`).
+
+Test added: `test_mfusggsf_vertex_modes` (shared shares ids between neighbours;
+cell does not; quad → 8 vertices/cell; top/bottom split recovered by
+`from_gridspec`). Validation: focused **120 passed**, exe **3 passed**, combined
+**123 passed** under the USG-T 2.7 ARM binary; `git diff --check` clean.

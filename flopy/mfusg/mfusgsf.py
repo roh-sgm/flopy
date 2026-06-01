@@ -4,21 +4,23 @@ Grid Specification File (GSF) — USG-Transport / MODFLOW-USG.
 
 Format (unstructured)::
 
-    UNSTRUCTURED [GWF]                 <- header (1 or 2 tokens)
-    NNODES  NLAY  [extra ...]          <- node count, layer count, gridgen flags
+    UNSTRUCTURED [GWF]                 <- header (1 or 2 tokens; GWF assumed)
+    NNODES  NLAY  IZ  IC               <- node count, layer count, iz, ic
     NVERTS                             <- number of vertices
     X(1)  Y(1)  Z(1)                   <- one line per vertex (NVERTS lines)
     ...
     NODENO XC YC ZC LAY NVERT V1 .. VN <- one line per node (NNODES lines)
 
-``NODENO`` and the per-cell vertex ids ``V1..VN`` are 1-based in the file.
-The GSF is a grid-specification file produced by gridgen-style tools and
-consumed by post-processors (FloPy's ``UnstructuredGrid.from_gridspec``); it is
-**not** read by the MODFLOW-USG / USG-T solver, so there is no Fortran reader to
-audit. ``from_gridspec`` only reads ``NNODES`` from line 2 and derives the layer
-count from the per-node ``LAY`` column, so the trailing line-2 integers (``1 1``
-in observed gridgen output) are preserved verbatim on load and default to
-``(1, 1)`` when authoring.
+Primary format spec: gwutil_a section 2.17. ``NODENO`` and the per-cell vertex
+ids ``V1..VN`` are 1-based in the file. Per the spec, ``IZ`` is 1 when vertex/
+node elevations are supplied and ``IC`` is 1 when per-node cell specifications
+are supplied; both must be 1 (the only supported case), so ``extra_header``
+defaults to ``(1, 1)``. The GSF is produced by gridgen-style tools and consumed
+by post-processors (FloPy's ``UnstructuredGrid.from_gridspec``); it is **not**
+read by the MODFLOW-USG / USG-T solver, so there is no Fortran reader to audit.
+``from_gridspec`` reads only ``NNODES`` from line 2 and derives the layer count
+from the per-node ``LAY`` column, so ``IZ``/``IC`` are preserved verbatim on
+load.
 
 This class supports two mutually-exclusive modes:
 
@@ -74,8 +76,9 @@ class MfUsgGsf(Package):
     nlay : int, optional
         Number of layers for semantic mode. Defaults to ``max(layer) + 1``.
     extra_header : sequence of int, optional
-        Trailing integers on line 2 after ``NNODES NLAY`` (gridgen flags that
-        the grid consumer ignores). Defaults to ``(1, 1)``.
+        The ``IZ IC`` integers on line 2 after ``NNODES NLAY`` (spec 2.17:
+        elevations-supplied / cell-specs-supplied; both must be 1). Preserved
+        verbatim on load; defaults to ``(1, 1)`` when authoring.
     extension : str, optional
         File extension (default "gsf").
     unitnumber : int, optional
@@ -240,6 +243,63 @@ class MfUsgGsf(Package):
             return list(vids[:-1])
         return list(vids)
 
+    @staticmethod
+    def _canon_vertex_mode(mode):
+        """Map vertex-mode aliases to 'shared' or 'cell'."""
+        m = str(mode).lower()
+        if m in ("shared", "parsimonious"):
+            return "shared"
+        if m in ("cell", "nonparsimonious", "non-parsimonious"):
+            return "cell"
+        raise ValueError(
+            "vertex_mode must be 'shared'/'parsimonious' or "
+            f"'cell'/'nonparsimonious'; got {mode!r}."
+        )
+
+    @classmethod
+    def _build_topbottom(cls, shared_xy, cell_ivlists, top_z, bot_z, vertex_mode):
+        """Build doubled top/bottom vertices + per-node vertex lists.
+
+        Emulates the two GRIDGEN2GSF layouts (``gridgen2gsf.f90``); the primary
+        format spec is gwutil_a section 2.17. Each node lists its top vertices
+        (first half) then the matching bottom vertices (second half), so
+        ``from_gridspec(..., split_vertices=True)`` recovers top/botm.
+
+        * ``"shared"`` (parsimonious): one shared vertex array of ``2*nverts``
+          (all tops, then all bottoms); neighbouring cells reuse vertex ids.
+        * ``"cell"`` (non-parsimonious): each cell owns ``2*k`` unique vertices
+          (``k`` tops then ``k`` bottoms); ids are never shared. For a quad this
+          is 8 vertices/cell, top half then bottom half — the structure of
+          GRIDGEN2GSF ``1,4,3,2,5,8,7,6`` (this helper keeps the caller's polygon
+          order within each half rather than the gridgen quadtree winding, so it
+          is not byte-equivalent for non-quad polygons).
+        """
+        mode = cls._canon_vertex_mode(vertex_mode)
+        if mode == "shared":
+            n = len(shared_xy)
+            vertices = [(shared_xy[i][0], shared_xy[i][1], top_z[i]) for i in range(n)]
+            vertices += [(shared_xy[i][0], shared_xy[i][1], bot_z[i]) for i in range(n)]
+            node_vlists = [
+                [int(v) for v in iv] + [int(v) + n for v in iv] for iv in cell_ivlists
+            ]
+            return vertices, node_vlists
+
+        # cell (non-parsimonious): unique vertices per cell, never shared
+        vertices = []
+        node_vlists = []
+        start = 0
+        for iv in cell_ivlists:
+            k = len(iv)
+            for v in iv:
+                vertices.append((shared_xy[v][0], shared_xy[v][1], top_z[v]))
+            for v in iv:
+                vertices.append((shared_xy[v][0], shared_xy[v][1], bot_z[v]))
+            node_vlists.append(
+                list(range(start, start + k)) + list(range(start + k, start + 2 * k))
+            )
+            start += 2 * k
+        return vertices, node_vlists
+
     @classmethod
     def from_grid(
         cls,
@@ -248,6 +308,7 @@ class MfUsgGsf(Package):
         zverts=None,
         top_zverts=None,
         bot_zverts=None,
+        vertex_mode="shared",
         header="UNSTRUCTURED",
         extra_header=None,
     ):
@@ -257,17 +318,19 @@ class MfUsgGsf(Package):
         collapses it into per-cell top/botm), so elevations must be supplied:
 
         * **3D top/bottom (recommended)** — pass ``top_zverts`` and ``bot_zverts``
-          (each length ``nverts``). The written GSF doubles the vertices (all top
-          first, then all bottom) and each node lists its top vertex ids followed
-          by the matching bottom ids (top id + ``nverts``). This is the USG-T
-          convention that ``from_gridspec(..., split_vertices=True)`` reconstructs
-          into correct top/botm — the pattern used by the teaching notebook.
+          (each length ``nverts``). Each node lists its top vertex ids (first
+          half) then the matching bottom ids (second half), the USG-T convention
+          that ``from_gridspec(..., split_vertices=True)`` reconstructs into
+          correct top/botm.
         * **single surface (legacy)** — pass ``zverts`` (length ``nverts``) for a
-          flat single-surface GSF. This does **not** encode layer thickness; use
-          top/bottom for real 3D geometry.
+          flat single-surface GSF (shared vertices only; no layer thickness).
 
-        A per-cell closing vertex that duplicates the first is dropped
-        automatically. The cell layer is derived from ``grid.ncpl``.
+        ``vertex_mode`` selects the two GRIDGEN2GSF layouts (top/bottom only):
+        ``"shared"``/``"parsimonious"`` (default) reuses vertex ids between
+        neighbouring cells; ``"cell"``/``"nonparsimonious"`` gives every cell its
+        own unique vertices (8 per quad), never shared. A per-cell closing vertex
+        that duplicates the first is dropped automatically. The cell layer is
+        derived from ``grid.ncpl``.
         """
         verts_xy = np.asarray(grid.verts, dtype=float)
         nverts = verts_xy.shape[0]
@@ -294,8 +357,9 @@ class MfUsgGsf(Package):
                     f"'top_zverts'/'bot_zverts' must each have length {nverts} "
                     "(one per grid vertex)."
                 )
-            vertices = [(verts_xy[i, 0], verts_xy[i, 1], tz[i]) for i in range(nverts)]
-            vertices += [(verts_xy[i, 0], verts_xy[i, 1], bz[i]) for i in range(nverts)]
+            vertices, node_vlists = cls._build_topbottom(
+                verts_xy, iverts, tz, bz, vertex_mode
+            )
             node_data = [
                 {
                     "node": c,
@@ -303,11 +367,17 @@ class MfUsgGsf(Package):
                     "yc": float(yc[c]),
                     "zc": float((np.mean(tz[iv]) + np.mean(bz[iv])) / 2.0),
                     "layer": int(layers[c]),
-                    "vertices": [int(v) for v in iv] + [int(v) + nverts for v in iv],
+                    "vertices": node_vlists[c],
                 }
                 for c, iv in enumerate(iverts)
             ]
         elif zverts is not None:
+            if cls._canon_vertex_mode(vertex_mode) == "cell":
+                raise ValueError(
+                    "vertex_mode='cell' requires 3D elevations "
+                    "('top_zverts'+'bot_zverts'); single-surface 'zverts' uses "
+                    "shared vertices."
+                )
             zv = np.asarray(zverts, dtype=float).ravel()
             if len(zv) != nverts:
                 raise ValueError(
@@ -350,6 +420,7 @@ class MfUsgGsf(Package):
         top=1.0,
         botm=0.0,
         skip_degenerate=False,
+        vertex_mode="shared",
         header="UNSTRUCTURED",
         extra_header=None,
     ):
@@ -371,6 +442,10 @@ class MfUsgGsf(Package):
             If True, cells with fewer than 3 unique vertices are dropped and the
             remaining nodes renumbered consecutively. If False (default) such a
             cell raises ``ValueError``.
+        vertex_mode : str, optional
+            ``"shared"``/``"parsimonious"`` (default) reuses vertex ids between
+            neighbouring cells; ``"cell"``/``"nonparsimonious"`` gives every cell
+            its own unique top/bottom vertices (never shared).
 
         Notes
         -----
@@ -383,14 +458,11 @@ class MfUsgGsf(Package):
 
         vx = np.array([float(v[1]) for v in verts2d])
         vy = np.array([float(v[2]) for v in verts2d])
+        shared_xy = np.column_stack([vx, vy])
         top_z = np.broadcast_to(np.asarray(top, dtype=float), (nvert,))
         bot_z = np.broadcast_to(np.asarray(botm, dtype=float), (nvert,))
 
-        vertices = [(vx[i], vy[i], top_z[i]) for i in range(nvert)]
-        vertices += [(vx[i], vy[i], bot_z[i]) for i in range(nvert)]
-
-        node_data = []
-        node = 0
+        kept = []  # (xc, yc, ivlist) for non-degenerate cells, in order
         for rec in cell2d:
             ncvert = int(rec[3])
             ids = cls._strip_closing([int(v) for v in rec[4 : 4 + ncvert]])
@@ -401,17 +473,23 @@ class MfUsgGsf(Package):
                     f"DISV cell {int(rec[0])} has {len(set(ids))} unique "
                     "vertices (< 3); pass skip_degenerate=True to drop it."
                 )
-            node_data.append(
-                {
-                    "node": node,
-                    "xc": float(rec[1]),
-                    "yc": float(rec[2]),
-                    "zc": float((np.mean(top_z[ids]) + np.mean(bot_z[ids])) / 2.0),
-                    "layer": 0,
-                    "vertices": ids + [v + nvert for v in ids],
-                }
-            )
-            node += 1
+            kept.append((float(rec[1]), float(rec[2]), ids))
+
+        ivlists = [k[2] for k in kept]
+        vertices, node_vlists = cls._build_topbottom(
+            shared_xy, ivlists, top_z, bot_z, vertex_mode
+        )
+        node_data = [
+            {
+                "node": node,
+                "xc": xc,
+                "yc": yc,
+                "zc": float((np.mean(top_z[ids]) + np.mean(bot_z[ids])) / 2.0),
+                "layer": 0,
+                "vertices": node_vlists[node],
+            }
+            for node, (xc, yc, ids) in enumerate(kept)
+        ]
 
         return cls(
             model,

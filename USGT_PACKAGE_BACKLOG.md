@@ -885,6 +885,15 @@ header / unique-node-id / `nlay >= max(layer)+1` validation. Five tests added
 `test_mfusggsf_from_grid_top_bottom`, `test_mfusggsf_from_disv_gridprops`,
 `test_mfusggsf_hardening_rejects`). Status unchanged: Full (authoring).
 
+Vertex-mode follow-up (secondary reference `gridgen2gsf.f90`; primary spec stays
+gwutil_a 2.17): added `vertex_mode` to `from_grid`/`from_disv_gridprops`
+emulating the two GRIDGEN2GSF layouts — `"shared"`/`"parsimonious"` (default,
+neighbours reuse vertex ids) and `"cell"`/`"nonparsimonious"` (unique top/bottom
+vertices per cell, 8 per quad, never shared). Both keep top vertices then bottom
+vertices so `from_gridspec(split_vertices=True)` recovers top/botm. Documented
+the line-2 flags as `IZ IC` (spec 2.17; both must be 1). Test
+`test_mfusggsf_vertex_modes` added. Status unchanged: Full (authoring).
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

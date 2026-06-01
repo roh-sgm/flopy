@@ -92,6 +92,19 @@ can be built from Python/numpy without first loading an existing model.
     constructor. Five follow-up tests added; focused suite **119 passed**, exe
     **3 passed**, combined **122 passed** under the ARM binary. GSF stays
     `Full (authoring)`.
+  - **Vertex-mode follow-up (resolved):** using `gridgen2gsf.f90` as a secondary
+    reference for geometry generation (primary spec stays gwutil_a 2.17), added a
+    `vertex_mode` option to `from_grid`/`from_disv_gridprops` emulating the two
+    GRIDGEN2GSF layouts: `"shared"`/`"parsimonious"` (default — neighbouring
+    cells reuse vertex ids) and `"cell"`/`"nonparsimonious"` (every cell owns
+    unique top/bottom vertices, 8 per quad, never shared). Both write each node's
+    top vertices then bottom vertices so `from_gridspec(split_vertices=True)`
+    recovers top/botm; `"cell"` keeps the caller's polygon order within each half
+    (not byte-equivalent to the gridgen quadtree `1,4,3,2 / 5,8,7,6` winding for
+    non-quads). Also documented the line-2 `IZ IC` flags per spec 2.17 (both must
+    be 1). One test added (`test_mfusggsf_vertex_modes`); focused suite
+    **120 passed**, exe **3 passed**, combined **123 passed** under the ARM
+    binary. GSF stays `Full (authoring)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 
