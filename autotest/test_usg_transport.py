@@ -4488,3 +4488,70 @@ def test_mfusgoc_ddreference_roundtrip(function_tmpdir):
 
     re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "ddr2"), nper=1)
     assert "DDREFERENCE" in [a.upper() for a in re.stress_period_data[(0, 0)]]
+
+
+def test_mfusgoc_ddreference_only_roundtrip(function_tmpdir):
+    """A DDREFERENCE-only stress period still emits a period line and round-trips."""
+    from flopy.mfusg import MfUsgOc
+
+    oc = MfUsgOc(
+        _oc_model(function_tmpdir, "d1"),
+        stress_period_data={(0, 0): ["ddreference"]},
+    )
+    oc.fn_path = str(function_tmpdir / "d1.oc")
+    oc.write_file()
+    text = Path(oc.fn_path).read_text().lower()
+    assert "period 1 step 1 ddreference" in text
+
+    re = MfUsgOc.load(oc.fn_path, _oc_model(function_tmpdir, "d2"), nper=1)
+    assert (0, 0) in re.stress_period_data
+    assert "DDREFERENCE" in [a.upper() for a in re.stress_period_data[(0, 0)]]
+
+
+def _oc_check_warnings(function_tmpdir, name, actions):
+    """Build an OC with `actions` and return its check() warning descriptions."""
+    from flopy.mfusg import MfUsgOc
+
+    oc = MfUsgOc(
+        _oc_model(function_tmpdir, name), stress_period_data={(0, 0): actions}
+    )
+    chk = oc.check(verbose=False)
+    return [str(d) for d in chk.summary_array["desc"]]
+
+
+def test_mfusgoc_check_accepts_usgt_actions(function_tmpdir):
+    """check() does not flag valid USG-T OC actions as ignored."""
+    actions = [
+        "bootstrap",
+        "nobootstrap",
+        "bootstrapscale",
+        "nobootstrapscale",
+        "ddreference",
+        "deltat 0.5",
+        "tminat 1e-10",
+        "tmaxat 1e10",
+        "tadjat 2.0",
+        "tcutat 5.0",
+        "hclose 1e-5",
+        "btol 1.1",
+        "mxiter 100",
+        "save head",
+        "save conc",
+        "print conc",
+        "save budget",
+    ]
+    assert _oc_check_warnings(function_tmpdir, "okact", actions) == []
+
+    # a genuinely unknown action is still flagged
+    descs = _oc_check_warnings(function_tmpdir, "bogus", ["save head", "frobnicate x"])
+    assert any("frobnicate" in d.lower() for d in descs)
+
+
+def test_mfusgoc_check_warns_save_ibound(function_tmpdir):
+    """check() warns that SAVE IBOUND is preserved by FloPy but USG-T rejects it."""
+    descs = _oc_check_warnings(
+        function_tmpdir, "ibwarn", ["save head", "save ibound"]
+    )
+    assert any(
+        "SAVE IBOUND" in d and "rejected by USG-T 2.7" in d for d in descs
+    ), descs

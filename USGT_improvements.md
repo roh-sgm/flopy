@@ -173,6 +173,18 @@ can be built from Python/numpy without first loading an existing model.
   words. EVT/MDT/LAK untouched. See `USGT_STAGE4_OC_FULLNESS.md`. `-k mfusgoc`
   **7 passed**, focused suite **134 passed**, exe **3 passed**, combined
   **137 passed** under the USG-T 2.7 ARM binary.
+  - **Polish follow-up (resolved):** (1) `write_file` now emits a
+    DDREFERENCE-only period line (`period k step s ddreference`); previously such
+    a period was dropped and the flag leaked into the next written period.
+    (2) `check()` recognises the valid USG-T OC actions (`BOOTSTRAP`/
+    `NOBOOTSTRAP`/`BOOTSTRAPSCALE`/`NOBOOTSTRAPSCALE`, `DDREFERENCE`,
+    `DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`, `HCLOSE`/`BTOL`/`MXITER`)
+    instead of emitting false "ignored" warnings, while still flagging genuinely
+    unknown actions. (3) `check()` emits a specific warning that `SAVE IBOUND` is
+    preserved by FloPy but rejected by USG-T 2.7 (write/load still preserve it).
+    Three tests added; `-k mfusgoc` **10 passed**, focused suite **137 passed**,
+    exe **3 passed**, combined **140 passed** under the ARM binary. OC stays
+    `✅ (intentionally not Full)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

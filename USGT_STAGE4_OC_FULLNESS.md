@@ -81,6 +81,25 @@ COMPACT), but explicit gaps remain — so the honest status stays
 
 These are documented, bounded gaps rather than silent failures.
 
+## Polish follow-up (resolved)
+
+1. **DDREFERENCE-only period** — `write_file` now emits the
+   `period <kper> step <kstp> ddreference` line even when that period has no
+   other action (previously the period was dropped and the flag leaked into the
+   next written period). Test: `test_mfusgoc_ddreference_only_roundtrip`.
+2. **`check()` recognises USG-T OC actions** — no more false "ignored" warnings
+   for `BOOTSTRAP`/`NOBOOTSTRAP`/`BOOTSTRAPSCALE`/`NOBOOTSTRAPSCALE`,
+   `DDREFERENCE`, the ATS params (`DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`),
+   and the solver params (`HCLOSE`/`BTOL`/`MXITER`). Genuinely unknown actions
+   are still flagged. Test: `test_mfusgoc_check_accepts_usgt_actions`.
+3. **`SAVE IBOUND` check warning** — `check()` now emits a specific warning,
+   "SAVE IBOUND is preserved by FloPy but rejected by USG-T 2.7", so the
+   documented solver gap surfaces at check time (write/load still preserve the
+   keyword). Test: `test_mfusgoc_check_warns_save_ibound`.
+
+After the polish: `-k mfusgoc` **10 passed**; focused **137 passed**; exe
+**3 passed**; combined **140 passed** under the USG-T 2.7 ARM binary.
+
 ## Validation
 
 ```bash

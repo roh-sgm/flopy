@@ -407,6 +407,26 @@ class MfUsgOc(Package):
                     expected_actions.append([first, second])
             # remove exception
             del expected_actions[expected_actions.index(["PRINT", "IBOUND"])]
+            # USG-T-specific OC actions (glo2basu1.f SGWF2BAS7N): single-word
+            # toggles and keyword-value parameters that are valid per stress
+            # period and must not be flagged as ignored.
+            usgt_single = {
+                "BOOTSTRAP",
+                "NOBOOTSTRAP",
+                "BOOTSTRAPSCALE",
+                "NOBOOTSTRAPSCALE",
+                "DDREFERENCE",
+            }
+            usgt_param = {
+                "DELTAT",
+                "TMINAT",
+                "TMAXAT",
+                "TADJAT",
+                "TCUTAT",
+                "HCLOSE",
+                "BTOL",
+                "MXITER",
+            }
             keys = list(self.stress_period_data.keys())
             for kper in range(dis.nper):
                 for kstp in range(dis.nstp[kper]):
@@ -418,7 +438,20 @@ class MfUsgOc(Package):
                             data = [data]
                         for action in data:
                             words = action.upper().split()
-                            if len(words) < 2:
+                            if not words:
+                                continue
+                            # SAVE IBOUND: FloPy preserves it, but USG-T 2.7's OC
+                            # reader has it commented out (glo2basu1.f).
+                            if words[0:2] == ["SAVE", "IBOUND"]:
+                                chk._add_to_summary(
+                                    "Warning",
+                                    package="OC",
+                                    desc="SAVE IBOUND is preserved by FloPy but "
+                                    "rejected by USG-T 2.7",
+                                )
+                            elif words[0] in usgt_single or words[0] in usgt_param:
+                                continue
+                            elif len(words) < 2:
                                 chk._add_to_summary(
                                     "Warning",
                                     package="OC",
@@ -558,10 +591,13 @@ class MfUsgOc(Package):
                                 ddnref = item.lower()
                             else:
                                 lines += f"  {item}\n"
-                if len(lines) > 0:
+                # Emit the period header when there are actions OR only a
+                # DDREFERENCE (which rides on the period line); otherwise a
+                # ddreference-only period would be dropped and the flag would
+                # leak into the next written period.
+                if len(lines) > 0 or ddnref:
                     f_oc.write(f"period {kper + 1} step {kstp + 1} {ddnref}\n")
                     f_oc.write(lines)
-                    #                    f_oc.write("\n")
                     ddnref = ""
                     lines = ""
 
