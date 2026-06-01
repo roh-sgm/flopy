@@ -105,6 +105,23 @@ can be built from Python/numpy without first loading an existing model.
     be 1). One test added (`test_mfusggsf_vertex_modes`); focused suite
     **120 passed**, exe **3 passed**, combined **123 passed** under the ARM
     binary. GSF stays `Full (authoring)`.
+  - **Final follow-up (resolved):** tightened the GSF semantic contract against
+    spec 2.17. (1) `_parse_semantic` now reuses `_normalize_header`, so only
+    `UNSTRUCTURED` / `UNSTRUCTURED GWF` parse and e.g. `UNSTRUCTURED EXTRA GWF`
+    falls back to raw. (2) `IZ`/`IC` are validated: authoring defaults to
+    `(1, 1)`, accepts an omitted value as the spec's assumed `1 1`, and rejects
+    anything else or a bad length (e.g. `(1,1,9)`); on load, `nnode nlay` or
+    `nnode nlay 1 1` parse semantically while `0 1`, `1 0`, or an odd token count
+    fall back to raw. (3) node ids must be `0..nnodes-1` contiguous and ordered —
+    authoring raises on a gap/duplicate/reorder, and a file whose `inode` column
+    is not `1..nnode` in order falls back to raw. (4) clarified that
+    `vertex_mode="cell"` is a non-shared *generalization* (caller polygon order
+    within each half) and is **not** byte-equivalent to the GRIDGEN2GSF quadtree
+    `1,4,3,2 / 5,8,7,6` winding; only the top/bottom-half split is guaranteed.
+    Three tests added (`test_mfusggsf_parse_header_strict`,
+    `test_mfusggsf_iz_ic_flags`, `test_mfusggsf_inode_validation`); focused suite
+    **123 passed**, exe **3 passed**, combined **126 passed** under the ARM
+    binary. GSF stays `Full (authoring)`.
 
 ### Stage 3 — upstream-readiness pass (2026-05-31)
 

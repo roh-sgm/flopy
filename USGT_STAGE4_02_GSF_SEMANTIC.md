@@ -262,3 +262,32 @@ Test added: `test_mfusggsf_vertex_modes` (shared shares ids between neighbours;
 cell does not; quad → 8 vertices/cell; top/bottom split recovered by
 `from_gridspec`). Validation: focused **120 passed**, exe **3 passed**, combined
 **123 passed** under the USG-T 2.7 ARM binary; `git diff --check` clean.
+
+### Final follow-up — strict header / IZ-IC / inode + vertex_mode docs
+
+Tightened the GSF semantic contract against gwutil_a section 2.17:
+
+1. **Strict header (parse).** `_parse_semantic` now reuses `_normalize_header`
+   instead of scanning for any `GWF` token, so only `UNSTRUCTURED` /
+   `UNSTRUCTURED GWF` parse; `UNSTRUCTURED EXTRA GWF` fails semantically and
+   round-trips as raw.
+2. **`IZ IC` validation.** Authoring defaults `extra_header=(1, 1)`, accepts an
+   omitted value as the spec's assumed `1 1`, and rejects any other value or a
+   bad length (e.g. `(1, 1, 9)`). On `load(parse=True)`, line 2 is accepted as
+   `NNODES NLAY` (flags assumed `1 1`) or `NNODES NLAY 1 1`; `0 1`, `1 0`, or an
+   odd token count fall back to raw.
+3. **`inode` validation.** Authoring requires `node_data` ids to be
+   `0..nnodes-1`, contiguous and ordered (gap / duplicate / reorder raise). The
+   parser requires the file's `inode` column to be `1..nnode` in order, else raw
+   fallback.
+4. **`vertex_mode="cell"` docs (finding 4).** Kept caller polygon order within
+   each half (applying the gridgen `1,4,3,2` winding would reorder
+   already-correctly-wound caller polygons). Documented `"cell"` as a non-shared
+   generalization that is **not** byte-equivalent to the GRIDGEN2GSF quadtree
+   winding; only the top/bottom-half split (what `split_vertices=True` needs) is
+   guaranteed. Tests assert the caller order, not gridgen equivalence.
+
+Tests added: `test_mfusggsf_parse_header_strict`, `test_mfusggsf_iz_ic_flags`,
+`test_mfusggsf_inode_validation`. Validation: focused **123 passed**, exe
+**3 passed**, combined **126 passed** under the USG-T 2.7 ARM binary;
+`git diff --check` clean.

@@ -894,6 +894,19 @@ vertices so `from_gridspec(split_vertices=True)` recovers top/botm. Documented
 the line-2 flags as `IZ IC` (spec 2.17; both must be 1). Test
 `test_mfusggsf_vertex_modes` added. Status unchanged: Full (authoring).
 
+Final follow-up (resolved): tightened the semantic contract to spec 2.17.
+(1) `_parse_semantic` reuses `_normalize_header` — only `UNSTRUCTURED` /
+`UNSTRUCTURED GWF` parse (`UNSTRUCTURED EXTRA GWF` → raw). (2) `IZ`/`IC`
+validated: authoring defaults `(1,1)`, accepts omitted as assumed `1 1`, rejects
+other values or bad lengths; on load `nnode nlay` and `nnode nlay 1 1` are
+semantic while `0 1` / `1 0` / odd token counts → raw. (3) node ids must be
+`0..nnodes-1` contiguous/ordered (authoring raises on gap/dup/reorder; a file
+with out-of-order `inode` → raw). (4) `vertex_mode="cell"` documented as a
+non-shared generalization, not byte-equivalent to the GRIDGEN2GSF quadtree
+winding (only the top/bottom-half split is guaranteed). Three tests added
+(`test_mfusggsf_parse_header_strict`, `test_mfusggsf_iz_ic_flags`,
+`test_mfusggsf_inode_validation`). Status unchanged: Full (authoring).
+
 ---
 
 ## Priority 5 - Post-Processing And Validation

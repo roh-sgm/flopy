@@ -2778,7 +2778,7 @@ def test_mfusggsf_hardening_rejects(function_tmpdir):
 
     with pytest.raises(ValueError, match="header"):
         MfUsgGsf(ml(), vertices=v, node_data=nd, header="STRUCTURED")
-    with pytest.raises(ValueError, match="unique"):
+    with pytest.raises(ValueError, match="contiguous and ordered"):
         MfUsgGsf(ml(), vertices=v, node_data=[nd[0], dict(nd[0])])
     with pytest.raises(ValueError, match="nlay"):
         MfUsgGsf(
@@ -2787,6 +2787,112 @@ def test_mfusggsf_hardening_rejects(function_tmpdir):
             node_data=[{"xc": 0.5, "yc": 0.3, "layer": 2, "vertices": [0, 1, 2]}],
             nlay=1,
         )
+
+
+# Minimal GSF body shared by the strict-parse tests (vertices + one node).
+_GSF_BODY = "3\n0 0 10\n1 0 10\n0.5 1 10\n1 0.5 0.333 5 1 3 1 2 3\n"
+
+
+def _gsf_parse_mode(function_tmpdir, text, name):
+    """Load `text` with parse=True; return 'semantic' or 'raw'."""
+    from flopy.modflow import ModflowDis
+
+    p = function_tmpdir / f"{name}.gsf"
+    p.write_text(text)
+    m = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=1, nrow=1, ncol=3, nper=1)
+    gsf = MfUsgGsf.load(str(p), m, parse=True)
+    return "raw" if gsf.node_data is None else "semantic"
+
+
+def test_mfusggsf_parse_header_strict(function_tmpdir):
+    """parse=True accepts only UNSTRUCTURED / UNSTRUCTURED GWF; else raw fallback."""
+    assert (
+        _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED\n1 1 1 1\n" + _GSF_BODY, "a")
+        == "semantic"
+    )
+    assert (
+        _gsf_parse_mode(
+            function_tmpdir, "UNSTRUCTURED GWF\n1 1 1 1\n" + _GSF_BODY, "b"
+        )
+        == "semantic"
+    )
+    # extra token between UNSTRUCTURED and GWF is rejected -> raw round-trip
+    assert (
+        _gsf_parse_mode(
+            function_tmpdir, "UNSTRUCTURED EXTRA GWF\n1 1 1 1\n" + _GSF_BODY, "c"
+        )
+        == "raw"
+    )
+
+
+def test_mfusggsf_iz_ic_flags(function_tmpdir):
+    """IZ/IC line-2 flags: authoring requires (1,1); parse allows omitted or 1 1."""
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=3, nper=1)
+        return m
+
+    v = _MINIMAL_GSF_VERTICES
+    nd = [{"node": 0, "xc": 0.5, "yc": 0.3, "layer": 0, "vertices": [0, 1, 2]}]
+
+    # authoring: omitted (assumed) and explicit (1,1) are accepted
+    assert MfUsgGsf(ml(), vertices=v, node_data=nd).extra_header == (1, 1)
+    assert (
+        MfUsgGsf(ml(), vertices=v, node_data=nd, extra_header=(1, 1)).extra_header
+        == (1, 1)
+    )
+    # authoring: anything other than (1, 1), or a bad length, is rejected
+    for bad in ((0, 1), (1, 0), (1, 1, 9)):
+        with pytest.raises(ValueError, match="IZ IC"):
+            MfUsgGsf(ml(), vertices=v, node_data=nd, extra_header=bad)
+
+    # parse: 'nnode nlay' (omitted -> assumed) and 'nnode nlay 1 1' are semantic
+    assert (
+        _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED\n1 1\n" + _GSF_BODY, "p2")
+        == "semantic"
+    )
+    assert (
+        _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED\n1 1 1 1\n" + _GSF_BODY, "p4")
+        == "semantic"
+    )
+    # parse: 0 1, 1 0, or an odd length -> raw fallback
+    for flags, name in (("0 1", "f01"), ("1 0", "f10"), ("1", "f3"), ("1 1 9", "f5")):
+        text = f"UNSTRUCTURED\n1 1 {flags}\n" + _GSF_BODY
+        assert _gsf_parse_mode(function_tmpdir, text, name) == "raw"
+
+
+def test_mfusggsf_inode_validation(function_tmpdir):
+    """Node ids must be 0..nnodes-1 ordered (authoring error / parse raw fallback)."""
+    from flopy.modflow import ModflowDis
+
+    def ml():
+        m = MfUsg(structured=False, model_ws=str(function_tmpdir))
+        ModflowDis(m, nlay=1, nrow=1, ncol=3, nper=1)
+        return m
+
+    v = _MINIMAL_GSF_VERTICES
+
+    def rec(node):
+        return {"node": node, "xc": 0.5, "yc": 0.3, "layer": 0, "vertices": [0, 1, 2]}
+
+    # authoring: gap, duplicate, and reorder all fail explicitly
+    for ids in ([0, 2], [0, 0], [1, 0]):
+        with pytest.raises(ValueError, match="contiguous and ordered"):
+            MfUsgGsf(ml(), vertices=v, node_data=[rec(i) for i in ids])
+
+    # parse: node numbers out of order (2 then 1) -> raw fallback
+    body = (
+        "3\n0 0 10\n1 0 10\n0.5 1 10\n"
+        "2 0.5 0.3 5 1 3 1 2 3\n"
+        "1 0.6 0.3 5 1 3 1 2 3\n"
+    )
+    assert (
+        _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED\n2 1 1 1\n" + body, "ord")
+        == "raw"
+    )
 
 
 # ---------------------------------------------------------------------------

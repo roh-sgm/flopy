@@ -149,11 +149,7 @@ class MfUsgGsf(Package):
             self.nnodes = nnodes
             self.nlay = nlay
             self.header = self._normalize_header(header)
-            self.extra_header = (
-                tuple(int(x) for x in extra_header)
-                if extra_header is not None
-                else (1, 1)
-            )
+            self.extra_header = self._normalize_extra_header(extra_header)
             self.lines = None
         else:
             self.lines = list(lines) if lines else []
@@ -211,8 +207,11 @@ class MfUsgGsf(Package):
             )
 
         ids = [r["node"] for r in nodes]
-        if len(set(ids)) != len(ids):
-            raise ValueError("GSF node ids must be unique.")
+        if ids != list(range(len(ids))):
+            raise ValueError(
+                "GSF node ids must be contiguous and ordered 0..nnodes-1 "
+                f"(no duplicates, gaps, or reordering); got {ids}."
+            )
 
         nnodes = len(nodes)
         max_layer = max((r["layer"] for r in nodes), default=-1)
@@ -235,6 +234,23 @@ class MfUsgGsf(Package):
                 f"got {header!r}."
             )
         return norm
+
+    @staticmethod
+    def _normalize_extra_header(extra_header):
+        """Validate the line-2 ``IZ IC`` flags (spec 2.17: both must be 1).
+
+        ``None`` means the flags are omitted on the line, which the spec treats
+        as ``1 1`` (assumed). Any explicit value must be exactly ``(1, 1)``.
+        """
+        if extra_header is None:
+            return (1, 1)
+        flags = tuple(int(x) for x in extra_header)
+        if flags != (1, 1):
+            raise ValueError(
+                "GSF line-2 'IZ IC' flags must be (1, 1) (spec 2.17: elevations "
+                f"and cell specifications both supplied); got {flags}."
+            )
+        return flags
 
     @staticmethod
     def _strip_closing(vids):
@@ -269,10 +285,13 @@ class MfUsgGsf(Package):
           (all tops, then all bottoms); neighbouring cells reuse vertex ids.
         * ``"cell"`` (non-parsimonious): each cell owns ``2*k`` unique vertices
           (``k`` tops then ``k`` bottoms); ids are never shared. For a quad this
-          is 8 vertices/cell, top half then bottom half — the structure of
-          GRIDGEN2GSF ``1,4,3,2,5,8,7,6`` (this helper keeps the caller's polygon
-          order within each half rather than the gridgen quadtree winding, so it
-          is not byte-equivalent for non-quad polygons).
+          is 8 vertices/cell. This is a **non-shared generalization** of the
+          GRIDGEN2GSF non-parsimonious layout: it keeps the caller's polygon
+          order within each half rather than reproducing the gridgen quadtree
+          corner winding (``1,4,3,2`` top, ``5,8,7,6`` bottom), so it is **not
+          byte-equivalent** to GRIDGEN2GSF for any cell shape. Only the
+          top-half/bottom-half split (what ``split_vertices=True`` needs) is
+          guaranteed.
         """
         mode = cls._canon_vertex_mode(vertex_mode)
         if mode == "shared":
@@ -610,8 +629,8 @@ class MfUsgGsf(Package):
             filenames=filenames,
         )
 
-    @staticmethod
-    def _parse_semantic(lines):
+    @classmethod
+    def _parse_semantic(cls, lines):
         """Parse raw GSF lines into semantic 0-based constructor kwargs.
 
         Raises ``ValueError``/``IndexError`` on any structural problem so
@@ -621,19 +640,29 @@ class MfUsgGsf(Package):
             ln for ln in lines if ln.strip() and not ln.lstrip().startswith("#")
         ]
 
-        head_toks = filtered[0].split()
-        if not head_toks or head_toks[0].upper() != "UNSTRUCTURED":
-            raise ValueError(
-                f"GSF must start with 'UNSTRUCTURED'; got {filtered[0].strip()!r}."
-            )
-        header = "UNSTRUCTURED" + (
-            " GWF" if any(t.upper() == "GWF" for t in head_toks[1:]) else ""
-        )
+        # Header must be exactly UNSTRUCTURED / UNSTRUCTURED GWF (e.g.
+        # 'UNSTRUCTURED EXTRA GWF' is rejected -> raw fallback).
+        header = cls._normalize_header(filtered[0])
 
+        # Line 2: 'NNODES NLAY' (IZ/IC omitted, assumed 1 1) or
+        # 'NNODES NLAY IZ IC' with IZ==IC==1. Anything else is a parse failure
+        # rather than a silent reinterpretation.
         line2 = filtered[1].split()
+        if len(line2) == 2:
+            extra_header = None
+        elif len(line2) == 4:
+            extra_header = [int(line2[2]), int(line2[3])]
+            if extra_header != [1, 1]:
+                raise ValueError(
+                    f"GSF line-2 'IZ IC' flags must be 1 1; got {extra_header}."
+                )
+        else:
+            raise ValueError(
+                "GSF line 2 must be 'NNODES NLAY' or 'NNODES NLAY IZ IC'; got "
+                f"{filtered[1].strip()!r}."
+            )
         nnodes = int(line2[0])
-        nlay = int(line2[1]) if len(line2) > 1 else None
-        extra_header = [int(t) for t in line2[2:]]
+        nlay = int(line2[1])
 
         nverts = int(filtered[2].split()[0])
 
@@ -645,14 +674,20 @@ class MfUsgGsf(Package):
             vertices.append((float(p[0]), float(p[1]), float(p[2])))
 
         node_data = []
-        for _ in range(nnodes):
+        for n in range(nnodes):
             p = filtered[idx].split()
             idx += 1
+            inode = int(p[0])
+            if inode != n + 1:
+                raise ValueError(
+                    "GSF node numbers must be supplied as 1..nnode in order; "
+                    f"expected {n + 1}, got {inode}."
+                )
             nv = int(p[5])
             vids = [int(p[6 + k]) - 1 for k in range(nv)]
             node_data.append(
                 {
-                    "node": int(p[0]) - 1,
+                    "node": n,
                     "xc": float(p[1]),
                     "yc": float(p[2]),
                     "zc": float(p[3]),
