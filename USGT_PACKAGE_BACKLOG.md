@@ -299,7 +299,8 @@ FloPy class: missing
 
 Fortran: `glo2sgbu1.f`
 
-Status: not implemented.
+Status: implemented; non-parametric Full (authoring) + parameter-preserving
+(`NPSGB`) as of Stage 4.4C.
 
 Problem:
 
@@ -307,6 +308,17 @@ Problem:
   registered as `"sgb"`. Node-based `(node, gradient)`, AUX, `ITMP/-1` reuse,
   0-based internal / 1-based file, `NPSGB>0` explicit failure. Authoring +
   round-trip + NAM-registry + parameter-failure tests added.
+- **DONE** (Stage 4.4C): `NPSGB>0` list parameters are now **preserved**
+  (load → write → reload). `load` keeps the `PARAMETER NPSGB MXS` record
+  (`UPARLSTAL`), the per-parameter definitions (`UPARLSTRP`: name/partyp/parval/
+  nlst + `NLST` `NODE GRADIENT [aux]` rows, 0-based) in `self.parameters`, and the
+  per-SP active-parameter names (`UPARLSTSUB`) in `self.active_params`; `MXS`
+  preserved. `write_file` re-emits all of it (validating up front). SFAC inert on
+  the gradient (Fortran ISCLOC=2). Uses the shared list-parameter helpers in
+  `_usgt_parameters.py`. Not `Full` on the parametric axis: parameter `INSTANCES`
+  (Fortran-supported) and from-scratch parameter authoring raise
+  `NotImplementedError`; inconsistent state raises `ValueError`. 9 new tests
+  (`-k mfusgsgb` 14 passed). See `USGT_STAGE4_04_PARAMETERS_SGB.md`.
 
 Fortran facts to verify:
 

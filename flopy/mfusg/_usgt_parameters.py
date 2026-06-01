@@ -107,17 +107,42 @@ def write_active_array_parameters(f, records):
 
 
 # ---------------------------------------------------------------------------
-# List parameters (UPARLSTRP / UPARLSTSUB) -- used by HFB (Stage 4.4B).
+# List parameters (UPARLSTAL / UPARLSTRP / UPARLSTSUB) -- HFB (4.4B), SGB (4.4C).
 # ---------------------------------------------------------------------------
 #
 # A list parameter owns NLST list rows; its value scales a designated column on
 # expansion. The definition header (UPARLSTRP) is
 # ``PARNAM PARTYP PARVAL NLST [INSTANCES n]``; the NLST rows that follow are
 # package-specific (e.g. HFB barrier rows ``LAYER IROW1 ICOL1 IROW2 ICOL2
-# FACTOR`` / ``NODE1 NODE2 FACTOR``), so the row reader/writer stays in the
-# package. Activation (UPARLSTSUB) reads one parameter name per active
-# parameter. HFB does not support INSTANCES (gwf2hfb7u1.f aborts when NUMINST>0),
-# so these helpers carry parameter names only.
+# FACTOR`` / ``NODE1 NODE2 FACTOR``; SGB rows ``NODE GRADIENT [aux ...]``), so
+# the row reader/writer stays in the package. Activation (UPARLSTSUB) reads one
+# parameter name per active parameter (plus an instance name when the parameter
+# is time-varying). The helpers below carry parameter names only; callers that
+# do not support INSTANCES reject NUMINST>0 themselves.
+#
+# Packages whose header carries the parameter count inline (SGB/DRT/QRT, via
+# ``UPARLSTAL``) use ``read_list_parameter_count`` / ``write_list_parameter_count``
+# for the leading ``PARAMETER NP MXL`` record. HFB has no such line (its NPHFB is
+# in item 1).
+
+
+def read_list_parameter_count(line):
+    """Parse a leading ``PARAMETER NP MXL`` record (``UPARLSTAL`` grammar).
+
+    Returns ``(np, mxl)``; ``(0, 0)`` when the line is not a PARAMETER record
+    (so the same line is then parsed as the package header by the caller).
+    """
+    t = line.split("#")[0].strip().split()
+    if t and t[0].upper() == "PARAMETER":
+        np_ = int(t[1])
+        mxl = int(t[2]) if len(t) > 2 else 0
+        return np_, mxl
+    return 0, 0
+
+
+def write_list_parameter_count(f, np_, mxl):
+    """Write a leading ``PARAMETER NP MXL`` record."""
+    f.write(f"PARAMETER {np_} {mxl}\n")
 
 
 def read_list_parameter_header(line):

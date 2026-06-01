@@ -330,6 +330,27 @@ honest, upstream-ready USG-T 2.7 story.
   Tests: `-k mfusghfb` **19 passed** (4 new negative tests, incl. an assertion
   that no partial file is written); focused **184**, exe **4**, combined **188**
   (ARM). See `USGT_STAGE4_04_PARAMETERS_HFB.md`.
+- **Stage 4.4C — SGB list-parameter preservation (executed):** SGB `NPSGB>0`
+  list parameters now load → write → reload with their syntax intact.
+  `MfUsgSgb.load` consumes the leading `PARAMETER NPSGB MXS` record (`UPARLSTAL`),
+  stores the per-parameter definitions (`UPARLSTRP`: name/partyp/parval/nlst +
+  `NLST` `NODE GRADIENT [aux]` rows, 0-based) in `self.parameters` and the per-SP
+  active-parameter names (`UPARLSTSUB`) in `self.active_params`, and keeps `MXS`;
+  `write_file` re-emits all of it after validating the state up front. SFAC is
+  inert on the gradient (Fortran ISCLOC=2 scales a dummy column), AUX is
+  preserved, and `ITMP<0` reuse is kept (written expanded, matching the existing
+  non-parametric behavior). The shared helper `_usgt_parameters.py` gains
+  `read_list_parameter_count` / `write_list_parameter_count` (the `PARAMETER NP
+  MXL` record); the existing list-parameter header/activation helpers are reused
+  unchanged; SGB keeps its own `_read_sgb_rows`/`_write_sgb_rows`. Not promoted to
+  `Full` on the parametric axis: parameter `INSTANCES` (Fortran-supported) and
+  from-scratch parameter authoring raise `NotImplementedError`; inconsistent
+  state raises `ValueError` (no partial file). Non-parametric SGB unchanged.
+  Tests: `-k mfusgsgb` **14 passed** (9 new: round-trip, mixed non-param+active,
+  reuse+active, AUX, SFAC-inert, OPEN/CLOSE, INSTANCES fail, from-scratch fail,
+  inconsistent fail; the old parameters-fail test superseded); `-k "mfusgsgb or
+  usgt_list"` **17**; focused **192**, exe **4**, combined **196** (ARM). DRT/QRT
+  remain explicit-fail. See `USGT_STAGE4_04_PARAMETERS_SGB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
