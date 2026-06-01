@@ -301,6 +301,22 @@ honest, upstream-ready USG-T 2.7 story.
   from-scratch fail, transient+params fail; 3 non-parametric regressions kept);
   focused **173**, exe **4**, combined **177** (ARM). See
   `USGT_STAGE4_04_PARAMETERS_HFB.md`.
+- **Stage 4.4B follow-up — HFB list controls (executed):** review found that a
+  valid HFB file may begin a barrier list with `SFAC`/`OPEN/CLOSE`/`EXTERNAL`
+  (per `SGWF2HFB7RL`/`SGWF2HFB7RLU`), which the previous loader crashed on with a
+  raw `ValueError`. `MfUsgHfb._read_hfb_rows` now consumes these via the shared
+  `_usgt_list.begin_list_block` — the same helper SGB/QRT/DRT use, **reused
+  unchanged** — for both the per-parameter `NLST` rows and the non-parametric
+  `NHFBNP` rows: `SFAC` scales `HYDCHR` per block, `OPEN/CLOSE` resolves against
+  `model_ws` (quoted names supported), `EXTERNAL` resolves via `ext_unit_dict`
+  (unresolvable → `NotImplementedError`, not `ValueError`). The writer still emits
+  expanded inline rows (round-trip is semantically exact: `FACTOR*SFAC` baked in,
+  `PARVAL` preserved). `write_file` now also requires `nacthfb ==
+  len(acthfb_names)` (else `ValueError`). Tests: `-k mfusghfb` **15 passed** (7
+  new: SFAC non-param/param/mixed, OPEN/CLOSE plain+quoted, EXTERNAL positive,
+  EXTERNAL-without-dict fail, nacthfb-mismatch fail); SGB/QRT/DRT `_usgt_list`
+  regressions green; focused **180**, exe **4**, combined **184** (ARM). See
+  `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

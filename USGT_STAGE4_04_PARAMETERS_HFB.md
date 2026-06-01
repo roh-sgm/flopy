@@ -83,10 +83,11 @@ Upgraded from "`NPHFB>0` fails explicitly" to **parameter-preserving
   re-read/redefine the parameters each stress period under `ITERP=1`) → both
   `load` and `write_file` raise `NotImplementedError`.
 - `INSTANCES` are unsupported (matches the Fortran, which aborts).
-- `SFAC`/`EXTERNAL`/`OPEN/CLOSE` inside barrier lists are not parsed (same
-  inline-row assumption as the existing non-parametric HFB loader).
 
-## Tests (`-k mfusghfb`, 8 passed)
+`SFAC` / `OPEN/CLOSE` / `EXTERNAL` list controls inside barrier lists are
+supported as of the list-control follow-up (below).
+
+## Tests (Stage 4.4B)
 
 New (Stage 4.4B):
 
@@ -115,6 +116,45 @@ parameterized HFB model is not cheap); the writer is audited line-by-line agains
 the Fortran and round-trips in FloPy. Executable validation remains a documented
 manual tier.
 
+## List-control follow-up (executed)
+
+Re-audit of `SGWF2HFB7RL` / `SGWF2HFB7RLU` showed that **every** HFB barrier list
+(both the per-parameter `NLST` rows in item 2-3 and the non-parametric `NHFBNP`
+rows in item 4) may begin with the standard MODFLOW list controls before the
+data rows: `SFAC <factor>`, `OPEN/CLOSE <fname>`, `EXTERNAL <unit>`. The previous
+loader assumed inline numeric rows and raised `ValueError` on a valid file that
+started a block with `SFAC`.
+
+`MfUsgHfb._read_hfb_rows` now consumes these via the shared
+`flopy/mfusg/_usgt_list.py::begin_list_block` (the same helper SGB/QRT/DRT use —
+**reused unchanged**):
+
+- `SFAC` scales the barrier `HYDCHR`/`FACTOR` (`HFB(6,II) = FACTOR*SFAC`), applied
+  on read to each block independently (a parameter block and the non-parametric
+  block can each carry their own `SFAC`).
+- `OPEN/CLOSE` reads the rows from a named file, resolved against
+  `model.model_ws`; quoted filenames (with spaces) are supported.
+- `EXTERNAL` reads the rows from a NAM-declared unit resolved via
+  `ext_unit_dict`; an unresolvable unit raises `NotImplementedError` (not
+  `ValueError`).
+
+The writer is unchanged: it emits expanded inline rows with the scaled values
+("Expanded valid write") — `SFAC`/`OPEN/CLOSE`/`EXTERNAL` are not reproduced.
+Round-trip is semantically exact: for a parameter, `FACTOR*SFAC` is baked into
+the written row and `PARVAL` is preserved separately, so the effective
+`FACTOR*SFAC*PARVAL` is unchanged.
+
+`write_file` also gained a guard: for a parameterized HFB, `nacthfb` must equal
+`len(acthfb_names)`, otherwise a clear `ValueError` is raised (no partial write).
+
+New tests (Stage 4.4B follow-up): `test_mfusghfb_sfac_scales_nonparam`,
+`test_mfusghfb_sfac_parameterized_roundtrip`,
+`test_mfusghfb_sfac_mixed_param_and_nonparam`, `test_mfusghfb_open_close`
+(plain + quoted), `test_mfusghfb_external_via_ext_unit_dict`,
+`test_mfusghfb_external_without_dict_fails`,
+`test_mfusghfb_nacthfb_mismatch_fails`. The SGB/QRT/DRT `_usgt_list` regressions
+stay green (the helper was reused, not modified).
+
 ## Validation
 
 ```bash
@@ -126,5 +166,6 @@ git diff --check
 git status --short
 ```
 
-Results: `-k mfusghfb` **8 passed**; focused **173 passed**; exe **4 passed**;
-combined **177 passed** under the USG-T 2.7 ARM binary.
+Results (after the list-control follow-up): `-k "mfusghfb or usgt_list"`
+**18 passed**; `-k mfusghfb` **15 passed**; focused **180 passed**; exe
+**4 passed**; combined **184 passed** under the USG-T 2.7 ARM binary.

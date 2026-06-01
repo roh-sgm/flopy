@@ -3868,6 +3868,153 @@ def test_mfusghfb_transient_with_parameters_fails(function_tmpdir):
         MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "tp", nper=2), nper=2)
 
 
+# --- Stage 4.4B follow-up: HFB list controls (SFAC / OPEN-CLOSE / EXTERNAL) --
+
+
+def test_mfusghfb_sfac_scales_nonparam(function_tmpdir):
+    """A non-parametric HFB barrier list may begin with SFAC, which scales hydchr."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "sfac.hfb"
+    p.write_text(
+        "# hfb non-param SFAC\n"
+        "         0         0         2\n"  # NPHFB MXFB NHFBNP
+        " SFAC 10.0\n"
+        " 1 2 0.5\n"
+        " 3 4 0.5\n"
+    )
+    hfb = MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "sf1"), nper=1)
+    assert list(hfb.hfb_data["node1"]) == [0, 2]
+    assert np.allclose(hfb.hfb_data["hydchr"], [5.0, 5.0])  # 0.5 * SFAC 10
+
+
+def test_mfusghfb_sfac_parameterized_roundtrip(function_tmpdir):
+    """SFAC inside a parameter's NLST block scales hydchr; the (already-scaled)
+    value is preserved on write -> reload (expanded valid write, no SFAC out)."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "psfac.hfb"
+    p.write_text(
+        "# hfb param SFAC (structured)\n"
+        "         1         1         0\n"
+        "spar hfb 2.0 1\n"
+        " SFAC 4.0\n"
+        " 1 1 1 1 2 0.5\n"  # k irow1 icol1 irow2 icol2 factor
+        "1\n"
+        "spar\n"
+    )
+    hfb = MfUsgHfb.load(
+        str(p), _hfb_model(function_tmpdir, "ps1", structured=True, ncol=2), nper=1
+    )
+    assert np.allclose(hfb.parameters["spar"]["data"]["hydchr"], [2.0])  # 0.5*4
+    assert list(hfb.parameters["spar"]["data"]["k"]) == [0]
+
+    out = function_tmpdir / "psfac_out.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    assert "SFAC" not in out.read_text()  # SFAC baked into hydchr, not preserved
+
+    re = MfUsgHfb.load(
+        str(out), _hfb_model(function_tmpdir, "ps2", structured=True, ncol=2), nper=1
+    )
+    assert np.allclose(re.parameters["spar"]["data"]["hydchr"], [2.0])
+    assert re.parameters["spar"]["parval"] == "2.0"
+
+
+def test_mfusghfb_sfac_mixed_param_and_nonparam(function_tmpdir):
+    """SFAC applies independently to a parameter's NLST block (item 2-3) and to
+    the non-parametric barriers (item 4)."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "mixsfac.hfb"
+    p.write_text(
+        "# hfb mixed SFAC\n"
+        "         1         1         1\n"  # NPHFB=1 MXFB=1 NHFBNP=1
+        "spar hfb 2.0 1\n"
+        " SFAC 3.0\n"
+        " 1 2 0.4\n"  # param barrier -> 0.4 * 3 = 1.2
+        " SFAC 5.0\n"
+        " 7 8 0.2\n"  # non-param barrier -> 0.2 * 5 = 1.0
+        "1\n"
+        "spar\n"
+    )
+    hfb = MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "mx1"), nper=1)
+    assert np.allclose(hfb.parameters["spar"]["data"]["hydchr"], [1.2])
+    assert np.allclose(hfb.hfb_data["hydchr"], [1.0])
+    assert list(hfb.hfb_data["node1"]) == [6]
+
+
+def test_mfusghfb_open_close(function_tmpdir):
+    """A barrier list can be read from an OPEN/CLOSE file (plain and quoted)."""
+    from flopy.mfusg import MfUsgHfb
+
+    (function_tmpdir / "hfb_rows.dat").write_text(" 1 2 0.7\n 3 4 0.8\n")
+    p = function_tmpdir / "oc.hfb"
+    p.write_text(
+        "# hfb open/close\n         0         0         2\n OPEN/CLOSE hfb_rows.dat\n"
+    )
+    hfb = MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "oc1"), nper=1)
+    assert list(hfb.hfb_data["node1"]) == [0, 2]
+    assert np.allclose(hfb.hfb_data["hydchr"], [0.7, 0.8])
+
+    # quoted filename containing a space
+    (function_tmpdir / "hfb rows.dat").write_text(" 5 6 0.9\n")
+    pq = function_tmpdir / "ocq.hfb"
+    pq.write_text(
+        '# hfb open/close quoted\n         0         0         1\n'
+        ' OPEN/CLOSE "hfb rows.dat"\n'
+    )
+    hfbq = MfUsgHfb.load(str(pq), _hfb_model(function_tmpdir, "oc2"), nper=1)
+    assert list(hfbq.hfb_data["node1"]) == [4]
+
+
+def test_mfusghfb_external_via_ext_unit_dict(function_tmpdir):
+    """EXTERNAL resolves the barrier-list file through ext_unit_dict."""
+    import types
+
+    from flopy.mfusg import MfUsgHfb
+
+    (function_tmpdir / "hfb_ext.dat").write_text(" 7 8 0.11\n")
+    p = function_tmpdir / "ext.hfb"
+    p.write_text("# hfb external\n         0         0         1\n EXTERNAL 88\n")
+    ext_unit_dict = {
+        88: types.SimpleNamespace(filename="hfb_ext.dat", filetype="DATA")
+    }
+    hfb = MfUsgHfb.load(
+        str(p), _hfb_model(function_tmpdir, "ex1"), nper=1, ext_unit_dict=ext_unit_dict
+    )
+    assert list(hfb.hfb_data["node1"]) == [6]
+    assert np.isclose(hfb.hfb_data["hydchr"][0], 0.11)
+
+
+def test_mfusghfb_external_without_dict_fails(function_tmpdir):
+    """EXTERNAL with an unresolvable unit fails with NotImplementedError."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "extbad.hfb"
+    p.write_text("# hfb external bad\n         0         0         1\n EXTERNAL 77\n")
+    with pytest.raises(NotImplementedError, match="EXTERNAL"):
+        MfUsgHfb.load(
+            str(p), _hfb_model(function_tmpdir, "ex2"), nper=1, ext_unit_dict={}
+        )
+
+
+def test_mfusghfb_nacthfb_mismatch_fails(function_tmpdir):
+    """write_file rejects a parameterized HFB whose nacthfb != len(acthfb_names)."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "pp.hfb"
+    p.write_text(
+        "# hfb param\n         1         1         0\nspar hfb 2.0 1\n"
+        " 1 2 0.5\n1\nspar\n"
+    )
+    hfb = MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "nm1"), nper=1)
+    hfb.nacthfb = 5  # inconsistent with the single active name
+    hfb.fn_path = str(function_tmpdir / "nm_out.hfb")
+    with pytest.raises(ValueError, match="nacthfb"):
+        hfb.write_file()
+
+
 def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
     """DPT immobile-domain air-water adsorption (A-W_ADSORBIM) fails explicitly.
 

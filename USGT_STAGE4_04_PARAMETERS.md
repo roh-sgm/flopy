@@ -14,8 +14,11 @@ USG-T packages that currently expand parameters or fail explicitly.
 - `HFB`: **parameter-preserving (Stage 4.4B, executed)** — list parameters
   (`UPARLSTRP`/`UPARLSTSUB`) now load → write → reload with their syntax intact
   (`NPHFB>0`, definition blocks with `NLST` barrier rows, `NACTHFB` + active
-  names). From-scratch parameter authoring and `TRANSIENT_HFB`+`NPHFB>0` raise
-  `NotImplementedError`; `INSTANCES` are unsupported (matches the Fortran). See
+  names). Barrier lists (parameter `NLST` rows and non-parametric `NHFBNP` rows)
+  also support leading `SFAC`/`OPEN/CLOSE`/`EXTERNAL` list controls via the shared
+  `_usgt_list.begin_list_block` (list-control follow-up). From-scratch parameter
+  authoring and `TRANSIENT_HFB`+`NPHFB>0` raise `NotImplementedError`;
+  `INSTANCES` are unsupported (matches the Fortran). See
   `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - `SGB`: `NPSGB>0` fails explicitly.
 - `QRT`: `NPQRT>0` fails explicitly.

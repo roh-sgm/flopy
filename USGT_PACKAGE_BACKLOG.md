@@ -457,8 +457,15 @@ helpers live in `flopy/mfusg/_usgt_parameters.py`. See
 Not `Full`: from-scratch parameter authoring (`NPHFB>0` without loaded defs),
 `TRANSIENT_HFB`+`NPHFB>0` (the Fortran redefines params each SP under `ITERP=1`),
 and parameter `INSTANCES` (the Fortran aborts) all raise `NotImplementedError`.
-`SFAC`/`EXTERNAL`/`OPEN/CLOSE` inside barrier lists are not parsed (same inline
-assumption as the existing non-parametric loader).
+
+List-control follow-up (executed): re-audit of `SGWF2HFB7RL`/`SGWF2HFB7RLU`
+showed barrier lists may begin with `SFAC`/`OPEN/CLOSE`/`EXTERNAL` (both the
+per-parameter `NLST` rows and the non-parametric `NHFBNP` rows). `MfUsgHfb` now
+consumes these via the shared `_usgt_list.begin_list_block` (reused unchanged):
+`SFAC` scales `HYDCHR` per block, `OPEN/CLOSE` resolves against `model_ws` (quoted
+names supported), `EXTERNAL` resolves via `ext_unit_dict` (unresolvable →
+`NotImplementedError`). The writer still emits expanded inline rows. `write_file`
+now also requires `nacthfb == len(acthfb_names)` (else `ValueError`).
 
 Required tests (all green, `-k mfusghfb` 8 passed):
 

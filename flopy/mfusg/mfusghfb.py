@@ -7,6 +7,7 @@ import numpy as np
 from ..modflow.mfhfb import ModflowHfb
 from ..pakbase import Package
 from ..utils.recarray_utils import create_empty_recarray
+from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
     read_active_list_parameters,
     read_list_parameter_header,
@@ -179,6 +180,12 @@ class MfUsgHfb(ModflowHfb):
                 "Parameter preservation is supported for files read by "
                 "MfUsgHfb.load; for from-scratch input use NPHFB=0."
             )
+        if self.nphfb > 0 and self.nacthfb != len(self.acthfb_names):
+            raise ValueError(
+                "MfUsgHfb.write_file: nacthfb "
+                f"({self.nacthfb}) must equal the number of active parameter "
+                f"names ({len(self.acthfb_names)})."
+            )
         structured = self.parent.structured
         nper = self.parent.nper
 
@@ -256,10 +263,22 @@ class MfUsgHfb(ModflowHfb):
             f.write("".join(vals) + "\n")
 
     @staticmethod
-    def _read_hfb_rows(f, nrows, dtype, structured):
+    def _read_hfb_rows(f, nrows, dtype, structured, model=None, ext_unit_dict=None):
         data = create_empty_recarray(nrows, dtype)
+        if nrows == 0:
+            return data
+        # A barrier list may begin with MODFLOW list controls (SFAC, OPEN/CLOSE,
+        # EXTERNAL) per SGWF2HFB7RL/RLU. begin_list_block consumes them and
+        # returns the source to read the rows from, the SFAC scale, and the first
+        # already-read row. SFAC scales the barrier FACTOR/HYDCHR (HFB(6,II) =
+        # FACTOR*SFAC in the Fortran).
+        source, sfac, line, to_close = begin_list_block(
+            f, model=model, ext_unit_dict=ext_unit_dict, package="HFB"
+        )
         for i in range(nrows):
-            t = f.readline().split()
+            if i > 0:
+                line = source.readline()
+            t = line.split()
             if structured:
                 data[i] = (
                     int(t[0]) - 1,
@@ -267,10 +286,12 @@ class MfUsgHfb(ModflowHfb):
                     int(t[2]) - 1,
                     int(t[3]) - 1,
                     int(t[4]) - 1,
-                    float(t[5]),
+                    float(t[5]) * sfac,
                 )
             else:
-                data[i] = (int(t[0]) - 1, int(t[1]) - 1, float(t[2]))
+                data[i] = (int(t[0]) - 1, int(t[1]) - 1, float(t[2]) * sfac)
+        if to_close is not None:
+            to_close.close()
         return data
 
     # ------------------------------------------------------------------
@@ -346,7 +367,9 @@ class MfUsgHfb(ModflowHfb):
                         "MfUsgHfb.load: HFB parameter INSTANCES are not "
                         "supported (gwf2hfb7u1.f aborts when NUMINST>0)."
                     )
-                data = cls._read_hfb_rows(f, nlst, dtype, structured)
+                data = cls._read_hfb_rows(
+                    f, nlst, dtype, structured, model, ext_unit_dict
+                )
                 parameters[name] = {
                     "partyp": partyp,
                     "parval": parval,
@@ -354,7 +377,9 @@ class MfUsgHfb(ModflowHfb):
                     "data": data,
                 }
             # Dataset 4: barriers not defined by parameters.
-            hfb_data = cls._read_hfb_rows(f, nhfbnp, dtype, structured)
+            hfb_data = cls._read_hfb_rows(
+                f, nhfbnp, dtype, structured, model, ext_unit_dict
+            )
             # Dataset 5-6: number of active parameters and their names.
             nacthfb = int(f.readline().split()[0])
             acthfb_names = read_active_list_parameters(f, nacthfb)
@@ -366,12 +391,16 @@ class MfUsgHfb(ModflowHfb):
                     break
                 ihfbrd = int(line.split()[0])
                 if ihfbrd > 0:
-                    sp_arr = cls._read_hfb_rows(f, nhfbnp, dtype, structured)
+                    sp_arr = cls._read_hfb_rows(
+                        f, nhfbnp, dtype, structured, model, ext_unit_dict
+                    )
                     stress_period_data[kper] = sp_arr
                     if len(hfb_data) == 0:
                         hfb_data = sp_arr.copy()
         else:
-            hfb_data = cls._read_hfb_rows(f, nhfbnp, dtype, structured)
+            hfb_data = cls._read_hfb_rows(
+                f, nhfbnp, dtype, structured, model, ext_unit_dict
+            )
 
         if openfile:
             f.close()
