@@ -4555,3 +4555,44 @@ def test_mfusgoc_check_warns_save_ibound(function_tmpdir):
     assert any(
         "SAVE IBOUND" in d and "rejected by USG-T 2.7" in d for d in descs
     ), descs
+
+
+def test_mfusgoc_check_warns_param_without_value(function_tmpdir):
+    """check() warns when a USG-T keyword that needs a value is missing it.
+
+    USG-T (glo2basu1.f SGWF2BAS7N) reads a value after DELTAT/TMINAT/TMAXAT/
+    TADJAT/TCUTAT/HCLOSE/BTOL/MXITER, so a bare keyword is incomplete.
+    """
+    # complete forms produce no warnings
+    assert (
+        _oc_check_warnings(
+            function_tmpdir,
+            "okparam",
+            ["save head", "deltat 0.5", "hclose 1e-5", "mxiter 100"],
+        )
+        == []
+    )
+
+    # each parametric keyword without a value is flagged
+    for kw in (
+        "deltat",
+        "tminat",
+        "tmaxat",
+        "tadjat",
+        "tcutat",
+        "hclose",
+        "btol",
+        "mxiter",
+    ):
+        descs = _oc_check_warnings(function_tmpdir, f"nv_{kw}", ["save head", kw])
+        assert any(
+            kw.upper() in d and "requires a value" in d for d in descs
+        ), (kw, descs)
+
+    # single-word USG-T actions remain valid (no value needed)
+    assert (
+        _oc_check_warnings(
+            function_tmpdir, "single", ["bootstrap", "ddreference", "nobootstrapscale"]
+        )
+        == []
+    )

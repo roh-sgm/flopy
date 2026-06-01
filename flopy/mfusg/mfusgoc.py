@@ -449,8 +449,19 @@ class MfUsgOc(Package):
                                     desc="SAVE IBOUND is preserved by FloPy but "
                                     "rejected by USG-T 2.7",
                                 )
-                            elif words[0] in usgt_single or words[0] in usgt_param:
+                            elif words[0] in usgt_single:
+                                # valid single-word USG-T action
                                 continue
+                            elif words[0] in usgt_param:
+                                # USG-T keyword that requires a value
+                                # (glo2basu1.f SGWF2BAS7N reads one after it)
+                                if len(words) < 2:
+                                    chk._add_to_summary(
+                                        "Warning",
+                                        package="OC",
+                                        desc=f"action {action!r} ignored; "
+                                        f"{words[0]} requires a value",
+                                    )
                             elif len(words) < 2:
                                 chk._add_to_summary(
                                     "Warning",

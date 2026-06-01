@@ -77,9 +77,9 @@ layer-qualified / `DDREFERENCE` round-trip; added six `-k mfusgoc` tests; kept
 OC `✅ (intentionally not Full)` with explicit gaps (`SAVE IBOUND`
 solver-rejected, FASTFORWARD/BOOTSTRAPPING execution not exe-verified). A polish
 follow-up then fixed the DDREFERENCE-only period write, taught `check()` the
-USG-T OC actions, and added a specific `check()` warning for `SAVE IBOUND`
-(3 more tests; `-k mfusgoc` 10 passed). EVT / MDT / LAK (Cards B–D) remain not
-started.
+USG-T OC actions (single-word toggles vs keyword-value params that require a
+value), and added a specific `check()` warning for `SAVE IBOUND` (4 more tests;
+`-k mfusgoc` 11 passed). EVT / MDT / LAK (Cards B–D) remain not started.
 
 ### Card B - EVT Fullness
 

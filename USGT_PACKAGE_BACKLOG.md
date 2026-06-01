@@ -946,10 +946,11 @@ words. See `USGT_STAGE4_OC_FULLNESS.md`. (EVT / MDT / LAK untouched.)
 
 Polish follow-up: `write_file` now emits a DDREFERENCE-only period line (it was
 dropped before, leaking the flag to the next period); `check()` recognises the
-USG-T OC actions (BOOTSTRAP toggles, ATS/solver params, DDREFERENCE) instead of
-false "ignored" warnings, and emits a specific warning that `SAVE IBOUND` is
-preserved by FloPy but rejected by USG-T 2.7. Three tests added; `-k mfusgoc`
-10 passed.
+USG-T OC actions (BOOTSTRAP toggles + DDREFERENCE as single words; ATS/solver
+params `DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`/`HCLOSE`/`BTOL`/`MXITER`
+require a value, else flagged) instead of false "ignored" warnings, and emits a
+specific warning that `SAVE IBOUND` is preserved by FloPy but rejected by
+USG-T 2.7. Four tests added; `-k mfusgoc` 11 passed.
 
 ---
 

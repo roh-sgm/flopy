@@ -88,17 +88,22 @@ These are documented, bounded gaps rather than silent failures.
    other action (previously the period was dropped and the flag leaked into the
    next written period). Test: `test_mfusgoc_ddreference_only_roundtrip`.
 2. **`check()` recognises USG-T OC actions** — no more false "ignored" warnings
-   for `BOOTSTRAP`/`NOBOOTSTRAP`/`BOOTSTRAPSCALE`/`NOBOOTSTRAPSCALE`,
-   `DDREFERENCE`, the ATS params (`DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`),
-   and the solver params (`HCLOSE`/`BTOL`/`MXITER`). Genuinely unknown actions
-   are still flagged. Test: `test_mfusgoc_check_accepts_usgt_actions`.
+   for `BOOTSTRAP`/`NOBOOTSTRAP`/`BOOTSTRAPSCALE`/`NOBOOTSTRAPSCALE` (single-word)
+   or the keyword-value params `DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`/
+   `HCLOSE`/`BTOL`/`MXITER` **when a value is present**. A bare parametric
+   keyword (e.g. `"DELTAT"` with no value) is flagged, since USG-T's
+   `SGWF2BAS7N` reads a value after it. `DDREFERENCE` is a valid single word.
+   Genuinely unknown actions are still flagged. Tests:
+   `test_mfusgoc_check_accepts_usgt_actions`,
+   `test_mfusgoc_check_warns_param_without_value`.
 3. **`SAVE IBOUND` check warning** — `check()` now emits a specific warning,
    "SAVE IBOUND is preserved by FloPy but rejected by USG-T 2.7", so the
    documented solver gap surfaces at check time (write/load still preserve the
    keyword). Test: `test_mfusgoc_check_warns_save_ibound`.
 
-After the polish: `-k mfusgoc` **10 passed**; focused **137 passed**; exe
-**3 passed**; combined **140 passed** under the USG-T 2.7 ARM binary.
+After the polish (incl. the parametric-keyword-needs-a-value refinement):
+`-k mfusgoc` **11 passed**; focused **138 passed**; exe **3 passed**; combined
+**141 passed** under the USG-T 2.7 ARM binary.
 
 ## Validation
 
