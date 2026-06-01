@@ -143,10 +143,21 @@ one-line-per-lake; load stored conc as strings; `transportboundary` flag not
 synced to the header keyword); added validation; from-scratch authoring +
 round-trip for no-transport, classic transport, `TRANSPORTBOUNDARY` (MCOMP>1),
 and `TABLEINPUT`. Kept the `Ex8_Lake` real-model round-trip/run (no synthetic LAK
-exe smoke — Ex8 covers execution). Five synthetic tests; `-k mfusglak` 5 passed.
-Kept LAK `✅ (intentionally not Full)` (gaps: sill/connectivity + multi-lake
-systems not authored from scratch; TABLEINPUT table contents external; GAGE
-separate).
+exe smoke — Ex8 covers execution). Kept LAK `✅ (intentionally not Full)` (gaps:
+sill/connectivity + multi-lake systems not authored from scratch; TABLEINPUT
+table contents external; GAGE separate).
+
+**Review follow-up (executed).** Hardened three from-scratch authoring inputs
+that `__init__` accepted but `write_file()` then crashed on with a raw
+`IndexError`/`KeyError`/`TypeError`: TABLEINPUT now requires exactly one
+`tab_file` (and `tab_unit`, if supplied) per lake; `conc_data` is validated per
+written period (every `(lake, component)` present; classic entries 2 values when
+`WTHDRW>=0` / 3 when `WTHDRW<0`; TRANSPORTBOUNDARY entries a single value);
+`flux_data` requires one dataset-9a entry per lake — all now clear `ValueError`s.
+Five tests added. `-k mfusglak` 10 passed (5 original + 5 follow-up); `-k
+"mfusglak or Ex8"` 11; focused 165; exe 4; combined 169 under the USG-T 2.7 ARM
+binary. Decision unchanged. See `USGT_STAGE4_LAK_FULLNESS.md` → "Review
+follow-up".
 
 **Theme complete:** OC, EVT, MDT, and LAK (Cards A–D) are all executed.
 

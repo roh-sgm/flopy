@@ -65,8 +65,9 @@ executable) is kept. No from-scratch LAK executable smoke was added — a minima
 convergent lake model is not cheap/stable to build, and Ex8 already exercises LAK
 execution on a real model.
 
-`-k mfusglak/Ex8` **6 passed**; focused **160 passed**; exe **4 passed**;
-combined **164 passed** under the USG-T 2.7 ARM binary.
+The review follow-up adds five more (see below). `-k mfusglak/Ex8` **11 passed**;
+focused **165 passed**; exe **4 passed**; combined **169 passed** under the USG-T
+2.7 ARM binary.
 
 ## Decision: keep `✅ (intentionally not Full)`, hardened
 
@@ -82,6 +83,43 @@ at `✅ (intentionally not Full)`:
   unit / external file, but the table file *contents* are external and not
   authored here.
 - **GAGE coupling** is a separate package.
+
+## Review follow-up
+
+Code review found three from-scratch authoring inputs that were accepted by
+`__init__` but then crashed inside `write_file()` with a raw `IndexError` /
+`KeyError` / `TypeError` instead of failing with a clear error. All three now
+validate in `__init__`:
+
+1. **P1 — TABLEINPUT with too few `tab_files`.** The constructor only built a
+   dead `msg` (with a `# TODO`) when `len(tab_files) < nlakes`; `write_file()`
+   then crashed with `IndexError` on `self.iunit_tab[n]`. Now `TABLEINPUT`
+   requires **exactly one `tab_file` per lake**, and if `tab_units` is supplied
+   it must also be **one per lake** — otherwise a clear `ValueError`.
+2. **P1 — incomplete / malformed `conc_data`.** A missing `(lake, component)`
+   entry (e.g. `mcomp=2` with only `(0,0)`) was accepted and crashed
+   `write_file()` with `KeyError`. `__init__` now validates dataset 9b for every
+   stress period where dataset 9 (`flux_data`) is written:
+   - an entry must exist for **every `(lake, component)`**;
+   - **classic transport:** each entry is a sequence of **2 values** (`CPPT,
+     CRNF`) when `WTHDRW >= 0` and **3 values** (`CPPT, CRNF, CAUG`) when
+     `WTHDRW < 0` (matches the Fortran, which reads CAUG only for augmentation);
+   - **TRANSPORTBOUNDARY:** each entry is a **single** concentration (the writer
+     still emits one `CLAKE(1:NSOL)` line per lake);
+   - any other shape raises a clear `ValueError`, never `KeyError`/`TypeError`.
+3. **P2 — partial `flux_data` validation.** Dataset 9a now requires **one entry
+   per lake** (a missing lake raises `ValueError` instead of `KeyError`), and the
+   per-period length check (≥4 values transient/first period, ≥6 for steady
+   periods after the first) raises `ValueError` rather than a bare `Exception`.
+
+Five tests were added (all green): TABLEINPUT with one `tab_file` for two lakes
+→ `ValueError`; TABLEINPUT with a wrong-length `tab_units` → `ValueError`; classic
+`mcomp=2` with incomplete `conc_data` → `ValueError`; classic `WTHDRW<0` with two
+values → `ValueError` and with three values → writes/reloads; TRANSPORTBOUNDARY
+`mcomp=2` with incomplete `conc_data` → `ValueError`; and `flux_data` missing a
+required lake entry → `ValueError`. The five original positive/negative tests and
+the `Ex8_Lake` round-trip are unchanged. Decision is unchanged: LAK stays
+`✅ (intentionally not Full)`.
 
 ## Validation
 

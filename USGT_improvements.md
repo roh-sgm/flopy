@@ -294,7 +294,14 @@ honest, upstream-ready USG-T 2.7 story.
   kept. Stays `✅` not Full — gaps: sill/connectivity (ds 7/8) + multi-lake
   systems round-trip but aren't authored from scratch; TABLEINPUT bathymetry
   table contents are external; GAGE coupling separate. See
-  `USGT_STAGE4_LAK_FULLNESS.md`. `-k mfusglak` 5 passed.
+  `USGT_STAGE4_LAK_FULLNESS.md`. **Review follow-up:** hardened three authoring
+  inputs that `__init__` accepted but `write_file()` then crashed on with a raw
+  `IndexError`/`KeyError`/`TypeError` — TABLEINPUT now requires exactly one
+  `tab_file`/`tab_unit` per lake; `conc_data` is validated per written period
+  (every `(lake, component)` present; classic 2 values for `WTHDRW>=0` / 3 for
+  `WTHDRW<0`; TRANSPORTBOUNDARY a single value); `flux_data` requires one
+  dataset-9a entry per lake — all clear `ValueError`s. `-k mfusglak` 10 passed
+  (5 original + 5 follow-up).
 - **Card 6 — base-class compatibility (SFR/STR/GAGE/FHB/SUB/SWT):** all six
   classified **Compatibility-only** in the roadmap (base MODFLOW-2005 classes;
   CLN is the project's coupling). Usage scan: only **FHB and GAGE** appear in a

@@ -796,6 +796,16 @@ tests (no-transport, classic transport, TRANSPORTBOUNDARY MCOMP>1, TABLEINPUT,
 negatives) plus the `Ex8_Lake` real-model round-trip/run. See
 `USGT_STAGE4_LAK_FULLNESS.md`.
 
+Review follow-up (executed): hardened three from-scratch authoring inputs that
+`__init__` accepted but `write_file()` then crashed on with a raw
+`IndexError`/`KeyError`/`TypeError` — TABLEINPUT now requires exactly one
+`tab_file` (and `tab_unit`, if supplied) per lake; `conc_data` is validated per
+written period (every `(lake, component)` present; classic = 2 values when
+`WTHDRW>=0` / 3 when `WTHDRW<0`; TRANSPORTBOUNDARY = a single value); `flux_data`
+requires one dataset-9a entry per lake — all now clear `ValueError`s. Five tests
+added (`-k mfusglak` 10 passed; `-k "mfusglak or Ex8"` 11; focused 165; exe 4;
+combined 169 ARM). Decision unchanged.
+
 Why still not `Full`: sill/connectivity (datasets 7/8) and multi-lake sublake
 systems round-trip (and run via Ex8) but aren't authored from scratch in the
 tests; `TABLEINPUT` bathymetry table *contents* are external (FloPy only

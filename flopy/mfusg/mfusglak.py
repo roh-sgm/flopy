@@ -313,20 +313,25 @@ class MfUsgLak(Package):
 
         # add tab_files as external files
         if tabdata:
-            # make sure the number of tabfiles is equal to the number of lakes
-            if len(tab_files) < nlakes:
-                msg = (
-                    "a tabfile must be specified for each lake "
-                    "{} tabfiles specified "
-                    "instead of {} tabfiles".format(len(tab_files), nlakes)
+            # TABLEINPUT requires exactly one tabfile (and one unit) per lake;
+            # otherwise write_file() crashes with IndexError on iunit_tab[n].
+            if len(tab_files) != nlakes:
+                raise ValueError(
+                    "TABLEINPUT requires exactly one tab_file per lake: got "
+                    f"{len(tab_files)} tab_files for {nlakes} lakes."
                 )
-                # TODO: what should happen with msg?
             # make sure tab_files are not None
             for idx, fname in enumerate(tab_files, 1):
                 if fname is None:
                     raise ValueError(
                         f"a filename must be specified for the tabfile for lake {idx}"
                     )
+            # if tab_units are supplied they must also be one per lake
+            if tab_units is not None and len(tab_units) != nlakes:
+                raise ValueError(
+                    "TABLEINPUT requires exactly one tab_unit per lake: got "
+                    f"{len(tab_units)} tab_units for {nlakes} lakes."
+                )
             # set unit for tab files if not passed to __init__
             if tab_units is None:
                 tab_units = []
@@ -452,12 +457,26 @@ class MfUsgLak(Package):
                     if steady and key > 0:
                         nlen = 6
                     for k in range(self.nlakes):
+                        if k not in value:
+                            raise ValueError(
+                                "flux_data for stress period {} is missing lake "
+                                "{} (0-based); dataset 9a needs one entry per "
+                                "lake ({} lakes).".format(key + 1, k, self.nlakes)
+                            )
                         td = value[k]
                         if len(td) < nlen:
-                            raise Exception(
-                                "flux_data entry for stress period {} "
-                                "has {} entries but should have "
-                                "{} entries".format(key + 1, nlen, len(td))
+                            raise ValueError(
+                                "flux_data entry for stress period {} lake {} "
+                                "has {} values but dataset 9a needs at least {} "
+                                "({}).".format(
+                                    key + 1,
+                                    k,
+                                    len(td),
+                                    nlen,
+                                    "PRCPLK EVAPLK RNF WTHDRW SSMN SSMX"
+                                    if nlen == 6
+                                    else "PRCPLK EVAPLK RNF WTHDRW",
+                                )
                             )
 
         self.flux_data = flux_data
@@ -507,6 +526,56 @@ class MfUsgLak(Package):
                 "(dataset 9b: lake concentrations per stress period)."
             )
         self.conc_data = conc_data
+
+        # Validate dataset 9b wherever dataset 9 (flux_data) is written, so
+        # authoring fails with a clear ValueError instead of a raw KeyError or
+        # TypeError inside write_file().
+        if mcomp > 0:
+            for kper in self.flux_data:
+                if kper not in self.conc_data:
+                    raise ValueError(
+                        f"conc_data is missing stress period {kper} (0-based); "
+                        "dataset 9b is required wherever dataset 9 (flux_data) "
+                        "is written."
+                    )
+                cd = self.conc_data[kper]
+                if not isinstance(cd, dict):
+                    raise ValueError(
+                        f"conc_data[{kper}] must be a dict keyed by "
+                        f"(lake, component); got {type(cd).__name__}."
+                    )
+                for n in range(self.nlakes):
+                    wthdrw = self.flux_data[kper][n][3]
+                    for icomp in range(mcomp):
+                        if (n, icomp) not in cd:
+                            raise ValueError(
+                                f"conc_data[{kper}] is missing entry "
+                                f"{(n, icomp)} (lake, component; 0-based); "
+                                "dataset 9b needs one entry per lake and "
+                                "component."
+                            )
+                        val = cd[n, icomp]
+                        if transportboundary:
+                            if isinstance(val, (list, tuple, np.ndarray)):
+                                raise ValueError(
+                                    f"conc_data[{kper}][{(n, icomp)}] must be a "
+                                    "single CLAKE concentration with "
+                                    "TRANSPORTBOUNDARY, not a sequence."
+                                )
+                        else:
+                            needed = 3 if wthdrw < 0 else 2
+                            ok = (
+                                isinstance(val, (list, tuple, np.ndarray))
+                                and len(val) == needed
+                            )
+                            if not ok:
+                                caug = ", CAUG" if needed == 3 else ""
+                                sign = "<" if wthdrw < 0 else ">="
+                                raise ValueError(
+                                    f"conc_data[{kper}][{(n, icomp)}] must have "
+                                    f"{needed} values (CPPT, CRNF{caug}) because "
+                                    f"WTHDRW {sign} 0; got {val!r}."
+                                )
 
         self.parent.add_package(self)
 

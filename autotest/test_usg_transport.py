@@ -5262,3 +5262,118 @@ def test_mfusglak_rejects_invalid(function_tmpdir):
     # active transport requires conc_data (dataset 9b)
     with pytest.raises(ValueError, match="conc_data"):
         build("n4", mcomp=1, flux_data={0: {0: [0, 0, 0, 0]}}, clake=[[1.0]])
+
+
+def test_mfusglak_tableinput_rejects_wrong_counts(function_tmpdir):
+    """TABLEINPUT with the wrong number of tab_files / tab_units fails explicitly.
+
+    Regression: too few tab_files used to be a dead message and then crashed
+    write_file() with IndexError on iunit_tab[n].
+    """
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    base = {
+        "nlakes": 2,
+        "stages": 100.0,
+        "lakarr": lakarr,
+        "bdlknc": bdlknc,
+        "flux_data": {0: {0: [1.0, 2.0, 0.0, 0.0], 1: [1.0, 2.0, 0.0, 0.0]}},
+        "options": ["TABLEINPUT"],
+    }
+    # one tab_file for two lakes
+    with pytest.raises(ValueError, match="tab_file"):
+        MfUsgLak(_lak_model(function_tmpdir, "tw1"), tab_files=["one.tab"], **base)
+    # two tab_files but a tab_units list of the wrong length
+    with pytest.raises(ValueError, match="tab_unit"):
+        MfUsgLak(
+            _lak_model(function_tmpdir, "tw2"),
+            tab_files=["one.tab", "two.tab"],
+            tab_units=[201],
+            **base,
+        )
+
+
+def test_mfusglak_classic_transport_rejects_incomplete(function_tmpdir):
+    """Classic transport with a missing (lake, component) conc_data entry fails."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    with pytest.raises(ValueError, match="conc_data"):
+        MfUsgLak(
+            _lak_model(function_tmpdir, "ci", mcomp=2),
+            nlakes=1,
+            stages=100.0,
+            lakarr=lakarr,
+            bdlknc=bdlknc,
+            flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+            clake=[[5.0, 6.0]],
+            conc_data={0: {(0, 0): [3.0, 1.0]}},  # missing (0, 1)
+        )
+
+
+def test_mfusglak_classic_transport_wthdrw_caug_roundtrip(function_tmpdir):
+    """WTHDRW<0 needs CPPT,CRNF,CAUG: 2 values are rejected, 3 round-trip."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    common = {
+        "nlakes": 1,
+        "stages": 100.0,
+        "lakarr": lakarr,
+        "bdlknc": bdlknc,
+        "flux_data": {0: {0: [1.0, 2.0, 0.0, -5.0]}},  # WTHDRW<0 -> augmentation
+        "clake": [[5.0]],
+    }
+    # only CPPT, CRNF supplied but WTHDRW<0 requires CAUG too
+    with pytest.raises(ValueError, match="CAUG"):
+        MfUsgLak(
+            _lak_model(function_tmpdir, "wd1", mcomp=1),
+            conc_data={0: {(0, 0): [3.0, 1.0]}},
+            **common,
+        )
+    # full CPPT, CRNF, CAUG writes and reloads
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "wd2", mcomp=1),
+        conc_data={0: {(0, 0): [3.0, 1.0, 2.0]}},
+        **common,
+    )
+    lak.fn_path = str(function_tmpdir / "wd2.lak")
+    lak.write_file()
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "wd2b", mcomp=1))
+    assert [float(x) for x in re.conc_data[0][(0, 0)]] == [3.0, 1.0, 2.0]
+
+
+def test_mfusglak_transportboundary_rejects_incomplete(function_tmpdir):
+    """TRANSPORTBOUNDARY with a missing (lake, component) conc_data entry fails."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    with pytest.raises(ValueError, match="conc_data"):
+        MfUsgLak(
+            _lak_model(function_tmpdir, "tbi", mcomp=2),
+            nlakes=1,
+            stages=100.0,
+            lakarr=lakarr,
+            bdlknc=bdlknc,
+            flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},
+            transportboundary=True,
+            clake=[[5.0, 6.0]],
+            conc_data={0: {(0, 0): 5.0}},  # missing (0, 1)
+        )
+
+
+def test_mfusglak_flux_data_rejects_missing_lake(function_tmpdir):
+    """flux_data must carry one dataset-9a entry per lake."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids()
+    with pytest.raises(ValueError, match="missing lake"):
+        MfUsgLak(
+            _lak_model(function_tmpdir, "fm"),
+            nlakes=2,
+            stages=100.0,
+            lakarr=lakarr,
+            bdlknc=bdlknc,
+            flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},  # lake 1 missing
+        )
