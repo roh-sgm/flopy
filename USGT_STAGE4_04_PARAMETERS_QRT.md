@@ -56,15 +56,19 @@ DRT/SGB/HFB/ETS are not.
 ## Decision: honest status — structural-preserving, not execution-guaranteed
 
 QRT stays **`✅ Full (authoring)`** for the non-parametric package. On the
-parametric axis it is **structurally preserved (load → write → reload), not
-execution-guaranteed**: `NPQRT>0` definitions, their recipient blocks, and the
-per-SP activations all round-trip faithfully, but FloPy does **not** claim an
+parametric axis it is **structurally preserved (load → write → reload) and
+authorable from scratch (Stage 4.6C-C), but not execution-guaranteed**:
+`NPQRT>0` definitions, their recipient blocks, and the per-SP activations all
+round-trip faithfully and can be built from Python (`parameters=`/
+`active_params=`; counts auto; names/`parval`/nodes validated — see
+`USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`), but FloPy does **not** claim an
 activated QRT parameter runs in USG-T 2.7, because of two Fortran issues
 (check 2 and check 4 above): the parameter value scales `NumRT` not `Q`, and
 `NodQRT` is not copied on activation. It is **not** "Full" on the parametric
-axis. Other gaps: from-scratch authoring and `INSTANCES` raise
-`NotImplementedError`; the `ITMP<0` reuse of non-parametric sinks is written
-expanded; `TRANSIENTQ` still fails explicitly.
+axis. Other gaps: `INSTANCES` raises `NotImplementedError` (and
+`active_params` with no definitions → `ValueError`); the `ITMP<0` reuse of
+non-parametric sinks is written expanded; `TRANSIENTQ`+`NPQRT>0` still fails
+explicitly.
 
 Roadmap label: **`✅ Full (authoring) / Parameter structural-preserving (NPQRT,
 not execution-guaranteed) / Expanded valid write (list controls)`**.

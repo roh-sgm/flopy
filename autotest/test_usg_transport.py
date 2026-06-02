@@ -3898,12 +3898,14 @@ def test_mfusgqrt_parameter_instances_unsupported(function_tmpdir):
         MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
 
 
-def test_mfusgqrt_parameter_from_scratch_fails(function_tmpdir):
-    """Active parameters with no loaded definitions fail explicitly, no file."""
+def test_mfusgqrt_parameter_active_without_defs_fails(function_tmpdir):
+    """active_params referencing parameters with no definitions fails explicitly
+    (ValueError), no file. (From-scratch authoring with definitions is supported
+    as of Stage 4.6C-C -- see the authoring tests below.)"""
     qrt = MfUsgQrt(_qrt_model(function_tmpdir, "fs"), active_params={0: ["p1"]})
     out = function_tmpdir / "fs.qrt"
     qrt.fn_path = str(out)
-    with pytest.raises(NotImplementedError, match="from scratch"):
+    with pytest.raises(ValueError, match="none are defined"):
         qrt.write_file()
     assert not out.exists()
 
@@ -4016,6 +4018,218 @@ def test_mfusgqrt_parameter_duplicate_active_fails(function_tmpdir):
     out = function_tmpdir / "dup.qrt"
     qrt.fn_path = str(out)
     with pytest.raises(ValueError, match="more than once"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+# --- Stage 4.6C-C: QRT from-scratch NPQRT>0 parameter authoring (structural) -
+#
+# A parameterized QRT can be built from Python: parameters={name: {...}} +
+# active_params={kper: [...]}; ergonomic input (data tuples; nlst/MXL/
+# recipient_nodes auto) is normalized + validated before open. STRUCTURAL only:
+# an activated QRT parameter round-trips but is not execution-guaranteed (the
+# Fortran scales QRTF(5)=NumRT not Q, and NodQRT is not copied on activation).
+
+
+def test_mfusgqrt_parameter_authoring_from_scratch(function_tmpdir):
+    """Build a parameterized QRT from scratch (ergonomic input): NPQRT, auto MXL,
+    definitions, per-SP activation, 0-based internal / 1-based file."""
+    params = {"qp": {"parval": "1.5", "data": [(4, -10.0), (9, -20.0)]}}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "auth"),
+        parameters=params,
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "auth.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    text = out.read_text()
+    item1 = next(ln for ln in text.splitlines() if not ln.startswith("#")).split()
+    assert item1[3] == "1" and item1[4] == "2"  # NPQRT=1, MXL auto = sum(nlst)=2
+    assert "qp QRT 1.5 2" in text
+    assert "\n 5  -1.000000e+01" in text  # node 4 -> 5 (1-based)
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "auth2"), nper=1)
+    pd = re.parameters["qp"]
+    assert pd["partyp"].upper() == "QRT" and pd["nlst"] == 2
+    assert list(pd["data"]["node"]) == [4, 9]  # back to 0-based
+    assert re.active_params == {0: ["qp"]}
+
+
+def test_mfusgqrt_parameter_authoring_returnflow_recipients(function_tmpdir):
+    """From-scratch QRT parameter with RETURNFLOW + per-row recipient_nodes
+    (0-based internal / 1-based file)."""
+    params = {
+        "qp": {
+            "parval": "1.0",
+            "data": [(0, -100.0, 0.75), (4, -30.0, 0.0)],
+            "recipient_nodes": [[8, 9], []],  # 0-based
+        }
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "rf"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "rf.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "rf2"), nper=1)
+    pd = re.parameters["qp"]
+    assert pd["nlst"] == 2
+    assert pd["recipient_nodes"][0] == [8, 9] and pd["recipient_nodes"][1] == []
+
+
+def test_mfusgqrt_parameter_authoring_mixed_nonparam_active(function_tmpdir):
+    """A non-parametric sink and an active parameter in one SP: MXAQRT counts
+    both (NQRTNP + active NLST)."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(2, -30.0)], dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "mix"),
+        stress_period_data=spd,
+        parameters={"qp": {"parval": "1.0", "data": [(0, -10.0)]}},
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "mix.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert item1[0] == "2"  # MXAQRT = 1 non-param + 1 active param row
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "mix2"), nper=1)
+    assert list(re.stress_period_data[0]["node"]) == [2]
+    assert re.active_params == {0: ["qp"]}
+
+
+def test_mfusgqrt_parameter_authoring_auto_mxl(function_tmpdir):
+    """MXL is computed as the total definition rows when omitted."""
+    params = {
+        "a": {"parval": "1.0", "data": [(0, -10.0), (1, -10.0)]},
+        "b": {"parval": "1.0", "data": [(2, -10.0)]},
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "mxa"), parameters=params, active_params={0: ["a"]}
+    )
+    out = function_tmpdir / "mxa.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert item1[4] == "3"  # MXL auto = 2 + 1
+
+
+def test_mfusgqrt_parameter_authoring_active_case_insensitive(function_tmpdir):
+    """An activation name differing from its definition only in case resolves and
+    writes (the Fortran upper-cases PARNAM)."""
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "ci"),
+        parameters={"qp": {"parval": "1.0", "data": [(0, -10.0)]}},
+        active_params={0: ["QP"]},  # upper-case activation
+    )
+    out = function_tmpdir / "ci.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()  # must not raise
+    assert "qp QRT 1.0 1" in out.read_text()
+
+
+def test_mfusgqrt_parameter_authoring_partyp_invalid_fails(function_tmpdir):
+    """A non-QRT partyp raises ValueError before the file is opened, no file."""
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "pt"),
+        parameters={"qp": {"partyp": "GHB", "parval": "1.0", "data": [(0, -10.0)]}},
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "pt.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="partyp"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_parameter_authoring_duplicate_definition_names_fails(function_tmpdir):
+    """Definition names colliding case-insensitively (`qp`/`QP`) -> ValueError."""
+    params = {
+        "qp": {"parval": "1.0", "data": [(0, -10.0)]},
+        "QP": {"parval": "1.0", "data": [(1, -10.0)]},
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "dd"), parameters=params, active_params={0: ["qp"]}
+    )
+    out = function_tmpdir / "dd.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="duplicate parameter definition"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_parameter_authoring_bad_name_or_parval_fails(function_tmpdir):
+    """A bad parameter name or parval raises ValueError, no file."""
+    cases = [
+        {"qp": {"parval": "1.0", "data": [(0, -10.0)]}, "_name": "q p"},  # bad name
+        {"qp": {"parval": "1 2", "data": [(0, -10.0)]}},  # multi-token parval
+    ]
+    for i, spec in enumerate(cases):
+        name = spec.pop("_name", "qp")
+        pdef = spec["qp"]
+        qrt = MfUsgQrt(
+            _qrt_model(function_tmpdir, f"bn{i}"),
+            parameters={name: pdef},
+            active_params={0: [name]},
+        )
+        out = function_tmpdir / f"bn{i}.qrt"
+        if out.exists():
+            out.unlink()
+        qrt.fn_path = str(out)
+        with pytest.raises(ValueError):
+            qrt.write_file()
+        assert not out.exists()
+
+
+def test_mfusgqrt_parameter_authoring_kper_out_of_range_fails(function_tmpdir):
+    """An active_params stress period outside 0..nper-1 raises ValueError."""
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "kp", nper=1),
+        parameters={"qp": {"parval": "1.0", "data": [(0, -10.0)]}},
+        active_params={2: ["qp"]},
+    )
+    out = function_tmpdir / "kp.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="out of range"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_parameter_authoring_negative_node_or_recipient_fails(function_tmpdir):
+    """A negative parametric node or recipient -> ValueError, no file."""
+    # negative node
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "nn"),
+        parameters={"qp": {"parval": "1.0", "data": [(-1, -10.0)]}},
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "nn.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="negative node"):
+        qrt.write_file()
+    assert not out.exists()
+
+    # negative recipient
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "nr"),
+        options=["RETURNFLOW"],
+        parameters={"qp": {"parval": "1.0", "data": [(0, -10.0, 0.5)],
+                           "recipient_nodes": [[-1]]}},
+        active_params={0: ["qp"]},
+    )
+    out = function_tmpdir / "nr.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="recipient"):
         qrt.write_file()
     assert not out.exists()
 

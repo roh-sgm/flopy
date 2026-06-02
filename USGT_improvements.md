@@ -648,6 +648,31 @@ honest, upstream-ready USG-T 2.7 story.
   (`_mxs_zero_fails` → `_mxs_zero_auto_computes`); the active-param + preservation
   tests stay green. `-k mfusgsgb` **24**, focused **272**, exe **4**, combined
   **276** (ARM). See `USGT_STAGE4_12_SGB_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-C — QRT from-scratch list-parameter authoring (structural,
+  executed):** completes the list-parameter from-scratch family (DRT/HFB/SGB/QRT)
+  by promoting `MfUsgQrt` from structural-preserving-only to from-scratch
+  structural authoring, reusing the shared pattern. The on-file format is
+  unchanged (same `UPARLSTRP`/activation/sink-block writers, round-tripped in
+  4.4E), so this is a FloPy-side ergonomics + validation change in `mfusgqrt.py`.
+  New `_normalize_param` canonicalizes each definition (`partyp` default/validated
+  `QRT`, casing preserved; `data` recarray or array-like with the active QRT
+  dtype; `nlst`/`recipient_nodes` computed/validated; non-negative nodes +
+  recipients; recipients require `RETURNFLOW`) via the shared
+  `check_parameter_name`/`check_parval`; `_validate_parameter_write` auto-computes
+  `MXL=Σnlst`, checks duplicate definition names and `active_params` (kper range,
+  case-insensitive names, no per-SP duplicates), and returns `(params, mxl)`;
+  `write_file`/`_max_active_sinks`/`_max_rt_cells` consume the canonical state.
+  The old from-scratch `NotImplementedError` is replaced (active-without-defs →
+  `ValueError`). **Structural only** — an activated QRT parameter round-trips but
+  is *not* execution-guaranteed (the Fortran scales `QRTF(5)=NumRT` not `Q`, and
+  `NodQRT` is not copied on activation); `INSTANCES` and `TRANSIENTQ`+`NPQRT>0`
+  stay `NotImplementedError`. Only `mfusgqrt.py` touched; DRT/HFB/SGB/ETS
+  untouched. Tests: 10 new (from-scratch / returnflow-recipients / mixed /
+  auto-MXL / active-case-insensitive authoring; partyp/dup-def/bad-name-or-parval/
+  kper/negative-node-or-recipient negatives) + 1 repurposed; preservation +
+  TRANSIENTQ + recipient-control tests stay green. `-k mfusgqrt` **47**, focused
+  **282**, exe **4**, combined **286** (ARM). See
+  `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

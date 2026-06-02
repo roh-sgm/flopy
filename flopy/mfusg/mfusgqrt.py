@@ -70,12 +70,20 @@ parameter owns ``NLST`` sink rows with their recipient ``U1DINT`` blocks (read
 after the rows, in sink order). Per stress period, ``ITMP NP`` gives the
 non-parametric count and the number of active parameters.
 
+From-scratch ``NPQRT>0`` parameter **authoring** is supported (Stage 4.6C-C):
+pass ``parameters={name: {parval, data, ...}}`` + ``active_params={kper:
+[name, ...]}``; ``partyp`` defaults to / is validated ``QRT``, and ``nlst`` /
+``MXL`` / ``recipient_nodes`` are auto-computed when omitted. This is
+**structural** authoring -- like the preservation path it is *not*
+execution-guaranteed for an activated parameter (the Fortran scales
+``QRTF(5)=NumRT`` not ``Q`` and does not copy ``NodQRT`` on activation; see the
+"structurally preserved" note above and ``USGT_STAGE4_04_PARAMETERS_QRT.md``).
+
 Not supported (explicit failure rather than partial write):
 
 * Parameter ``INSTANCES`` (``NUMINST>0``): the Fortran supports them, FloPy does
   not yet -> load raises ``NotImplementedError``.
-* From-scratch parameter authoring (active parameters with no loaded
-  definitions) -> ``NotImplementedError``.
+* ``active_params`` referencing parameters with no definitions -> ``ValueError``.
 * ``TRANSIENTQ`` combined with ``NPQRT > 0`` -> ``NotImplementedError`` (the
   Fortran reads ``BDQV`` past its ``MXAQRT`` allocation when ``MXL > 0``; see
   ``USGT_STAGE4_05_QRT_TRANSIENTQ.md``).
@@ -94,6 +102,8 @@ import numpy as np
 from ..pakbase import Package
 from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
+    check_parameter_name,
+    check_parval,
     read_active_list_parameters,
     read_list_parameter_header,
     resolve_list_parameter,
@@ -122,6 +132,24 @@ class MfUsgQrt(Package):
         Dictionary keyed by zero-based stress period. Each value is a list
         (one entry per sink record, in the same order as ``stress_period_data``)
         of 0-based recipient node lists. Only used with ``RETURNFLOW``.
+    parameters : dict, optional
+        Named ``NPQRT`` list-parameter definitions, keyed by parameter name
+        (Stage 4.6C-C from-scratch authoring; also the form ``load`` preserves).
+        Each value is a dict: ``parval`` (required; scales ``QRTF(5)=NumRT`` in
+        the Fortran, not ``Q`` -- a documented bug, so activation is structural
+        only); ``data`` (required) the sink rows as a recarray matching the active
+        dtype or any array-like the dtype can build (nodes 0-based); ``partyp``
+        (optional, defaults to / must be ``"QRT"``); ``nlst`` (optional, from
+        ``data``); ``recipient_nodes`` (optional, ``RETURNFLOW`` only) one 0-based
+        recipient list per row.
+    mxl : int, optional
+        ``MXL`` (item 1): max parameter list entries. Computed as the total of all
+        definition ``nlst`` when omitted/0; validated ``>=`` that total if given.
+    active_params : dict, optional
+        ``{kper: [name, ...]}`` -- parameters activated per zero-based stress
+        period. Names must be defined in ``parameters`` (case-insensitive); no
+        duplicates within a period; ``kper`` in range. Activation is structural,
+        not execution-guaranteed (Fortran caveat above).
     transientq_times : array-like, optional
         The ``TRANSIENTQ`` time points (``BDQTIM``, length ``NBDQTIM``), raw
         (pre-multiplier). Providing this activates ``TRANSIENTQ``.
@@ -325,59 +353,133 @@ class MfUsgQrt(Package):
             )
         return recips
 
-    def _validate_parameter_write(self):
-        """Validate preserved QRT parameter state before a parameterized write.
+    def _normalize_param(self, name, pdef):
+        """Validate + canonicalize one QRT parameter definition for writing.
 
-        Raises ``NotImplementedError`` for from-scratch authoring (active
-        parameters with no loaded definitions) and ``ValueError`` for
-        inconsistent definitions, so a parameterized item 1 is never written
-        without a complete, consistent body. Validation runs before the file is
-        opened, so no partial file is produced.
+        Accepts an ergonomic from-scratch dict *or* an already-canonical loaded
+        one and returns ``{partyp, parval, nlst, data (recarray),
+        recipient_nodes}``. ``data`` may be a recarray or any array-like the
+        active QRT ``dtype`` can build (nodes 0-based); ``nlst`` and
+        ``recipient_nodes`` are computed when omitted and validated when given.
+        ``partyp`` defaults to / must be ``QRT`` (loaded casing preserved). Nodes
+        and recipient nodes must be non-negative 0-based integers. Raises
+        ``ValueError`` for invalid input, before any file is opened.
+        """
+        check_parameter_name(name, "parameter name", prefix="MfUsgQrt.write_file")
+        if not isinstance(pdef, dict):
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' must be a dict, got "
+                f"{type(pdef).__name__}."
+            )
+        partyp = pdef.get("partyp", "QRT")
+        if str(partyp).upper().strip() != "QRT":
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' partyp must be 'QRT'; "
+                f"got {partyp!r}."
+            )
+        parval = check_parval(pdef.get("parval"), name, prefix="MfUsgQrt.write_file")
+        data = pdef.get("data")
+        if data is None or len(data) == 0:
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' needs non-empty 'data' "
+                "sink rows."
+            )
+        if not isinstance(data, np.recarray):
+            data = np.array(data, dtype=self.dtype).view(np.recarray)
+        if np.any(np.asarray(data["node"]) < 0):
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' has a negative node; "
+                "sink nodes are 0-based and must be non-negative."
+            )
+        nlst = pdef.get("nlst")
+        if nlst is None:
+            nlst = len(data)
+        elif nlst != len(data):
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' declares nlst={nlst} "
+                f"but carries {len(data)} rows."
+            )
+        recips = pdef.get("recipient_nodes")
+        if recips is None:
+            recips = [[] for _ in range(nlst)]
+        if len(recips) != nlst:
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' has {len(recips)} "
+                f"recipient lists but nlst={nlst} (need one per definition row)."
+            )
+        if not self.returnflow and any(len(r) > 0 for r in recips):
+            raise ValueError(
+                f"MfUsgQrt.write_file: parameter '{name}' has recipient_nodes but "
+                "the RETURNFLOW option is not enabled."
+            )
+        for ri, row in enumerate(recips):
+            for nd in row:
+                if not float(nd).is_integer() or int(nd) < 0:
+                    raise ValueError(
+                        f"MfUsgQrt.write_file: parameter '{name}' recipient_nodes "
+                        f"row {ri} has invalid node {nd!r}; recipients are 0-based "
+                        "non-negative integers."
+                    )
+        return {
+            "partyp": partyp,
+            "parval": parval,
+            "nlst": nlst,
+            "data": data,
+            "recipient_nodes": [list(r) for r in recips],
+        }
+
+    def _validate_parameter_write(self):
+        """Normalize + validate QRT parameter state for a parameterized write.
+
+        Supports both preserved (loaded) and **from-scratch** parameter dicts
+        (Stage 4.6C-C). Returns ``(params, mxl)`` with canonical definitions and
+        the resolved ``MXL`` (``= sum(nlst)`` when omitted/0, else validated
+        ``>=`` that total). All validation runs before the file is opened, so a
+        parameterized item 1 is never written without a complete, consistent body
+        and no partial file is produced. **Structural only**: an activated QRT
+        parameter round-trips but is *not* execution-guaranteed -- the Fortran
+        scales ``QRTF(5)=NumRT`` not ``Q`` and does not copy ``NodQRT`` on
+        activation (see the module docstring / Stage 4.4E). ``INSTANCES`` and
+        ``TRANSIENTQ`` + ``NPQRT>0`` remain unsupported (handled elsewhere).
         """
         if not self.parameters:
-            raise NotImplementedError(
-                "MfUsgQrt.write_file cannot author QRT parameter definitions "
-                "from scratch (active parameters without loaded definitions). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgQrt.load; for from-scratch input use no parameters."
+            raise ValueError(
+                "MfUsgQrt.write_file: active_params reference parameters but none "
+                "are defined. Pass parameters={name: {...}} to author QRT "
+                "parameter definitions from scratch."
             )
+        params = {}
         total = 0
         for name, pdef in self.parameters.items():
-            missing = [
-                k
-                for k in ("partyp", "parval", "nlst", "data", "recipient_nodes")
-                if k not in pdef
-            ]
-            if missing:
-                raise ValueError(
-                    f"MfUsgQrt.write_file: parameter '{name}' is missing keys "
-                    f"{missing} (needs partyp, parval, nlst, data, "
-                    "recipient_nodes)."
-                )
-            if len(pdef["data"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgQrt.write_file: parameter '{name}' declares nlst="
-                    f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
-                )
-            if len(pdef["recipient_nodes"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgQrt.write_file: parameter '{name}' has "
-                    f"{len(pdef['recipient_nodes'])} recipient lists but nlst="
-                    f"{pdef['nlst']} (need one per definition row)."
-                )
-            total += pdef["nlst"]
-        if self.mxl <= 0:
+            params[name] = self._normalize_param(name, pdef)
+            total += params[name]["nlst"]
+        lowered_defs = [name.lower() for name in params]
+        if len(set(lowered_defs)) != len(lowered_defs):
             raise ValueError(
-                "MfUsgQrt.write_file: MXL (item 1) must be > 0 when QRT "
-                f"parameter definitions are present; got mxl={self.mxl}."
+                "MfUsgQrt.write_file: duplicate parameter definition name "
+                f"(case-insensitive): {list(params)}. The Fortran upper-cases "
+                "PARNAM, so definition names must be unique ignoring case."
             )
-        if self.mxl < total:
+        mxl = self.mxl if self.mxl else total
+        if mxl < total:
             raise ValueError(
-                f"MfUsgQrt.write_file: MXL ({self.mxl}) must be >= the total "
-                f"number of parameter list entries ({total})."
+                f"MfUsgQrt.write_file: MXL ({mxl}) must be >= the total number of "
+                f"parameter list entries ({total})."
             )
-        defined = {name.lower() for name in self.parameters}
+        defined = {name.lower() for name in params}
+        nper = self.parent.nper
         for kper, names in self.active_params.items():
+            if not 0 <= kper < nper:
+                raise ValueError(
+                    f"MfUsgQrt.write_file: active_params stress period {kper} is "
+                    f"out of range 0..{nper - 1}."
+                )
+            for nm in names:
+                check_parameter_name(
+                    nm,
+                    f"active parameter (stress period {kper})",
+                    prefix="MfUsgQrt.write_file",
+                )
             lowered = [nm.lower() for nm in names]
             if len(set(lowered)) != len(lowered):
                 raise ValueError(
@@ -391,8 +493,9 @@ class MfUsgQrt(Package):
                         f"MfUsgQrt.write_file: active parameter '{nm}' (stress "
                         f"period {kper}) is not defined in parameters."
                     )
+        return params, mxl
 
-    def _max_active_sinks(self):
+    def _max_active_sinks(self, params):
         """Max active sink-return cells in any stress period (the Fortran's
         NQRTCL, which must not exceed MXAQRT).
 
@@ -409,23 +512,24 @@ class MfUsgQrt(Package):
             nonparam = prev_nonparam
             active = 0
             for name in self.active_params.get(kper, []):
-                pdef = resolve_list_parameter(self.parameters, name)
+                pdef = resolve_list_parameter(params, name)
                 if pdef is not None:
                     active += pdef["nlst"]
             mx = max(mx, nonparam + active)
         return mx
 
-    def _max_rt_cells(self):
+    def _max_rt_cells(self, params):
         """Max total recipient nodes (NodQRT): the max non-parametric total per
-        stress period, and the parameter definitions (read into NodQRT in AR)."""
+        stress period, and the canonical parameter definitions (read into NodQRT
+        in AR)."""
         mx = 0
         for kper, recs in self.recipient_nodes.items():
             if kper in self.stress_period_data:
                 mx = max(mx, sum(len(r) for r in recs))
-        if self.parameters:
+        if params:
             def_total = sum(
                 len(r)
-                for pdef in self.parameters.values()
+                for pdef in params.values()
                 for r in pdef.get("recipient_nodes", [])
             )
             mx = max(mx, def_total)
@@ -496,16 +600,18 @@ class MfUsgQrt(Package):
     def write_file(self):
         """Write the package file in MODFLOW-USG-T QRT format."""
         preserve = bool(self.parameters) or any(self.active_params.values())
+        params, mxl = ({}, 0)
         if preserve:
-            self._validate_parameter_write()
+            # Normalize from-scratch / preserved definitions, auto-compute MXL,
+            # and validate the whole parameterized state before opening the file.
+            params, mxl = self._validate_parameter_write()
         nper = self.parent.nper
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
 
-        mxaqrt = self._max_active_sinks()
-        mxrtcells = self._max_rt_cells()
-        npqrt = len(self.parameters) if preserve else 0
-        mxl = self.mxl if preserve else 0
+        mxaqrt = self._max_active_sinks(params)
+        mxrtcells = self._max_rt_cells(params)
+        npqrt = len(params)
 
         transientq = self._transientq_active()
         if transientq:
@@ -529,7 +635,7 @@ class MfUsgQrt(Package):
             # Items 2-3: parameter definitions (UPARLSTRP header + NLST sink rows
             # + their recipient U1DINT blocks).
             if preserve:
-                for name, pdef in self.parameters.items():
+                for name, pdef in params.items():
                     write_list_parameter_header(
                         f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
                     )

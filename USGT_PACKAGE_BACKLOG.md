@@ -1403,8 +1403,19 @@ Prioritized next cards (full criteria in the audit doc):
   shared `_usgt_parameters` docstring touched. 9 new + 1 repurposed test
   (`_mxs_zero_fails` → `_mxs_zero_auto_computes`); `-k mfusgsgb` **24**, focused
   **272**, combined **276** (ARM). See `USGT_STAGE4_12_SGB_PARAMETER_AUTHORING.md`.
-- **Stage 4.6C-C — Extend param authoring to QRT (structural) / ETS (array)**
-  (reuse the shared path). *Recommended next.*
+- **Stage 4.6C-C — QRT from-scratch list-parameter authoring (structural) — DONE
+  (executed).** `MfUsgQrt` authors `NPQRT>0` from Python (`parameters=`/
+  `active_params=`; ergonomic input — `data` array-like, `MXL`/`nlst`/
+  `recipient_nodes` auto, `partyp` default/validated `QRT`; names/`parval`/nodes/
+  recipients/`kper`/duplicates validated before open). **Structural only** —
+  active params not execution-guaranteed (Fortran scales `NumRT` not `Q`,
+  `NodQRT` not copied). `INSTANCES` / `TRANSIENTQ`+`NPQRT>0` still
+  `NotImplementedError`. Only `mfusgqrt.py` touched. 10 new + 1 repurposed test;
+  `-k mfusgqrt` **47**, focused **282**, combined **286** (ARM). See
+  `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`. **This completes the list-parameter
+  from-scratch family (DRT/HFB/SGB/QRT).**
+- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring** (remaining
+  array form; different path from the list-parameter helpers). *Recommended next.*
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
