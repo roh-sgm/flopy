@@ -18,17 +18,21 @@ values, so each record is ``NODE GRADIENT [aux ...]``.
 
 Internal ``node`` values are 0-based; the file is written 1-based.
 
-Named parameters (``NPSGB > 0``) are **definition-preserving only** as of Stage
-4.4C (review follow-up): the leading ``PARAMETER NPSGB MXS`` record and the
+Named parameters (``NPSGB > 0``) are **definition-preserving + definition
+authoring only**: the leading ``PARAMETER NPSGB MXS`` record and the
 per-parameter definitions (``UPARLSTRP`` header + ``NLST`` rows) round-trip
-(load -> write -> reload), but **active SGB parameters are unsupported**. USG-T
-2.7 defines SGB parameters as ``PARTYP='SGB'`` (``UPARLSTRP``, glo2sgbu1.f:97)
-but activates them as ``PTYP='G'`` (``UPARLSTSUB``, glo2sgbu1.f:185); since a
-parameter has a single type, any active SGB parameter trips a "Parameter type
-conflict" (parutl7.f:684/800) and aborts the run. Therefore a per-stress-period
-``NP>0`` raises ``NotImplementedError`` on load/write, parameter ``INSTANCES``
-(``NUMINST>0``) raise ``NotImplementedError``, and inconsistent preserved state
-(including ``MXS<=0`` or ``MXS`` below the total definition rows) raises
+(load -> write -> reload, Stage 4.4C) **and** can be authored from scratch
+(Stage 4.6C-B) via ``parameters={name: {parval, data, ...}}`` (``partyp``
+defaults to / validated ``SGB``; ``data`` a recarray or array-like; ``nlst``
+and ``MXS`` auto-computed; names/``parval``/nodes validated before any write).
+But **active SGB parameters are unsupported**: USG-T 2.7 defines SGB parameters
+as ``PARTYP='SGB'`` (``UPARLSTRP``, glo2sgbu1.f:97) but activates them as
+``PTYP='G'`` (``UPARLSTSUB``, glo2sgbu1.f:185); since a parameter has a single
+type, any active SGB parameter trips a "Parameter type conflict"
+(parutl7.f:684/800) and aborts the run. Therefore a per-stress-period ``NP>0``
+(on load or via ``active_params`` on write) raises ``NotImplementedError`` --
+this stage writes ``NP=0`` every period and never emits activations -- as do
+parameter ``INSTANCES`` (``NUMINST>0``); inconsistent definition state raises
 ``ValueError``. Non-parametric authoring is unchanged.
 """
 
@@ -39,6 +43,8 @@ from ..utils import MfList
 from ..utils.recarray_utils import create_empty_recarray
 from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
+    check_parameter_name,
+    check_parval,
     read_list_parameter_count,
     read_list_parameter_header,
     write_list_parameter_count,
@@ -203,55 +209,97 @@ class MfUsgSgb(Package):
                 row += f" {float(rec[name]):.6e}"
             f.write(row + "\n")
 
-    def _validate_parameter_write(self):
-        """Validate preserved SGB parameter state before a parameterized write.
+    def _normalize_param(self, name, pdef):
+        """Validate + canonicalize one SGB parameter *definition* for writing.
 
-        Active SGB parameters are unsupported (USG-T 2.7 defines them as
-        PARTYP='SGB' but activates them as PTYP='G', so any activation aborts the
-        run) and raise ``NotImplementedError``. Parameter *definitions* (with no
-        activations) are preserved; inconsistent state raises ``ValueError`` so a
-        ``PARAMETER`` header is never written without a complete, consistent body
-        (including ``MXS`` large enough for the definition rows).
+        Accepts an ergonomic from-scratch dict *or* an already-canonical loaded
+        one and returns ``{partyp, parval, nlst, data (recarray)}``. ``data`` may
+        be a recarray or any array-like the active SGB ``dtype`` can build (nodes
+        0-based; AUX columns when the dtype carries them); ``nlst`` is computed
+        from ``len(data)`` when omitted, validated when given. ``partyp`` defaults
+        to / must be ``SGB`` (the loaded casing is preserved). Nodes must be
+        non-negative 0-based integers. Raises ``ValueError`` for invalid input,
+        before any file is opened. (Activations are rejected separately --
+        unsupported in USG-T 2.7.)
+        """
+        check_parameter_name(name, "parameter name", prefix="MfUsgSgb.write_file")
+        if not isinstance(pdef, dict):
+            raise ValueError(
+                f"MfUsgSgb.write_file: parameter '{name}' must be a dict, got "
+                f"{type(pdef).__name__}."
+            )
+        partyp = pdef.get("partyp", "SGB")
+        if str(partyp).upper().strip() != "SGB":
+            raise ValueError(
+                f"MfUsgSgb.write_file: parameter '{name}' partyp must be 'SGB'; "
+                f"got {partyp!r}."
+            )
+        parval = check_parval(pdef.get("parval"), name, prefix="MfUsgSgb.write_file")
+        data = pdef.get("data")
+        if data is None or len(data) == 0:
+            raise ValueError(
+                f"MfUsgSgb.write_file: parameter '{name}' needs non-empty 'data' rows."
+            )
+        if not isinstance(data, np.recarray):
+            data = np.array(data, dtype=self.dtype).view(np.recarray)
+        if np.any(np.asarray(data["node"]) < 0):
+            raise ValueError(
+                f"MfUsgSgb.write_file: parameter '{name}' has a negative node; "
+                "SGB nodes are 0-based and must be non-negative."
+            )
+        nlst = pdef.get("nlst")
+        if nlst is None:
+            nlst = len(data)
+        elif nlst != len(data):
+            raise ValueError(
+                f"MfUsgSgb.write_file: parameter '{name}' declares nlst={nlst} "
+                f"but carries {len(data)} rows."
+            )
+        return {"partyp": partyp, "parval": parval, "nlst": nlst, "data": data}
+
+    def _validate_parameter_write(self):
+        """Normalize + validate SGB parameter *definition* state for a write.
+
+        Supports both preserved (loaded) and **from-scratch** definition dicts
+        (Stage 4.6C-B). Returns ``(params, mxs)`` with canonical definitions and
+        the resolved ``MXS`` (``= sum(nlst)`` when omitted/0, else validated
+        ``>=`` that total). **Active SGB parameters are unsupported** (USG-T 2.7
+        defines them as ``PARTYP='SGB'`` but activates them as ``PTYP='G'``, so
+        any activation aborts the run) -> ``NotImplementedError``. All validation
+        runs before the file is opened, so a ``PARAMETER`` header is never written
+        without a complete, consistent body and no partial file is produced.
         """
         if any(self.active_params.values()):
             raise NotImplementedError(_SGB_ACTIVE_PARAM_MSG)
-        if not self.parameters:
-            return
+        params = {}
         total = 0
         for name, pdef in self.parameters.items():
-            missing = [k for k in ("partyp", "parval", "nlst", "data") if k not in pdef]
-            if missing:
-                raise ValueError(
-                    f"MfUsgSgb.write_file: parameter '{name}' is missing keys "
-                    f"{missing} (each definition needs partyp, parval, nlst, "
-                    "data)."
-                )
-            if len(pdef["data"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgSgb.write_file: parameter '{name}' declares nlst="
-                    f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
-                )
-            total += pdef["nlst"]
-        if self.mxs <= 0:
+            params[name] = self._normalize_param(name, pdef)
+            total += params[name]["nlst"]
+        lowered = [name.lower() for name in params]
+        if len(set(lowered)) != len(lowered):
             raise ValueError(
-                "MfUsgSgb.write_file: MXS (the PARAMETER NPSGB MXS record) must "
-                f"be > 0 when SGB parameter definitions are present; got "
-                f"mxs={self.mxs}. A from-scratch parameterized SGB without a "
-                "valid MXS does not represent a loadable file."
+                "MfUsgSgb.write_file: duplicate parameter definition name "
+                f"(case-insensitive): {list(params)}. The Fortran upper-cases "
+                "PARNAM, so definition names must be unique ignoring case."
             )
-        if self.mxs < total:
+        mxs = self.mxs if self.mxs else total
+        if mxs < total:
             raise ValueError(
-                f"MfUsgSgb.write_file: MXS ({self.mxs}) must be >= the total "
-                f"number of parameter list entries ({total})."
+                f"MfUsgSgb.write_file: MXS ({mxs}) must be >= the total number of "
+                f"parameter list entries ({total})."
             )
+        return params, mxs
 
     def write_file(self):
         """Write the package file in MODFLOW-USG-T SGB format."""
         preserve = bool(self.parameters) or any(self.active_params.values())
+        params, mxs = ({}, 0)
         if preserve:
-            # Validate before opening the file so a parameterized header is never
-            # written without a complete, consistent body.
-            self._validate_parameter_write()
+            # Normalize from-scratch / preserved definitions, auto-compute MXS,
+            # and validate (incl. rejecting activations) before opening the file,
+            # so a PARAMETER header is never written without a complete body.
+            params, mxs = self._validate_parameter_write()
         nper = self.parent.nper
         n_base = len(self.get_default_dtype().names)
 
@@ -260,7 +308,7 @@ class MfUsgSgb(Package):
 
             # Item 1a (optional): PARAMETER NPSGB MXS
             if preserve:
-                write_list_parameter_count(f, len(self.parameters), self.mxs)
+                write_list_parameter_count(f, len(params), mxs)
 
             # Item 1: MXACTS ISGBCB [AUX ...] [NOPRINT]
             line = f" {self.stress_period_data.mxact:9d} {self.ipakcb}"
@@ -270,7 +318,7 @@ class MfUsgSgb(Package):
 
             # Items 2-3: parameter definitions (UPARLSTRP header + NLST rows)
             if preserve:
-                for name, pdef in self.parameters.items():
+                for name, pdef in params.items():
                     write_list_parameter_header(
                         f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
                     )
@@ -279,14 +327,21 @@ class MfUsgSgb(Package):
             # Per stress period: ITMP NP. Active SGB parameters are unsupported
             # (see _validate_parameter_write), so NP is always 0 and only
             # non-parametric rows are written; parameter definitions above are
-            # preserved but never activated.
+            # preserved but never activated. An empty period reuses the previous
+            # rows (ITMP=-1) only once some have been written; before then (e.g. a
+            # parameter-definition-only file) it writes zero rows (ITMP=0), which
+            # is valid USG-T and avoids an empty stress-period dict on reload.
+            prev_has_data = False
             for kper in range(nper):
                 if kper in self.stress_period_data.data:
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     self._write_sgb_rows(f, kdata, n_base)
-                else:
+                    prev_has_data = True
+                elif prev_has_data:
                     f.write(f" -1 0    Stress Period {kper + 1}\n")
+                else:
+                    f.write(f" 0 0    Stress Period {kper + 1}\n")
 
     # ------------------------------------------------------------------
     # load

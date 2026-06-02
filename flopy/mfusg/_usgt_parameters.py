@@ -18,11 +18,25 @@ Array-parameter ``bc_parms`` layout (from ``ModflowParBc.loadarray``)::
         {instance_name: [[mltarr, zonarr, [izone, ...]], ...nclu clusters]},
     ]
 
-The **array-parameter** write path (ETS, for the ETSR rate array) and the
-**list-parameter** write path (HFB, Stage 4.4B) are both implemented here. The
-remaining list-parameter packages (SGB/DRT/QRT) can reuse the list-parameter
-helpers below when their preservation lands; until then they fail explicitly on
-``NP*>0``.
+Current per-package status (all reuse the helpers below):
+
+* **ETS** — array parameters (ETSR rate) are *preserved* (Stage 4.4A); the
+  array-parameter write path lives here.
+* **HFB/DRT** — list parameters are *preserved* and *authorable from scratch*
+  (Stage 4.4B/4.4D + 4.6C-A/4.6B), including per-stress-period activations
+  (DRT) / a global active list (HFB).
+* **QRT** — list parameters are *structurally* preserved (Stage 4.4E); active
+  parameters round-trip but are not execution-guaranteed (Fortran scales the
+  wrong field).
+* **SGB** — *definition* preservation + from-scratch *definition authoring* only
+  (Stage 4.4C / 4.6C-B); **active** SGB parameters are unsupported because USG-T
+  2.7 reads them with ``PARTYP='SGB'`` but activates them as ``PTYP='G'`` (a type
+  conflict that aborts the run), so any activation raises ``NotImplementedError``.
+
+The shared name/``parval`` validators (``check_parameter_name`` /
+``check_parval``) and the list/array read/write helpers below are reused by the
+from-scratch authoring paths; parameter ``INSTANCES`` remain unsupported
+everywhere.
 
 Notes
 -----

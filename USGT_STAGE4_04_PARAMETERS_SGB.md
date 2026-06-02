@@ -8,9 +8,13 @@ touched; ETS/HFB and DRT/QRT are not.
 **Review follow-up outcome:** the review found that USG-T 2.7 cannot actually
 *activate* an SGB parameter (a `PARTYP='SGB'` definition vs a `PTYP='G'`
 activation is a type conflict that aborts the run). SGB is therefore
-**definition-preserving only** — parameter definitions round-trip, but active
-parameters (`NP>0`) and `INSTANCES` raise `NotImplementedError`, and the writer
-is hardened (`MXS` validated; no partial files). See the critical finding below.
+**definition-preserving + from-scratch definition authoring only** — parameter
+definitions round-trip (Stage 4.4C) **and** can be built from scratch
+(Stage 4.6C-B; see `USGT_STAGE4_12_SGB_PARAMETER_AUTHORING.md`: `parameters=`,
+counts auto, names/`parval`/nodes validated), but active parameters (`NP>0` /
+`active_params`) and `INSTANCES` raise `NotImplementedError`, and the writer is
+hardened (`MXS` auto/validated; `NP=0` every period; no partial files). See the
+critical finding below.
 
 ## Fortran audit
 
@@ -97,8 +101,12 @@ by SGB, because SGB activations are unsupported (see the critical finding above)
   `glo2sgbu1.f:97/185` and `parutl7.f:684/800`.
 - **`INSTANCES` (`NUMINST>0`)** → `NotImplementedError` on load (a consequence:
   instanced definitions could only ever be activated, which is unsupported).
-- **`MXS` hardening** → `ValueError` when definitions are present and `MXS<=0`
-  (e.g. a from-scratch `PARAMETER 1 0`) or `MXS <` the total definition rows.
+- **`MXS`** → auto-computed as the total definition rows when omitted/0
+  (Stage 4.6C-B); `ValueError` when given and `<` that total.
+- **Names / `parval` / nodes (Stage 4.6C-B)** → `ValueError`: a definition/name
+  that is not a single whitespace-free token or > 10 chars (Fortran
+  `CHARACTER*10` PARNAM); a duplicate definition name (case-insensitive); a
+  `parval` that is blank or a multi-token string; a negative node.
 - **Inconsistent definitions** → `ValueError` (a definition missing
   `partyp`/`parval`/`nlst`/`data`, or `len(data) != nlst`).
 - All validation runs **before** the file is opened, so no partial file is

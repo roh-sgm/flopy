@@ -625,6 +625,29 @@ honest, upstream-ready USG-T 2.7 story.
   tests stay green. `-k mfusghfb` **30**, focused **263**, exe **4**, combined
   **267** (ARM). Verified at the FloPy round-trip + Fortran-format level. See
   `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-B — SGB from-scratch parameter-*definition* authoring (executed):**
+  promotes `MfUsgSgb` from definition-preserving-only to from-scratch *definition*
+  authoring, reusing the DRT/HFB pattern. **Active SGB parameters stay
+  unsupported** by design — USG-T 2.7 reads SGB defs with `PARTYP='SGB'`
+  (glo2sgbu1.f:97) but activates them as `PTYP='G'` (glo2sgbu1.f:185), a type
+  conflict that aborts the run — so the writer emits `NP=0` every period and any
+  activation (`active_params` / per-SP `NP>0`) raises `NotImplementedError`. New
+  `_normalize_param` canonicalizes each definition (`partyp` default/validated
+  `SGB`, casing preserved; `data` recarray or array-like with the active SGB dtype
+  incl. AUX; `nlst` computed/validated; non-negative nodes) via the shared
+  `check_parameter_name`/`check_parval`; `_validate_parameter_write` auto-computes
+  `MXS = Σ nlst` (validated if given), checks duplicate definition names, and
+  returns `(params, mxs)`. A subtle latent bug exposed by definition-only
+  authoring was fixed: an empty stress period now writes `ITMP=0` (zero rows)
+  until non-param rows have appeared (then `ITMP=-1` reuse), so a definition-only
+  file reloads to a non-empty stress-period dict instead of crashing `MfList`.
+  The old `MXS<=0 -> ValueError` is replaced by auto-compute. Only `mfusgsgb.py`
+  (+ the shared `_usgt_parameters` docstring) touched; QRT/DRT/HFB/ETS untouched.
+  Tests: 9 new (from-scratch / AUX / mixed / auto-counts authoring; duplicate-
+  names/bad-name/bad-parval/empty-data/negative-node negatives) + 1 repurposed
+  (`_mxs_zero_fails` → `_mxs_zero_auto_computes`); the active-param + preservation
+  tests stay green. `-k mfusgsgb` **24**, focused **272**, exe **4**, combined
+  **276** (ARM). See `USGT_STAGE4_12_SGB_PARAMETER_AUTHORING.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

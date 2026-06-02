@@ -3365,18 +3365,21 @@ def test_mfusgsgb_parameter_instances_unsupported(function_tmpdir):
         MfUsgSgb.load(str(p), ml, nper=1, ext_unit_dict={})
 
 
-def test_mfusgsgb_parameter_mxs_zero_fails(function_tmpdir):
-    """Definitions present with MXS<=0 (a from-scratch PARAMETER 1 0) raise
-    ValueError and write no partial file."""
+def test_mfusgsgb_parameter_mxs_zero_auto_computes(function_tmpdir):
+    """MXS omitted/0 is auto-computed as the total definition rows (Stage 4.6C-B;
+    previously this raised). Two params of nlst 1 -> PARAMETER 2 2."""
     dtype = MfUsgSgb.get_default_dtype()
-    rows = np.array([(0, 0.01)], dtype=dtype).view(np.recarray)
-    params = {"p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1, "data": rows}}
+    params = {
+        "p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1,
+               "data": np.array([(0, 0.01)], dtype=dtype).view(np.recarray)},
+        "p2": {"partyp": "SGB", "parval": "1.0", "nlst": 1,
+               "data": np.array([(1, 0.02)], dtype=dtype).view(np.recarray)},
+    }
     sgb = MfUsgSgb(_sgb_model(function_tmpdir, "mz"), parameters=params, mxs=0)
     out = function_tmpdir / "mz.sgb"
     sgb.fn_path = str(out)
-    with pytest.raises(ValueError, match="MXS"):
-        sgb.write_file()
-    assert not out.exists()
+    sgb.write_file()
+    assert "PARAMETER 2 2" in out.read_text()  # NPSGB=2, MXS auto = 2
 
 
 def test_mfusgsgb_parameter_mxs_too_small_fails(function_tmpdir):
@@ -3422,6 +3425,166 @@ def test_mfusgsgb_active_params_constructed_fails(function_tmpdir):
     out = function_tmpdir / "am.sgb"
     sgb.fn_path = str(out)
     with pytest.raises(NotImplementedError, match="not supported"):
+        sgb.write_file()
+    assert not out.exists()
+
+
+# --- Stage 4.6C-B: SGB from-scratch parameter-DEFINITION authoring ----------
+#
+# Definitions (PARAMETER NPSGB MXS + UPARLSTRP headers + rows) can be authored
+# from Python (no prior load): parameters={name: {parval, data, ...}}; counts
+# auto-computed; normalized + validated before open. Active SGB parameters stay
+# unsupported (PARTYP='SGB' def vs PTYP='G' activation -> Fortran abort), so NP=0
+# is written every period and any activation raises NotImplementedError.
+
+
+def test_mfusgsgb_parameter_authoring_from_scratch(function_tmpdir):
+    """Author SGB parameter definitions from scratch (ergonomic input): PARAMETER
+    NPSGB MXS auto, UPARLSTRP headers + rows, per-SP NP=0, 0↔1-based, reload."""
+    ml = _sgb_model(function_tmpdir, "auth")
+    params = {"gp": {"parval": "1.5", "data": [(4, 0.01), (9, 0.02)]}}  # 0-based
+    sgb = MfUsgSgb(ml, parameters=params)
+    out = function_tmpdir / "auth.sgb"
+    sgb.fn_path = str(out)
+    sgb.write_file()
+    text = out.read_text()
+    assert "PARAMETER 1 2" in text  # NPSGB=1, MXS auto = sum(nlst)=2
+    assert "gp SGB 1.5 2" in text
+    assert "\n 5  1.000000e-02" in text  # node 4 -> 5 (1-based)
+    assert " 0 0    Stress Period 1" in text  # NP=0, zero non-param rows
+
+    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "auth2"), nper=1,
+                       ext_unit_dict={})
+    pd = re.parameters["gp"]
+    assert pd["partyp"].upper() == "SGB" and pd["nlst"] == 2
+    assert list(pd["data"]["node"]) == [4, 9]  # back to 0-based
+    assert abs(float(pd["parval"]) - 1.5) < 1e-9
+
+
+def test_mfusgsgb_parameter_authoring_with_aux(function_tmpdir):
+    """From-scratch SGB parameter definition with an AUX concentration column."""
+    from flopy.pakbase import Package
+
+    ml = _sgb_model(function_tmpdir, "ax")
+    dtype = Package.add_to_dtype(MfUsgSgb.get_default_dtype(), ["C01"], np.float64)
+    rows = np.array([(4, 0.01, 0.15)], dtype=dtype).view(np.recarray)
+    sgb = MfUsgSgb(ml, dtype=dtype, parameters={"gp": {"parval": "1.0", "data": rows}})
+    out = function_tmpdir / "ax.sgb"
+    sgb.fn_path = str(out)
+    sgb.write_file()
+    assert "AUX C01" in out.read_text()
+
+    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "ax2"), nper=1,
+                       ext_unit_dict={})
+    assert np.isclose(re.parameters["gp"]["data"]["C01"][0], 0.15)
+
+
+def test_mfusgsgb_parameter_authoring_mixed_with_nonparam(function_tmpdir):
+    """Parameter definitions coexist with non-parametric stress-period rows;
+    NP=0 is written every period (no activations)."""
+    ml = _sgb_model(function_tmpdir, "mix")
+    spd = {0: np.array([(2, 0.03)], dtype=MfUsgSgb.get_default_dtype()).view(
+        np.recarray
+    )}
+    sgb = MfUsgSgb(
+        ml, stress_period_data=spd, parameters={"gp": {"parval": "1.0",
+                                                       "data": [(4, 0.01)]}}
+    )
+    out = function_tmpdir / "mix.sgb"
+    sgb.fn_path = str(out)
+    sgb.write_file()
+    text = out.read_text()
+    assert "PARAMETER 1 1" in text
+    assert " 1 0    Stress Period 1" in text  # 1 non-param row, NP=0
+
+    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "mix2"), nper=1,
+                       ext_unit_dict={})
+    assert list(re.stress_period_data[0]["node"]) == [2]
+    assert set(re.parameters) == {"gp"}
+
+
+def test_mfusgsgb_parameter_authoring_auto_counts(function_tmpdir):
+    """NPSGB = len(parameters) and MXS = total nlst when omitted."""
+    ml = _sgb_model(function_tmpdir, "ac")
+    params = {
+        "a": {"parval": "1.0", "data": [(0, 0.01), (1, 0.01)]},
+        "b": {"parval": "1.0", "data": [(2, 0.01)]},
+    }
+    sgb = MfUsgSgb(ml, parameters=params)  # mxs omitted
+    out = function_tmpdir / "ac.sgb"
+    sgb.fn_path = str(out)
+    sgb.write_file()
+    assert "PARAMETER 2 3" in out.read_text()  # NPSGB=2, MXS=2+1
+
+
+def test_mfusgsgb_parameter_authoring_duplicate_names_fails(function_tmpdir):
+    """Definition names colliding case-insensitively (`gp`/`GP`) -> ValueError."""
+    params = {
+        "gp": {"parval": "1.0", "data": [(0, 0.01)]},
+        "GP": {"parval": "1.0", "data": [(1, 0.01)]},
+    }
+    sgb = MfUsgSgb(_sgb_model(function_tmpdir, "dd"), parameters=params)
+    out = function_tmpdir / "dd.sgb"
+    sgb.fn_path = str(out)
+    with pytest.raises(ValueError, match="duplicate parameter definition"):
+        sgb.write_file()
+    assert not out.exists()
+
+
+def test_mfusgsgb_parameter_authoring_bad_name_fails(function_tmpdir):
+    """A blank/whitespace/over-long parameter name -> ValueError, no file."""
+    for badname in ("", "g p", "abcdefghijk"):
+        sgb = MfUsgSgb(
+            _sgb_model(function_tmpdir, "bn"),
+            parameters={badname: {"parval": "1.0", "data": [(0, 0.01)]}},
+        )
+        out = function_tmpdir / "bn.sgb"
+        if out.exists():
+            out.unlink()
+        sgb.fn_path = str(out)
+        with pytest.raises(ValueError):
+            sgb.write_file()
+        assert not out.exists()
+
+
+def test_mfusgsgb_parameter_authoring_bad_parval_fails(function_tmpdir):
+    """A multi-token / blank parval -> ValueError, no file."""
+    for badparval in ("1 2", "  "):
+        sgb = MfUsgSgb(
+            _sgb_model(function_tmpdir, "bp"),
+            parameters={"gp": {"parval": badparval, "data": [(0, 0.01)]}},
+        )
+        out = function_tmpdir / "bp.sgb"
+        if out.exists():
+            out.unlink()
+        sgb.fn_path = str(out)
+        with pytest.raises(ValueError):
+            sgb.write_file()
+        assert not out.exists()
+
+
+def test_mfusgsgb_parameter_authoring_empty_data_fails(function_tmpdir):
+    """A parameter with empty data rows -> ValueError, no file."""
+    sgb = MfUsgSgb(
+        _sgb_model(function_tmpdir, "ed"),
+        parameters={"gp": {"parval": "1.0", "data": []}},
+    )
+    out = function_tmpdir / "ed.sgb"
+    sgb.fn_path = str(out)
+    with pytest.raises(ValueError, match="data"):
+        sgb.write_file()
+    assert not out.exists()
+
+
+def test_mfusgsgb_parameter_authoring_negative_node_fails(function_tmpdir):
+    """A negative parametric node -> ValueError, no file."""
+    sgb = MfUsgSgb(
+        _sgb_model(function_tmpdir, "nn"),
+        parameters={"gp": {"parval": "1.0", "data": [(-1, 0.01)]}},
+    )
+    out = function_tmpdir / "nn.sgb"
+    sgb.fn_path = str(out)
+    with pytest.raises(ValueError, match="negative node"):
         sgb.write_file()
     assert not out.exists()
 

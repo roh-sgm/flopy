@@ -1392,8 +1392,19 @@ Prioritized next cards (full criteria in the audit doc):
   `mfusgdrt.py`. 10 new + 1 repurposed test; `-k mfusghfb` **30**, focused
   **263**, combined **267** (ARM). See
   `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`.
-- **Stage 4.6C-B — Extend param authoring to SGB(defs) / QRT / ETS** (reuse the
-  shared path). *Recommended next.*
+- **Stage 4.6C-B — SGB from-scratch *definition* authoring — DONE (executed).**
+  `MfUsgSgb` authors `NPSGB>0` definitions from Python (`parameters=`; ergonomic
+  input — `data` array-like, `MXS`/`nlst` auto, `partyp` default/validated `SGB`,
+  AUX via dtype; normalized + validated before open: names, `parval`,
+  non-negative nodes, duplicate defs); `NP=0` written every period (an empty
+  period writes `ITMP=0` until rows appear, so a definition-only file reloads
+  without an empty `MfList`). **Active SGB params stay unsupported** (Fortran
+  `PARTYP='SGB'` vs `'G'`) → `NotImplementedError`. Only `mfusgsgb.py` + the
+  shared `_usgt_parameters` docstring touched. 9 new + 1 repurposed test
+  (`_mxs_zero_fails` → `_mxs_zero_auto_computes`); `-k mfusgsgb` **24**, focused
+  **272**, combined **276** (ARM). See `USGT_STAGE4_12_SGB_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-C — Extend param authoring to QRT (structural) / ETS (array)**
+  (reuse the shared path). *Recommended next.*
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
