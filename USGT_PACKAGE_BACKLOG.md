@@ -1380,8 +1380,20 @@ Prioritized next cards (full criteria in the audit doc):
   **non-negative** parametric nodes/recipients; all `ValueError` before open, no
   partial file. +5 tests; `-k mfusgdrt` **39**, focused **253**, combined **257**
   (ARM). See `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
-- **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT** (reuse the
-  4.6B path). *Recommended next.*
+- **Stage 4.6C-A — HFB from-scratch `NPHFB>0` authoring — DONE (executed).**
+  `MfUsgHfb` builds a parameterized package from Python (`parameters=`/
+  `acthfb_names`; `nphfb`/`mxfb`/`nacthfb`/`nlst` auto; `data` array-like;
+  structured + unstructured) and writes a valid `NPHFB>0` file that reloads with
+  the same semantics; normalized + validated before open (names, `parval`,
+  non-negative indices, duplicate defs). Factored the shared name/`parval`
+  validation into `_usgt_parameters` (`check_parameter_name`/`check_parval`); DRT
+  delegates (regression: DRT's 4.6B tests). `TRANSIENT_HFB`+params and
+  `INSTANCES` still fail. Touched `mfusghfb.py`, `_usgt_parameters.py`,
+  `mfusgdrt.py`. 10 new + 1 repurposed test; `-k mfusghfb` **30**, focused
+  **263**, combined **267** (ARM). See
+  `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-B — Extend param authoring to SGB(defs) / QRT / ETS** (reuse the
+  shared path). *Recommended next.*
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**

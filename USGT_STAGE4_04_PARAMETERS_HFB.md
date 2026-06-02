@@ -75,14 +75,19 @@ These helpers are reusable by SGB/DRT/QRT when their preservation lands.
 ## Decision: HFB stays ⚠️ Partial (not `Full`)
 
 Upgraded from "`NPHFB>0` fails explicitly" to **parameter-preserving
-(load → write → reload)** for HFB list parameters. Still **not `Full`** because:
+(load → write → reload)** and, as of **Stage 4.6C-A**, **from-scratch parameter
+authoring** for HFB list parameters (see
+`USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`: pass `parameters=`/`acthfb_names`,
+counts auto-computed, normalized + validated before open — names, `parval`,
+non-negative barrier indices; structured + unstructured). Still **not `Full`**
+because:
 
-- **From-scratch parameter authoring** (`NPHFB>0` with no loaded definitions)
-  is unsupported → `write_file` raises `NotImplementedError`.
 - **`TRANSIENT_HFB` + `NPHFB>0`** is unsupported (the Fortran would
   re-read/redefine the parameters each stress period under `ITERP=1`) → both
   `load` and `write_file` raise `NotImplementedError`.
 - `INSTANCES` are unsupported (matches the Fortran, which aborts).
+- `NPHFB>0` / active names with no definitions → `ValueError` (was
+  `NotImplementedError`).
 
 `SFAC` / `OPEN/CLOSE` / `EXTERNAL` list controls inside barrier lists are
 supported as of the list-control follow-up (below).
@@ -97,8 +102,10 @@ New (Stage 4.4B):
   `k/i/j` 0-based internal and 1-based on file.
 - `test_mfusghfb_parameterized_with_nonparam` — parameter-defined barriers mixed
   with non-parametric ones (item 2-3 + item 4).
-- `test_mfusghfb_parameter_authoring_from_scratch_fails` — `NPHFB>0` without
-  defs → `NotImplementedError`.
+- `test_mfusghfb_parameter_active_without_defs_fails` — `NPHFB>0` / active names
+  without defs → `ValueError` (repurposed from the old `_from_scratch_fails`;
+  from-scratch authoring *with* defs is supported as of Stage 4.6C-A, see
+  `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`).
 - `test_mfusghfb_transient_with_parameters_fails` — `TRANSIENT_HFB` + `NPHFB>0`
   → `NotImplementedError`.
 

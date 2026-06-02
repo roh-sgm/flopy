@@ -5211,14 +5211,18 @@ def test_mfusghfb_parameterized_with_nonparam(function_tmpdir):
     assert list(re.hfb_data["k"]) == [1]
 
 
-def test_mfusghfb_parameter_authoring_from_scratch_fails(function_tmpdir):
-    """Authoring HFB parameters from scratch (NPHFB>0, no defs) fails explicitly."""
+def test_mfusghfb_parameter_active_without_defs_fails(function_tmpdir):
+    """NPHFB>0 / active names with no parameter definitions fails explicitly
+    (ValueError), no file. (From-scratch authoring *with* definitions is
+    supported as of Stage 4.6C-A — see the authoring tests below.)"""
     from flopy.mfusg import MfUsgHfb
 
     hfb = MfUsgHfb(_hfb_model(function_tmpdir, "fs"), nphfb=1, mxfb=1, nhfbnp=0)
-    hfb.fn_path = str(function_tmpdir / "fs.hfb")
-    with pytest.raises(NotImplementedError, match="from scratch"):
+    out = function_tmpdir / "fs.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="none are defined"):
         hfb.write_file()
+    assert not out.exists()
 
 
 def test_mfusghfb_transient_with_parameters_fails(function_tmpdir):
@@ -5399,8 +5403,8 @@ def _hfb_param_def(nlst, hydchr=0.5):
 
 
 def test_mfusghfb_param_write_empty_dict_fails(function_tmpdir):
-    """NPHFB>0 with an empty parameters dict is from-scratch authoring: it fails
-    with NotImplementedError and writes no partial file."""
+    """NPHFB>0 with an empty parameters dict has no definitions to write: it
+    fails with ValueError and writes no partial file."""
     from flopy.mfusg import MfUsgHfb
 
     hfb = MfUsgHfb(
@@ -5412,7 +5416,7 @@ def test_mfusghfb_param_write_empty_dict_fails(function_tmpdir):
     )
     out = function_tmpdir / "empty.hfb"
     hfb.fn_path = str(out)
-    with pytest.raises(NotImplementedError, match="from scratch"):
+    with pytest.raises(ValueError, match="none are defined"):
         hfb.write_file()
     assert not out.exists()  # no partial file written
 
@@ -5497,6 +5501,221 @@ def test_mfusghfb_param_write_duplicate_active_fails(function_tmpdir):
     out = function_tmpdir / "dup.hfb"
     hfb.fn_path = str(out)
     with pytest.raises(ValueError, match="more than once"):
+        hfb.write_file()
+    assert not out.exists()
+
+
+# --- Stage 4.6C-A: HFB from-scratch NPHFB>0 parameter authoring -------------
+#
+# A parameterized HFB can be built entirely in Python (no prior load): pass
+# parameters={name: {parval, data, ...}} + acthfb_names=[...]. Ergonomic input
+# (data as tuples; nphfb/mxfb/nlst/nacthfb auto) is normalized + validated before
+# the file is opened; write -> reload preserves it. TRANSIENT_HFB+params and
+# INSTANCES stay unsupported.
+
+
+def test_mfusghfb_parameter_authoring_from_scratch(function_tmpdir):
+    """Build a parameterized unstructured HFB from scratch (ergonomic input):
+    NPHFB, auto MXFBP, definitions, active names, 0-based internal / 1-based
+    file."""
+    from flopy.mfusg import MfUsgHfb
+
+    # data as plain tuples (node1, node2, hydchr), 0-based; counts/nlst omitted.
+    params = {"hp": {"parval": "2.0", "data": [(0, 1, 0.5), (2, 3, 0.25)]}}
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "auth"), parameters=params, acthfb_names=["hp"]
+    )
+    out = function_tmpdir / "auth.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    text = out.read_text()
+    hdr = next(ln for ln in text.splitlines() if not ln.startswith("#")).split()
+    assert hdr[0] == "1" and hdr[1] == "2"  # NPHFB=1, MXFBP auto = sum(nlst)=2
+    assert "hp HFB 2.0 2" in text  # UPARLSTRP header, nlst auto
+    assert "         1         2" in text  # node1 0,1 -> 1,2 (1-based)
+
+    re = MfUsgHfb.load(str(out), _hfb_model(function_tmpdir, "auth2"), nper=1)
+    pd = re.parameters["hp"]
+    assert pd["nlst"] == 2 and abs(float(pd["parval"]) - 2.0) < 1e-9
+    assert list(pd["data"]["node1"]) == [0, 2]  # back to 0-based
+    assert re.acthfb_names == ["hp"] and re.nphfb == 1
+
+
+def test_mfusghfb_parameter_authoring_structured(function_tmpdir):
+    """From-scratch structured HFB parameter (k, irow1, icol1, irow2, icol2,
+    hydchr); 0-based internal / 1-based file."""
+    from flopy.mfusg import MfUsgHfb
+
+    ml = _hfb_model(function_tmpdir, "st", structured=True, nrow=3, ncol=3)
+    params = {"sp": {"parval": "1.5", "data": [(0, 0, 0, 0, 1, 0.5)]}}
+    hfb = MfUsgHfb(ml, parameters=params, acthfb_names=["sp"])
+    out = function_tmpdir / "st.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+
+    re = MfUsgHfb.load(
+        str(out),
+        _hfb_model(function_tmpdir, "st2", structured=True, nrow=3, ncol=3),
+        nper=1,
+    )
+    pd = re.parameters["sp"]
+    assert list(pd["data"]["k"]) == [0]
+    assert list(pd["data"]["irow1"]) == [0] and list(pd["data"]["icol2"]) == [1]
+    assert re.acthfb_names == ["sp"]
+
+
+def test_mfusghfb_parameter_authoring_mixed_nonparam(function_tmpdir):
+    """A non-parametric barrier (NHFBNP) and a parameter definition coexist
+    when authored from scratch; both survive write -> reload."""
+    from flopy.mfusg import MfUsgHfb
+
+    dt = MfUsgHfb.get_default_dtype(structured=False)
+    nonparam = np.array([(4, 5, 0.9)], dtype=dt).view(np.recarray)
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "mx"),
+        hfb_data=nonparam,
+        parameters={"hp": {"parval": "1.0", "data": [(0, 1, 0.5)]}},
+        acthfb_names=["hp"],
+    )
+    out = function_tmpdir / "mx.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    hdr = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert hdr[0] == "1" and hdr[2] == "1"  # NPHFB=1, NHFBNP=1
+
+    re = MfUsgHfb.load(str(out), _hfb_model(function_tmpdir, "mx2"), nper=1)
+    assert list(re.hfb_data["node1"]) == [4]
+    assert set(re.parameters) == {"hp"} and re.acthfb_names == ["hp"]
+
+
+def test_mfusghfb_parameter_authoring_auto_counts(function_tmpdir):
+    """nphfb / mxfb / nacthfb are computed when omitted."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "a": {"parval": "1.0", "data": [(0, 1, 0.5), (2, 3, 0.5)]},
+        "b": {"parval": "1.0", "data": [(4, 5, 0.5)]},
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "ac"), parameters=params, acthfb_names=["a", "b"]
+    )
+    out = function_tmpdir / "ac.hfb"
+    hfb.fn_path = str(out)
+    hfb.write_file()
+    lines = [ln for ln in out.read_text().splitlines() if not ln.startswith("#")]
+    hdr = lines[0].split()
+    assert hdr[0] == "2" and hdr[1] == "3"  # NPHFB=2, MXFBP=2+1
+    # NACTHFB line (after the 2 defs + their 3 rows + 0 non-param) = "2"
+    assert "         2" in lines  # nacthfb auto = 2
+
+
+def test_mfusghfb_parameter_authoring_duplicate_definition_names_fails(function_tmpdir):
+    """Definition names colliding case-insensitively (`hp`/`HP`) -> ValueError."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "hp": {"parval": "1.0", "data": [(0, 1, 0.5)]},
+        "HP": {"parval": "1.0", "data": [(2, 3, 0.5)]},
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "dd"), parameters=params, acthfb_names=["hp"]
+    )
+    out = function_tmpdir / "dd.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="duplicate parameter definition"):
+        hfb.write_file()
+    assert not out.exists()
+
+
+def test_mfusghfb_parameter_authoring_bad_name_fails(function_tmpdir):
+    """A blank/whitespace/over-long parameter name -> ValueError, no file."""
+    from flopy.mfusg import MfUsgHfb
+
+    for badname in ("", "h p", "abcdefghijk"):
+        hfb = MfUsgHfb(
+            _hfb_model(function_tmpdir, "bn"),
+            parameters={badname: {"parval": "1.0", "data": [(0, 1, 0.5)]}},
+            acthfb_names=[badname],
+        )
+        out = function_tmpdir / "bn.hfb"
+        if out.exists():
+            out.unlink()
+        hfb.fn_path = str(out)
+        with pytest.raises(ValueError):
+            hfb.write_file()
+        assert not out.exists()
+
+
+def test_mfusghfb_parameter_authoring_bad_parval_fails(function_tmpdir):
+    """A multi-token / blank parval -> ValueError, no file."""
+    from flopy.mfusg import MfUsgHfb
+
+    for badparval in ("1 2", "  "):
+        hfb = MfUsgHfb(
+            _hfb_model(function_tmpdir, "bp"),
+            parameters={"hp": {"parval": badparval, "data": [(0, 1, 0.5)]}},
+            acthfb_names=["hp"],
+        )
+        out = function_tmpdir / "bp.hfb"
+        if out.exists():
+            out.unlink()
+        hfb.fn_path = str(out)
+        with pytest.raises(ValueError):
+            hfb.write_file()
+        assert not out.exists()
+
+
+def test_mfusghfb_parameter_authoring_empty_data_fails(function_tmpdir):
+    """A parameter with empty data rows -> ValueError, no file."""
+    from flopy.mfusg import MfUsgHfb
+
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "ed"),
+        parameters={"hp": {"parval": "1.0", "data": []}},
+        acthfb_names=["hp"],
+    )
+    out = function_tmpdir / "ed.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="data"):
+        hfb.write_file()
+    assert not out.exists()
+
+
+def test_mfusghfb_parameter_authoring_mxfb_too_small_fails(function_tmpdir):
+    """An explicit mxfb below the total parameter rows -> ValueError, no file."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "a": {"parval": "1.0", "data": [(0, 1, 0.5)]},
+        "b": {"parval": "1.0", "data": [(2, 3, 0.5)]},
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "ms"),
+        parameters=params,
+        mxfb=1,  # total = 2
+        acthfb_names=["a"],
+    )
+    out = function_tmpdir / "ms.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="MXFBP"):
+        hfb.write_file()
+    assert not out.exists()
+
+
+def test_mfusghfb_parameter_authoring_negative_index_fails(function_tmpdir):
+    """A negative barrier index in a parameter -> ValueError, no file."""
+    from flopy.mfusg import MfUsgHfb
+
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "ni"),
+        parameters={"hp": {"parval": "1.0", "data": [(-1, 1, 0.5)]}},
+        acthfb_names=["hp"],
+    )
+    out = function_tmpdir / "ni.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="negative"):
         hfb.write_file()
     assert not out.exists()
 

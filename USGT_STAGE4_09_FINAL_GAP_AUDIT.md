@@ -75,7 +75,7 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` authoring; gaps: sill/connectivity (ds 7/8) + multi-lake not authored from scratch; bathymetry tables external. |
 | GNC | FS-exec (✅) | Ghost-node helper; verified. |
 | ETS | FA (non-param) + **ParamPreserve** (ETSR array) | From-scratch param authoring → `NotImplementedError`; opt-in expand fallback. |
-| HFB | FA (non-param) + **ParamPreserve** (list) | Gaps: from-scratch param authoring, `TRANSIENT_HFB`+`NPHFB>0`, `INSTANCES`. |
+| HFB | FA (incl. **from-scratch `NPHFB>0` authoring**, Stage 4.6C-A) + ParamPreserve (list) | Gaps: `TRANSIENT_HFB`+`NPHFB>0`, `INSTANCES`. |
 | DRT | FA (incl. **from-scratch `NPDRT>0` authoring**, Stage 4.6B) + ParamPreserve + Expanded (list/recip controls) | Type-consistent; from-scratch parameter authoring supported; activated SPREAD = structural round-trip only (Fortran copies `DRTF` not `NodDRT`); `INSTANCES` unsupported. Unstructured only. |
 | SGB | FA + **Param-definition-preserve** (no activations) + **Expanded** | Active SGB params abort the Fortran (`PARTYP='SGB'` vs `'G'`); `NP>0`/`INSTANCES` → `NotImplementedError`. |
 | QRT | FA + **ParamPreserve** (structural, not exec-guaranteed) + **Expanded** + `TRANSIENTQ` | Active param value scales `NumRT` not `Q` (Fortran bug); `NodQRT` not copied. From-scratch param authoring → `NotImplementedError`. |
@@ -92,12 +92,13 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 
 ### 3.1 Authoring-from-scratch gaps (primary objective)
 
-- **A1 — From-scratch list/array *parameter* authoring.** **DRT is done**
-  (Stage 4.6B, the pilot — `parameters=`/`active_params=` from Python →
-  valid `NPDRT>0` file). **HFB, SGB(defs), QRT, ETS remain** (they preserve
-  loaded `NP>0` definitions but cannot author from scratch yet) — Stage 4.6C
-  reuses the DRT path. The biggest remaining "author a common feature from zero"
-  gap.
+- **A1 — From-scratch list/array *parameter* authoring.** **DRT** (Stage 4.6B,
+  the pilot) and **HFB** (Stage 4.6C-A, non-transient — `parameters=`/
+  `acthfb_names` from Python → valid `NPHFB>0` file) are **done**. **SGB(defs),
+  QRT, ETS remain** (they preserve loaded `NP>0` definitions but cannot author
+  from scratch yet) — Stage 4.6C-B reuses the shared path
+  (`_usgt_parameters.check_parameter_name`/`check_parval`). The biggest remaining
+  "author a common feature from zero" gap.
 - **A2 — LAK multi-lake + sill/connectivity (ds 7/8)** not authored from scratch
   (single-lake + basic transport authored; multi-lake systems only round-trip).
 - **A3 — DPT `A-W_ADSORBIM`** immobile air-water adsorption unsupported (cascade
@@ -180,8 +181,8 @@ Priorities use the review's definitions:
 
 ### P1 — blocks from-scratch authoring of common features
 
-- **A1 — from-scratch list-parameter authoring.** ✅ **DRT done (Stage 4.6B).**
-  Remaining: HFB, then QRT/SGB (structural) and ETS (array) — Stage 4.6C.
+- **A1 — from-scratch list-parameter authoring.** ✅ **DRT (4.6B) + HFB
+  (4.6C-A) done.** Remaining: QRT/SGB (structural) and ETS (array) — Stage 4.6C-B.
 - **A2 — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 
 ### P2 — incomplete preservation / missing tests
@@ -225,10 +226,18 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   unchanged. 7 new tests + 1 repurposed; `-k mfusgdrt` **34**, focused **248**,
   combined **252** (ARM). See `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
 
-- **Stage 4.6C — Extend from-scratch param authoring to HFB, then SGB(defs)/QRT.**
-  Reuse the 4.6B shared path. SGB stays definition-only (active params abort the
-  Fortran); QRT stays structural (documented Fortran value-scaling bug).
-  *Acceptance:* per-package from-scratch authoring tests; honest labels kept.
+- **Stage 4.6C-A — HFB from-scratch param authoring — EXECUTED.** `MfUsgHfb`
+  builds a parameterized package from Python (`parameters=`/`acthfb_names`; auto
+  counts; structured + unstructured) and writes a valid `NPHFB>0` file that
+  reloads with the same semantics. Factored the shared name/`parval` validation
+  into `_usgt_parameters` (DRT delegates). `TRANSIENT_HFB`+params / `INSTANCES`
+  still fail. 10 new + 1 repurposed test; `-k mfusghfb` **30**, focused **263**,
+  combined **267** (ARM). See `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-B — Extend from-scratch param authoring to SGB(defs) / QRT / ETS.**
+  Reuse the shared path. SGB stays definition-only (active params abort the
+  Fortran); QRT stays structural (documented Fortran value-scaling bug); ETS is
+  the array-parameter form. *Acceptance:* per-package from-scratch authoring
+  tests; honest labels kept.
 
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
   *Acceptance:* author a 2-lake system with sill connectivity from scratch →
@@ -250,9 +259,10 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
 
 ## 6. Recommended next card
 
-**Stage 4.6A** (STR/SUB/SWT guard; SFR kept) and **Stage 4.6B** (DRT from-scratch
-`NPDRT>0` authoring — the pilot) are **done**. The recommended next card is
-**Stage 4.6C — extend from-scratch parameter authoring to HFB**, then the
-structural cases (QRT, SGB-defs) and ETS (array params), reusing the DRT path
-established in 4.6B. After that, **Stage 4.6D** (LAK multi-lake + sill/connectivity
-authoring) is the next P1.
+**Stage 4.6A** (STR/SUB/SWT guard; SFR kept), **Stage 4.6B** (DRT from-scratch
+`NPDRT>0` authoring — the pilot), and **Stage 4.6C-A** (HFB from-scratch
+`NPHFB>0` authoring) are **done**. The recommended next card is **Stage 4.6C-B —
+extend from-scratch parameter authoring to SGB(defs) / QRT / ETS**, reusing the
+shared path (`_usgt_parameters.check_parameter_name`/`check_parval`); SGB stays
+definition-only and QRT structural (documented Fortran caveats). After that,
+**Stage 4.6D** (LAK multi-lake + sill/connectivity authoring) is the next P1.

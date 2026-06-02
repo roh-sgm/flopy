@@ -78,6 +78,8 @@ from ..modflow.mfdrt import ModflowDrt
 from ..pakbase import Package
 from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
+    check_parameter_name,
+    check_parval,
     read_active_list_parameters,
     read_list_parameter_header,
     resolve_list_parameter,
@@ -320,56 +322,15 @@ class MfUsgDrt(ModflowDrt):
 
     @staticmethod
     def _check_param_name(name, what):
-        """Validate a parameter name (definition key or activation name).
-
-        The Fortran ``UPARLSTRP`` reads ``PARNAM`` as a single ``URWORD`` word
-        into a ``CHARACTER*10`` buffer and upper-cases it, so the name must be a
-        non-empty, whitespace-free token of at most 10 characters. Raises
-        ``ValueError`` otherwise (before any file is opened).
-        """
-        if not isinstance(name, str):
-            raise ValueError(
-                f"MfUsgDrt.write_file: {what} must be a string, got "
-                f"{type(name).__name__}."
-            )
-        if not name or any(c.isspace() for c in name):
-            raise ValueError(
-                f"MfUsgDrt.write_file: {what} {name!r} must be a single non-empty "
-                "token with no whitespace (the Fortran reads PARNAM as one word)."
-            )
-        if len(name) > 10:
-            raise ValueError(
-                f"MfUsgDrt.write_file: {what} {name!r} exceeds the 10-character "
-                "Fortran PARNAM limit (CHARACTER*10), which would truncate or "
-                "collide with another name."
-            )
+        """Validate a parameter/active name (shared helper; see
+        :func:`flopy.mfusg._usgt_parameters.check_parameter_name`)."""
+        check_parameter_name(name, what, prefix="MfUsgDrt.write_file")
 
     @staticmethod
     def _check_parval(name, parval):
-        """Validate ``parval``: a number, or a single whitespace-free string token
-        (the Fortran reads ``PARVAL`` as one numeric value via ``URWORD``). A
-        missing/blank value or a multi-token string (e.g. ``"1 2"``) raises
-        ``ValueError``."""
-        if parval is None:
-            raise ValueError(
-                f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
-            )
-        if isinstance(parval, bool) or not isinstance(parval, (int, float, str)):
-            raise ValueError(
-                f"MfUsgDrt.write_file: parameter '{name}' parval must be a number "
-                f"or a single-token string; got {parval!r}."
-            )
-        if isinstance(parval, str):
-            if not parval.strip():
-                raise ValueError(
-                    f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
-                )
-            if any(c.isspace() for c in parval.strip()):
-                raise ValueError(
-                    f"MfUsgDrt.write_file: parameter '{name}' parval {parval!r} "
-                    "must be a single token (the Fortran reads one PARVAL value)."
-                )
-        return parval
+        """Validate ``parval`` (shared helper; see
+        :func:`flopy.mfusg._usgt_parameters.check_parval`)."""
+        return check_parval(parval, name, prefix="MfUsgDrt.write_file")
 
     def _normalize_param(self, name, pdef):
         """Validate + canonicalize one DRT parameter definition for writing.

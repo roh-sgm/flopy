@@ -9,6 +9,8 @@ from ..pakbase import Package
 from ..utils.recarray_utils import create_empty_recarray
 from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
+    check_parameter_name,
+    check_parval,
     read_active_list_parameters,
     read_list_parameter_header,
     write_active_list_parameters,
@@ -35,22 +37,31 @@ class MfUsgHfb(ModflowHfb):
         - Structured:   ``k``, ``irow1``, ``icol1``, ``irow2``, ``icol2``, ``hydchr``
         Indices are **zero-based** (converted to 1-based on write).
     nphfb : int
-        Number of HFB barriers defined by named parameters (dataset 1). Set by
-        :meth:`load` when the file is parameterized; from-scratch parameter
-        authoring is not supported (see Notes).
+        Number of HFB barriers defined by named parameters (dataset 1).
+        Auto-computed as ``len(parameters)`` when omitted/0; validated if given.
     mxfb : int
-        Maximum number of barriers defined by parameters (MXFBP in the Fortran).
-        Preserved on load/write.
+        Maximum number of barrier list entries defined by parameters (``MXFBP``
+        in the Fortran). Auto-computed as the total of all definition ``nlst``
+        when omitted/0; validated to be ``>=`` that total if given.
     nacthfb : int
-        Number of active HFB parameters (dataset 5). Set by :meth:`load`.
+        Number of active HFB parameters (dataset 5). Auto-computed as
+        ``len(acthfb_names)`` when omitted/0; validated if given.
     parameters : dict or None
-        Preserved HFB list-parameter definitions, keyed by parameter name:
-        ``{name: {"partyp": str, "parval": str, "nlst": int, "data": recarray}}``
-        where ``data`` holds the NLST barrier rows (zero-based, same dtype as
-        *hfb_data*). Set by :meth:`load` when ``NPHFB > 0``.
+        HFB list-parameter definitions, keyed by parameter name (Stage 4.6C-A
+        from-scratch authoring; also the form :meth:`load` preserves). Each value
+        is a dict:
+
+        * ``parval`` (required) — the value (scales the barrier ``HYDCHR``);
+        * ``data`` (required) — the parameter's barrier rows: a recarray matching
+          the active dtype, or any array-like the dtype can build (zero-based
+          indices, written 1-based); unstructured ``(node1, node2, hydchr)`` or
+          structured ``(k, irow1, icol1, irow2, icol2, hydchr)``;
+        * ``partyp`` (optional) — defaults to / must be ``"HFB"``;
+        * ``nlst`` (optional) — number of rows; computed from ``data`` if
+          omitted, validated if given.
     acthfb_names : list of str or None
-        Names of the active parameters (dataset 6), in file order. Set by
-        :meth:`load`.
+        Names of the active parameters (dataset 6), in file order. Must be
+        defined in *parameters* (case-insensitive), with no duplicates.
     options : list of str, optional
         Extra options written to the header line (e.g. ``['NOPRINT']``).
         Do **not** include ``TRANSIENT_HFB`` here; use *transient=True*.
@@ -72,16 +83,21 @@ class MfUsgHfb(ModflowHfb):
     -----
     HFB uses MODFLOW **list** parameters (``UPARLSTRP`` / ``UPARLSTSUB`` in
     ``parutl7.f``): each parameter owns NLST barrier rows and its value scales
-    the barrier ``HYDCHR`` factor. As of Stage 4.4B, parameterized HFB files are
-    **preserved** (load -> write -> reload keeps ``NPHFB``, the definition blocks,
-    and the active-parameter records). HFB does not support parameter
-    ``INSTANCES`` (the Fortran aborts), so neither does this class.
+    the barrier ``HYDCHR`` factor. Parameterized HFB files are **preserved**
+    (Stage 4.4B: load -> write -> reload keeps ``NPHFB``, the definition blocks,
+    and the active-parameter records) and, as of Stage 4.6C-A, **authorable from
+    scratch**: pass ``parameters={name: {parval, data, ...}}`` + ``acthfb_names``
+    (the counts ``nphfb``/``mxfb``/``nacthfb`` are auto-computed). Definitions are
+    normalized and validated before the file is opened (``ValueError``, no
+    partial file): parameter/active names must be single whitespace-free tokens
+    of <=10 chars and unique case-insensitively; ``parval`` a number or single
+    token; barrier indices non-negative.
 
-    Two parameter modes are intentionally not supported and fail explicitly with
-    ``NotImplementedError``: from-scratch parameter *authoring* (``nphfb > 0``
-    with no loaded definitions) and ``TRANSIENT_HFB`` combined with parameters
-    (``NPHFB > 0``), which would re-read/redefine parameters each stress period.
-    Non-parametric HFB (static and ``TRANSIENT_HFB``) is unchanged.
+    Still not supported, failing explicitly: parameter ``INSTANCES`` (the Fortran
+    aborts) -> ``NotImplementedError`` on load; and ``TRANSIENT_HFB`` combined
+    with parameters (``NPHFB > 0``), which would re-read/redefine parameters each
+    stress period -> ``NotImplementedError``. Non-parametric HFB (static and
+    ``TRANSIENT_HFB``) is unchanged.
 
     Examples
     --------
@@ -164,28 +180,31 @@ class MfUsgHfb(ModflowHfb):
 
     def write_file(self):
         """Write HFB6 package file honouring TRANSIENT_HFB when set."""
-        preserve = self.nphfb > 0
-        if self.nphfb > 0 and self.transient:
-            raise NotImplementedError(
-                "MfUsgHfb.write_file does not support TRANSIENT_HFB combined "
-                "with HFB parameters (NPHFB > 0): the Fortran re-reads the "
-                "parameter definitions every stress period (UPARLSTRP ITERP=1), "
-                "which would redefine them. Use non-transient parameterized HFB, "
-                "or NPHFB=0 for transient barriers."
-            )
-        if self.nphfb > 0:
-            # Validate the preserved parameter state before opening the file, so a
-            # parameterized header is never written without a complete, consistent
-            # body (from-scratch -> NotImplementedError; inconsistent -> ValueError).
-            self._validate_parameter_write()
+        # Parameter intent: definitions, an active list, or a declared NPHFB.
+        preserve = bool(self.parameters) or bool(self.acthfb_names) or self.nphfb > 0
+        params, nphfb, mxfb, nacthfb = ({}, 0, 0, 0)
+        if preserve:
+            if self.transient:
+                raise NotImplementedError(
+                    "MfUsgHfb.write_file does not support TRANSIENT_HFB combined "
+                    "with HFB parameters (NPHFB > 0): the Fortran re-reads the "
+                    "parameter definitions every stress period (UPARLSTRP "
+                    "ITERP=1), which would redefine them. Use non-transient "
+                    "parameterized HFB, or NPHFB=0 for transient barriers."
+                )
+            # Normalize from-scratch / preserved definitions, auto-compute the
+            # counts, and validate the whole parameterized state before opening
+            # the file, so a parameterized header is never written without a
+            # complete, consistent body and no partial file is produced.
+            params, nphfb, mxfb, nacthfb = self._validate_parameter_write()
         structured = self.parent.structured
         nper = self.parent.nper
 
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
 
-            # Dataset 1: NPHFB MXFB NHFBNP [OPTIONS]
-            header = f"{self.nphfb:10d}{self.mxfb:10d}{self.nhfbnp:10d}"
+            # Dataset 1: NPHFB MXFBP NHFBNP [OPTIONS]
+            header = f"{nphfb:10d}{mxfb:10d}{self.nhfbnp:10d}"
             for opt in self.options:
                 header += f"  {opt}"
             if self.transient:
@@ -196,13 +215,13 @@ class MfUsgHfb(ModflowHfb):
             # definitions, then dataset 4 non-parametric barriers, then
             # dataset 5-6 active-parameter records.
             if preserve:
-                for name, pdef in self.parameters.items():
+                for name, pdef in params.items():
                     write_list_parameter_header(
                         f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
                     )
                     self._write_hfb_rows(f, pdef["data"], structured)
                 self._write_hfb_rows(f, self.hfb_data, structured)
-                f.write(f"{self.nacthfb:10d}\n")
+                f.write(f"{nacthfb:10d}\n")
                 write_active_list_parameters(f, self.acthfb_names)
                 return
 
@@ -234,45 +253,116 @@ class MfUsgHfb(ModflowHfb):
                 f.write("1\n")
                 self._write_hfb_rows(f, sp_data, structured)
 
-    def _validate_parameter_write(self):
-        """Validate preserved HFB parameter state before a parameterized write.
+    def _normalize_param(self, name, pdef, structured):
+        """Validate + canonicalize one HFB parameter definition for writing.
 
-        Raises ``NotImplementedError`` when there are no loaded definitions
-        (from-scratch parameter authoring) and ``ValueError`` when definitions
-        are present but inconsistent, so a ``NPHFB>0`` header is never written
-        without a complete, consistent body.
+        Accepts an ergonomic from-scratch dict *or* an already-canonical loaded
+        one and returns ``{partyp, parval, nlst, data (recarray)}``. ``data`` may
+        be a recarray or any array-like the active barrier ``dtype`` can build;
+        ``nlst`` is computed from ``len(data)`` when omitted, validated when
+        given. ``partyp`` defaults to / must be ``HFB`` (the Fortran activates HFB
+        params as ``PARTYP='HFB'``). Barrier indices must be non-negative 0-based
+        integers. Raises ``ValueError`` for invalid input, before any file is
+        opened.
+        """
+        check_parameter_name(name, "parameter name", prefix="MfUsgHfb.write_file")
+        if not isinstance(pdef, dict):
+            raise ValueError(
+                f"MfUsgHfb.write_file: parameter '{name}' must be a dict, got "
+                f"{type(pdef).__name__}."
+            )
+        partyp = pdef.get("partyp", "HFB")
+        if str(partyp).upper().strip() != "HFB":
+            raise ValueError(
+                f"MfUsgHfb.write_file: parameter '{name}' partyp must be 'HFB'; "
+                f"got {partyp!r}."
+            )
+        parval = check_parval(pdef.get("parval"), name, prefix="MfUsgHfb.write_file")
+        data = pdef.get("data")
+        if data is None or len(data) == 0:
+            raise ValueError(
+                f"MfUsgHfb.write_file: parameter '{name}' needs non-empty 'data' "
+                "barrier rows."
+            )
+        dtype = MfUsgHfb.get_default_dtype(structured=structured)
+        if not isinstance(data, np.recarray):
+            data = np.array(data, dtype=dtype).view(np.recarray)
+        idx_fields = (
+            ("k", "irow1", "icol1", "irow2", "icol2")
+            if structured
+            else ("node1", "node2")
+        )
+        for fld in idx_fields:
+            if np.any(np.asarray(data[fld]) < 0):
+                raise ValueError(
+                    f"MfUsgHfb.write_file: parameter '{name}' has a negative "
+                    f"'{fld}'; barrier indices are 0-based and must be "
+                    "non-negative."
+                )
+        nlst = pdef.get("nlst")
+        if nlst is None:
+            nlst = len(data)
+        elif nlst != len(data):
+            raise ValueError(
+                f"MfUsgHfb.write_file: parameter '{name}' declares nlst={nlst} "
+                f"but carries {len(data)} barrier rows."
+            )
+        # Preserve the original partyp text (the Fortran upper-cases it anyway),
+        # so a loaded file's casing round-trips unchanged.
+        return {"partyp": partyp, "parval": parval, "nlst": nlst, "data": data}
+
+    def _validate_parameter_write(self):
+        """Normalize + validate HFB parameter state for a parameterized write.
+
+        Supports both preserved (loaded) and **from-scratch** parameter dicts
+        (Stage 4.6C-A). Returns ``(params, nphfb, mxfb, nacthfb)`` with canonical
+        definitions and the resolved counts (``NPHFB = len(params)``,
+        ``MXFBP = sum(nlst)``, ``NACTHFB = len(acthfb_names)`` when omitted/0).
+        All validation runs before the file is opened, so a ``NPHFB>0`` header is
+        never written without a complete, consistent body and no partial file is
+        produced. ``INSTANCES`` and ``TRANSIENT_HFB`` + parameters remain
+        unsupported (handled by ``load`` / ``write_file``).
         """
         if not self.parameters:
-            raise NotImplementedError(
-                "MfUsgHfb.write_file cannot author HFB parameter definitions "
-                "from scratch (NPHFB > 0 without loaded parameter data). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgHfb.load; for from-scratch input use NPHFB=0."
-            )
-        if len(self.parameters) != self.nphfb:
             raise ValueError(
-                f"MfUsgHfb.write_file: NPHFB ({self.nphfb}) must equal the "
-                f"number of parameter definitions ({len(self.parameters)})."
+                "MfUsgHfb.write_file: NPHFB>0 / acthfb_names reference parameters "
+                "but none are defined. Pass parameters={name: {...}} to author "
+                "HFB parameter definitions from scratch."
             )
+        structured = self.parent.structured
+        params = {}
+        total = 0
         for name, pdef in self.parameters.items():
-            missing = [k for k in ("partyp", "parval", "nlst", "data") if k not in pdef]
-            if missing:
-                raise ValueError(
-                    f"MfUsgHfb.write_file: parameter '{name}' is missing keys "
-                    f"{missing} (each definition needs partyp, parval, nlst, "
-                    "data)."
-                )
-            if len(pdef["data"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgHfb.write_file: parameter '{name}' declares nlst="
-                    f"{pdef['nlst']} but carries {len(pdef['data'])} barrier "
-                    "rows."
-                )
-        if self.nacthfb != len(self.acthfb_names):
+            params[name] = self._normalize_param(name, pdef, structured)
+            total += params[name]["nlst"]
+        lowered_defs = [name.lower() for name in params]
+        if len(set(lowered_defs)) != len(lowered_defs):
             raise ValueError(
-                "MfUsgHfb.write_file: nacthfb "
-                f"({self.nacthfb}) must equal the number of active parameter "
-                f"names ({len(self.acthfb_names)})."
+                "MfUsgHfb.write_file: duplicate parameter definition name "
+                f"(case-insensitive): {list(params)}. The Fortran upper-cases "
+                "PARNAM, so definition names must be unique ignoring case."
+            )
+        nphfb = self.nphfb if self.nphfb else len(params)
+        if nphfb != len(params):
+            raise ValueError(
+                f"MfUsgHfb.write_file: NPHFB ({nphfb}) must equal the number of "
+                f"parameter definitions ({len(params)})."
+            )
+        mxfb = self.mxfb if self.mxfb else total
+        if mxfb < total:
+            raise ValueError(
+                f"MfUsgHfb.write_file: MXFBP ({mxfb}) must be >= the total number "
+                f"of parameter barrier rows ({total})."
+            )
+        for nm in self.acthfb_names:
+            check_parameter_name(
+                nm, "active parameter name", prefix="MfUsgHfb.write_file"
+            )
+        nacthfb = self.nacthfb if self.nacthfb else len(self.acthfb_names)
+        if nacthfb != len(self.acthfb_names):
+            raise ValueError(
+                f"MfUsgHfb.write_file: nacthfb ({nacthfb}) must equal the number "
+                f"of active parameter names ({len(self.acthfb_names)})."
             )
         lowered = [nm.lower() for nm in self.acthfb_names]
         if len(set(lowered)) != len(lowered):
@@ -281,13 +371,14 @@ class MfUsgHfb(ModflowHfb):
                 f"the HFB active list: {self.acthfb_names}. USG-T aborts when a "
                 "parameter is already activated (SGWF2HFB7SUB)."
             )
-        defined = {name.lower() for name in self.parameters}
+        defined = {name.lower() for name in params}
         for nm in self.acthfb_names:
             if nm.lower() not in defined:
                 raise ValueError(
                     f"MfUsgHfb.write_file: active parameter '{nm}' is not "
                     "defined in parameters."
                 )
+        return params, nphfb, mxfb, nacthfb
 
     @staticmethod
     def _write_hfb_rows(f, data, structured):

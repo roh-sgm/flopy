@@ -34,6 +34,60 @@ Notes
   listing-output control, not data; it is not preserved.
 """
 
+import numbers
+
+
+def check_parameter_name(name, what, prefix):
+    """Validate a MODFLOW parameter name (definition key or activation name).
+
+    ``UPARLSTRP`` (``parutl7.f``) reads ``PARNAM`` as a single ``URWORD`` word
+    into a ``CHARACTER*10`` buffer and upper-cases it, so the name must be a
+    non-empty, whitespace-free token of at most 10 characters. Raises
+    ``ValueError`` otherwise. ``what`` describes the field and ``prefix`` is the
+    caller's error prefix (e.g. ``"MfUsgHfb.write_file"``), so packages get a
+    consistent but self-identifying message. Shared by the from-scratch
+    parameter-authoring paths (DRT/HFB; QRT/SGB to follow).
+    """
+    if not isinstance(name, str):
+        raise ValueError(
+            f"{prefix}: {what} must be a string, got {type(name).__name__}."
+        )
+    if not name or any(c.isspace() for c in name):
+        raise ValueError(
+            f"{prefix}: {what} {name!r} must be a single non-empty token with no "
+            "whitespace (the Fortran reads PARNAM as one word)."
+        )
+    if len(name) > 10:
+        raise ValueError(
+            f"{prefix}: {what} {name!r} exceeds the 10-character Fortran PARNAM "
+            "limit (CHARACTER*10), which would truncate or collide with another "
+            "name."
+        )
+
+
+def check_parval(parval, name, prefix):
+    """Validate a parameter value: a real number (``int``/``float``/``np.integer``/
+    ``np.floating`` -- any ``numbers.Real``, excluding ``bool``), or a single
+    whitespace-free string token. ``UPARLSTRP`` reads ``PARVAL`` as one numeric
+    value via ``URWORD``, so a missing/blank value or a multi-token string (e.g.
+    ``"1 2"``) raises ``ValueError``. Returns ``parval`` unchanged."""
+    if parval is None:
+        raise ValueError(f"{prefix}: parameter '{name}' is missing 'parval'.")
+    if isinstance(parval, bool) or not isinstance(parval, (numbers.Real, str)):
+        raise ValueError(
+            f"{prefix}: parameter '{name}' parval must be a number or a "
+            f"single-token string; got {parval!r}."
+        )
+    if isinstance(parval, str):
+        if not parval.strip():
+            raise ValueError(f"{prefix}: parameter '{name}' is missing 'parval'.")
+        if any(c.isspace() for c in parval.strip()):
+            raise ValueError(
+                f"{prefix}: parameter '{name}' parval {parval!r} must be a single "
+                "token (the Fortran reads one PARVAL value)."
+            )
+    return parval
+
 
 def write_array_parameter_defs(f, pak_parms):
     """Write array-parameter definitions (``UPARARRRP`` grammar) to ``f``.

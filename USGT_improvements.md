@@ -599,6 +599,32 @@ honest, upstream-ready USG-T 2.7 story.
   touched; no DRT status change (contract hardening). +5 negative tests;
   `-k mfusgdrt` **39**, focused **253**, exe **4**, combined **257** (ARM). See
   `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-A — HFB from-scratch `NPHFB>0` parameter authoring (executed):**
+  promotes `MfUsgHfb` from parameter-preserving-only to from-scratch authoring
+  for non-transient HFB, reusing the DRT 4.6B pattern. The on-file format is
+  unchanged (same `UPARLSTRP`/activation/row writers, Fortran-audited +
+  round-tripped in 4.4B), so this is a FloPy-side ergonomics + validation change.
+  New `_normalize_param` canonicalizes each definition (`partyp` defaults to / is
+  validated `HFB` — preserving the loaded casing; `data` recarray or array-like
+  built with the active barrier dtype, structured or unstructured; `nlst`
+  computed/validated; barrier indices non-negative); `_validate_parameter_write`
+  auto-computes the counts (`NPHFB=len(params)`, `MXFBP=Σnlst`,
+  `NACTHFB=len(acthfb_names)`), checks duplicate definition names and active-name
+  validity, and returns the canonical state; `write_file` triggers the parameter
+  path on any parameter intent and writes the auto counts. The old
+  `NotImplementedError` "cannot author from scratch" is replaced — `NPHFB>0`/
+  active-names with no defs now raises `ValueError`. To avoid duplication, the
+  name/`parval` validators were factored into `_usgt_parameters`
+  (`check_parameter_name`/`check_parval`, the latter accepting any `numbers.Real`)
+  and DRT now delegates to them (its 4.6B tests are the regression). Sizing
+  verified against `gwf2hfb7u1.f` (`MXHFB = NHFBNP + 2*MXFBP`; `PARTYP='HFB '`).
+  `TRANSIENT_HFB`+params and `INSTANCES` stay `NotImplementedError`. Touched
+  `mfusghfb.py`, `_usgt_parameters.py`, `mfusgdrt.py`. Tests: 10 new (unstructured
+  + structured + mixed + auto-counts authoring; duplicate-def/bad-name/bad-parval/
+  empty-data/mxfb-too-small/negative-index negatives) + 1 repurposed; preservation
+  tests stay green. `-k mfusghfb` **30**, focused **263**, exe **4**, combined
+  **267** (ARM). Verified at the FloPy round-trip + Fortran-format level. See
+  `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
