@@ -45,6 +45,19 @@ definitions).
   `SGWF2DRT8LR` as non-parametric rows, so they carry recipients exactly the same
   way — single inline recipient (`NR>0`) or a `-NR` spreading `U1DINT` block.
   Preserving a parameter therefore requires preserving its per-row recipients.
+  **Execution caveat (review):** activation copies only `DRTF`
+  (`SGWF2DRT8LS`), **not** `NodDRT`, and the spreading consumer
+  (`GWF2DRT8U1AD` / RP) walks `NodDRT` sequentially (`gwf2drt8u.f:262-276`). An
+  inline recipient (`NR>0`) lives in `DRTF` and is copied, so an *activated*
+  inline-recipient parameter is fine; an *activated* SPREAD (`NR<0`) parameter is
+  **structural round-trip only — not execution-guaranteed**. FloPy preserves the
+  recipients faithfully on load/write but does not claim every activated-SPREAD
+  case runs in USG-T 2.7.
+- **MXADRT (item 1)**: `IDRTPB=MXADRT+1`, `MXDRT=MXADRT+MXL`; in RP `MXADRT` is
+  the cap on `NDRTCL`, and `SGWF2DRT8LS` does `NDRTCL = NDRTCL + NLST` and aborts
+  if `NDRTCL > MXADRT` (`gwf2drt8u.f:1173-1174`). So `MXADRT` must cover the
+  *active* total per period (non-parametric drains + the `NLST` rows of every
+  active parameter), not just the non-parametric count.
 - **CHANGEC / IDCHNGTYP** and **AUX**: present in the parameter rows (same dtype),
   preserved.
 - **INSTANCES**: `UPARLSTRP`/`UINSRP` support `NUMINST>0` (instance blocks).
@@ -80,6 +93,12 @@ recipient_nodes**.
   non-parametric drains + the activation names. Validate first (before opening
   the file). Non-parametric DRT (authoring, `ITMP<0` reuse, RETURNFLOW, SPREAD,
   CHANGEC, AUX, SFAC, structured rejection/delegation) is unchanged.
+- **MXADRT (item-1 field 1)** is `_max_active_drains()` — the max over stress
+  periods of `len(non-parametric rows) + sum(nlst of active parameters)` (review
+  follow-up). Previously it counted only the non-parametric rows, which would
+  under-size `MXADRT` whenever a period activates parameters and the Fortran
+  would abort (`NDRTCL > MXADRT`). `ITMP<0` reuse carries the previous period's
+  non-parametric count into the sum.
 - Indexing: internal 0-based, file 1-based, for both definition rows (and their
   recipients) and non-parametric rows.
 
@@ -107,19 +126,45 @@ DRT is internally consistent in the Fortran, so active parameters are real. It i
   Fortran supports them;
 - the `ITMP<0` reuse of non-parametric drains is written **expanded** (rows
   re-emitted, not re-written as `-1`), matching the existing non-parametric DRT
-  behavior; data round-trips, the `-1` syntax does not.
+  behavior; data round-trips, the `-1` syntax does not;
+- **activated SPREAD (`NR<0`) parameter recipients are structural round-trip
+  only, not execution-guaranteed** (review): USG-T 2.7 copies `DRTF` but not
+  `NodDRT` on activation, so FloPy preserves the recipients on load/write but
+  does not claim every activated-SPREAD case runs. Inline (`NR>0`) recipients
+  travel in `DRTF` and are execution-safe.
 
 Roadmap label: **`✅ Full (authoring) / Parameter-preserving (NPDRT, incl.
 activations + recipients) / Expanded valid write (list controls)`**.
 
-## Tests (`-k mfusgdrt`, 21 passed)
+## Review follow-up (executed)
 
-New (Stage 4.4D):
+Three fixes from review:
+
+1. **P1 — MXADRT under-counted active parameters.** `write_file` set `MXADRT` to
+   the max non-parametric row count only; with active parameters the Fortran
+   would abort (`NDRTCL = NDRTNP + Σ nlst > MXADRT`). Now `MXADRT =
+   _max_active_drains()` includes the active-parameter rows per period (with
+   `ITMP<0` reuse carrying the previous non-parametric count). The roundtrip test
+   now asserts `MXADRT=2` (1 non-parametric + 1 active `NLST=1`), and a new test
+   covers two active params (`NLST` 2 + 1) ⇒ `MXADRT=4`.
+2. **P2 — SPREAD-in-parameter is structural-only.** Documented above and in the
+   test docstring: activated `NR<0` recipients round-trip but are not
+   execution-guaranteed (no `NodDRT` copy on activation).
+3. **P3 — stale roadmap.** `USGT_roadmap.md` Gap §7 (and the DRT row) no longer
+   say `NPDRT>0` fails explicitly.
+
+## Tests (`-k mfusgdrt`, 22 passed)
+
+New (Stage 4.4D + review follow-up):
 
 - `test_mfusgdrt_parameterized_roundtrip` — item-1 `NPDRT/MXL` + definition with
-  an inline RETURNFLOW recipient + per-SP activation; 0-based / 1-based.
+  an inline RETURNFLOW recipient + per-SP activation; 0-based / 1-based; asserts
+  `MXADRT=2` (non-parametric + active rows).
+- `test_mfusgdrt_parameter_mxadrt_counts_active_rows` — two active params
+  (`NLST` 2 + 1) + 1 non-parametric drain ⇒ written `MXADRT=4` (review P1).
 - `test_mfusgdrt_parameter_spread_recipients` — a definition row keeps SPREAD
-  (multi-node `U1DINT`) recipients + CHANGEC + AUX.
+  (multi-node `U1DINT`) recipients + CHANGEC + AUX; docstring states the
+  structural-round-trip-only contract for activated SPREAD (review P2).
 - `test_mfusgdrt_parameter_mixed_and_active` — `ITMP NP` with non-parametric
   drains and an active parameter in one period.
 - `test_mfusgdrt_parameter_reuse_with_active` — `ITMP<0` reuse + active parameter.
@@ -161,6 +206,6 @@ git diff --check
 git status --short
 ```
 
-Results: `-k mfusgdrt` **21 passed**; `-k "mfusgdrt or usgt_list"` **24 passed**;
-focused **202 passed**; exe **4 passed**; combined **206 passed** under the USG-T
-2.7 ARM binary.
+Results (after the review follow-up): `-k mfusgdrt` **22 passed**;
+`-k "mfusgdrt or usgt_list"` **25 passed**; focused **203 passed**; exe
+**4 passed**; combined **207 passed** under the USG-T 2.7 ARM binary.

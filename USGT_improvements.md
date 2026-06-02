@@ -394,6 +394,24 @@ honest, upstream-ready USG-T 2.7 story.
   `-k "mfusgdrt or usgt_list"` **24**; focused **202**, exe **4**, combined
   **206** (ARM). QRT remains explicit-fail. See
   `USGT_STAGE4_04_PARAMETERS_DRT.md`.
+- **Stage 4.4D review follow-up — DRT MXADRT + SPREAD honesty (executed):**
+  three review fixes. **(P1)** `write_file` sized `MXADRT` to the max
+  non-parametric row count only; the Fortran increments `NDRTCL` by each active
+  parameter's `NLST` and aborts if `NDRTCL > MXADRT` (`SGWF2DRT8LS`,
+  gwf2drt8u.f:1173-1174), so an activated period was under-sized. `MXADRT` is now
+  `_max_active_drains()` = max over periods of `non-parametric rows + Σ(nlst of
+  active params)` (with `ITMP<0` reuse carrying the previous count). The roundtrip
+  test now asserts `MXADRT=2`, and a new test covers two active params
+  (`NLST` 2+1) ⇒ `MXADRT=4`. **(P2)** activated SPREAD (`NR<0`) parameter
+  recipients are documented as **structural-round-trip only, not
+  execution-guaranteed**: USG-T copies `DRTF` but not `NodDRT` on activation, and
+  the spreading consumer walks `NodDRT` sequentially, so FloPy preserves
+  recipients on load/write but does not claim every activated-SPREAD case runs
+  (inline `NR>0` recipients travel in `DRTF` and are fine). **(P3)** the stale
+  `USGT_roadmap.md` Gap §7 (which still said `NPDRT>0` fails explicitly) is
+  updated. Only `MfUsgDrt` touched in code. Tests: `-k mfusgdrt` **22 passed**;
+  `-k "mfusgdrt or usgt_list"` **25**; focused **203**, exe **4**, combined
+  **207** (ARM). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

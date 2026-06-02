@@ -246,9 +246,15 @@ DRT8 unstructured format with the USG-T extensions:
   recomputed from the data on write.
 - AUX concentration variables and `ITMP/-1` stress-period reuse.
 
-`NPDRT>0` (named parameters) fails explicitly. Structured (DIS) models
-delegate to the base `ModflowDrt`. Return-flow node lists with
-`EXTERNAL`/`OPEN/CLOSE` control records are not supported (explicit failure).
+`NPDRT>0` (named parameters) are **preserved** (Stage 4.4D): definitions +
+activations + per-row recipients round-trip; `MXADRT` is sized to the active
+total per period; from-scratch authoring and `INSTANCES` raise
+`NotImplementedError`. Activated SPREAD (`NR<0`) recipients are
+structural-round-trip only, not execution-guaranteed (USG-T copies `DRTF` but
+not `NodDRT` on activation). Structured (DIS) models delegate to the base
+`ModflowDrt`. Return-flow node lists with `EXTERNAL`/`OPEN/CLOSE` control
+records are not supported (explicit failure). See
+`USGT_STAGE4_04_PARAMETERS_DRT.md`.
 
 ### Gap §8 — ETS: parameter preservation (RESOLVED for ETSR, Stage 4.4A)
 

@@ -266,8 +266,16 @@ rows + RETURNFLOW recipients/spreading via the shared `_read_drain_rows`) in
 `self.active_params`; the parameter value scales `COND` (`IPVL=5`). `write_file`
 re-emits all of it after validating up front (no partial file). Not `Full` on
 the parametric axis: from-scratch authoring and `INSTANCES` raise
-`NotImplementedError`; `MXL`/consistency → `ValueError`. 10 parameter tests
-(`-k mfusgdrt` 21 passed). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
+`NotImplementedError`; `MXL`/consistency → `ValueError`. See
+`USGT_STAGE4_04_PARAMETERS_DRT.md`.
+
+**DONE** (Stage 4.4D review follow-up): (P1) `MXADRT` now sized to the active
+total per period (`non-parametric + Σ active-parameter NLST`); the writer used
+the non-parametric count only, which would abort the Fortran (`NDRTCL >
+MXADRT`). (P2) activated SPREAD (`NR<0`) parameter recipients documented as
+structural-round-trip only, not execution-guaranteed (USG-T copies `DRTF` but
+not `NodDRT` on activation). (P3) roadmap Gap §7 de-staled. 11 parameter tests
+(`-k mfusgdrt` 22 passed), incl. a multi-active-parameter `MXADRT=4` case.
 
 Problem:
 

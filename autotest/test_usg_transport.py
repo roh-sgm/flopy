@@ -3703,7 +3703,7 @@ def test_mfusgdrt_parameterized_roundtrip(function_tmpdir):
     p = function_tmpdir / "param.drt"
     p.write_text(
         "# drt param\n"
-        "         1 0 1 5 RETURNFLOW\n"  # MXADRT IDRTCB NPDRT MXL RETURNFLOW
+        "         2 0 1 5 RETURNFLOW\n"  # MXADRT IDRTCB NPDRT MXL RETURNFLOW
         "drtpar DRT 2.0 1\n"  # PARNAM PARTYP PARVAL NLST
         " 11  5.000000e+00  1.000000e+01  9  7.000000e-01\n"  # NR=9 inline recip
         " 1 1    Stress Period 1\n"  # ITMP NP
@@ -3725,7 +3725,8 @@ def test_mfusgdrt_parameterized_roundtrip(function_tmpdir):
     drt.write_file()
     content = out.read_text()
     item1 = next(ln for ln in content.splitlines() if not ln.startswith("#"))
-    assert item1.split()[:4] == ["1", "0", "1", "5"]  # MXADRT IDRTCB NPDRT MXL
+    # MXADRT must cover NDRTCL = non-parametric (1) + active parameter rows (1) = 2
+    assert item1.split()[:4] == ["2", "0", "1", "5"]  # MXADRT IDRTCB NPDRT MXL
     assert "drtpar DRT 2.0 1" in content
     assert "drtpar" in [ln.strip() for ln in content.splitlines()]  # activation
 
@@ -3737,9 +3738,54 @@ def test_mfusgdrt_parameterized_roundtrip(function_tmpdir):
     assert list(re.stress_period_data[0]["node"]) == [20]
 
 
+def test_mfusgdrt_parameter_mxadrt_counts_active_rows(function_tmpdir):
+    """MXADRT (item 1) must cover NDRTCL = non-parametric rows + the NLST rows of
+    every active parameter in the period (the Fortran aborts if NDRTCL > MXADRT,
+    SGWF2DRT8LS). One non-parametric drain + two active params (NLST 2 and 1) =>
+    MXADRT must be written as 4."""
+    p = function_tmpdir / "mxadrt.drt"
+    p.write_text(
+        "# drt mxadrt\n"
+        "         4 0 2 3 RETURNFLOW\n"  # MXADRT=4 NPDRT=2 MXL=3
+        "pa DRT 2.0 2\n"
+        " 5  5.000000e+00  1.000000e+01  0\n"
+        " 6  5.000000e+00  1.000000e+01  0\n"
+        "pb DRT 3.0 1\n"
+        " 7  5.000000e+00  1.000000e+01  0\n"
+        " 1 2    Stress Period 1\n"  # ITMP=1 NP=2
+        " 21  4.000000e+00  2.000000e+01  0\n"
+        "pa\n"
+        "pb\n"
+    )
+    ml = _drt_model(function_tmpdir, "ma1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert drt.active_params[0] == ["pa", "pb"]
+    assert drt.parameters["pa"]["nlst"] == 2 and drt.parameters["pb"]["nlst"] == 1
+
+    out = function_tmpdir / "mxadrt_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    # NDRTCL = 1 non-param + 2 (pa) + 1 (pb) = 4
+    assert item1.split()[0] == "4"
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "ma2"), nper=1)
+    assert re.active_params[0] == ["pa", "pb"]
+    assert re.parameters["pa"]["nlst"] == 2
+
+
 def test_mfusgdrt_parameter_spread_recipients(function_tmpdir):
     """A parameter definition row keeps its SPREAD (multi-node U1DINT) recipients,
-    plus CHANGEC and AUX, through load -> write -> reload."""
+    plus CHANGEC and AUX, through load -> write -> reload.
+
+    Contract: this is **structural round-trip preservation**, not an
+    executable-on-USG-T guarantee. USG-T 2.7 activates a parameter by copying its
+    DRTF rows (SGWF2DRT8LS) but does **not** copy/offset the NodDRT recipient
+    array, and the spreading consumer (GWF2DRT8U1AD / RP) walks NodDRT
+    sequentially -- so an *activated* SPREAD (NR<0) parameter is not guaranteed to
+    resolve its recipients at run time. Inline single recipients (NR>0) travel in
+    DRTF and are copied, so those are fine. See USGT_STAGE4_04_PARAMETERS_DRT.md.
+    """
     p = function_tmpdir / "spread.drt"
     p.write_text(
         "# drt spread param\n"

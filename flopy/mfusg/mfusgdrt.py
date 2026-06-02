@@ -354,7 +354,7 @@ class MfUsgDrt(ModflowDrt):
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
 
-        mxadrt = max((len(v) for v in self.stress_period_data.values()), default=0)
+        mxadrt = self._max_active_drains()
         mxspread = self._max_spread_nodes()
         npdrt = len(self.parameters) if preserve else 0
         mxl = self.mxl if preserve else 0
@@ -394,6 +394,30 @@ class MfUsgDrt(ModflowDrt):
                     self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
                 # Active-parameter records (SGWF2DRT8LS) follow the non-param rows.
                 write_active_list_parameters(f, active)
+
+    def _max_active_drains(self):
+        """Max active drain-return cells in any stress period (the Fortran's
+        NDRTCL, which must not exceed MXADRT).
+
+        Each active parameter contributes its NLST rows on top of the
+        non-parametric drains: ``NDRTCL = NDRTNP + sum(nlst of active params)``
+        (gwf2drt8u.f: SGWF2DRT8LS does ``NDRTCL = NDRTCL + NLST`` and aborts if
+        ``NDRTCL > MXADRT``). ``ITMP<0`` reuses the previous period's
+        non-parametric count.
+        """
+        mx = 0
+        prev_nonparam = 0
+        for kper in range(self.parent.nper):
+            if kper in self.stress_period_data:
+                prev_nonparam = len(self.stress_period_data[kper])
+            nonparam = prev_nonparam  # ITMP<0 reuse keeps the previous count
+            active = 0
+            for name in self.active_params.get(kper, []):
+                pdef = self.parameters.get(name) if self.parameters else None
+                if pdef is not None:
+                    active += pdef["nlst"]
+            mx = max(mx, nonparam + active)
+        return mx
 
     def _max_spread_nodes(self):
         """Max total spreading-recipient nodes (non-parametric per SP, and the

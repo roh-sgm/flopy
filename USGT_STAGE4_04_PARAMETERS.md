@@ -40,7 +40,11 @@ USG-T packages that currently expand parameters or fail explicitly.
   (unlike SGB). Parameter value scales `COND` (Fortran `IPVL=5`); AUX/CHANGEC
   preserved; `ITMP<0` reuse kept. `INSTANCES` and from-scratch authoring raise
   `NotImplementedError`; `MXL`/consistency validated (`ValueError`, no partial
-  file). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
+  file). **Review follow-up:** `MXADRT` is sized to the active total per period
+  (non-parametric + active-parameter rows; the Fortran aborts if `NDRTCL >
+  MXADRT`); and an activated SPREAD (`NR<0`) parameter is structural-round-trip
+  only, not execution-guaranteed (USG-T copies `DRTF` but not `NodDRT` on
+  activation). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 - `QRT`: `NPQRT>0` fails explicitly.
 
 This is honest and safe. ETS (array) and HFB + SGB + DRT (list) parameter
