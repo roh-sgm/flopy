@@ -482,6 +482,24 @@ honest, upstream-ready USG-T 2.7 story.
   actual USG-T execution of a `TRANSIENTQ` model was not run (it needs a
   from-scratch unstructured QRT model, beyond the synthetic scope). See
   `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
+- **Stage 4.5A review follow-up — TRANSIENTQ contract guards (executed):** closed
+  two gaps where a malformed/unsupported file was accepted silently instead of
+  failing. (1) **External-unit data** — `_read_transientq_block` reads `IQRTUN`
+  on each control line but previously discarded it, so an external-unit reference
+  was misread as inline. It now validates `IQRTUN` against the QRT package's
+  inline unit (resolved from the NAM via `model.get_ext_dict_attr(...,
+  pop_key=False)` so the end-of-load lookup still pops the key, else
+  `_defaultunit()`; consistent with `write_file`'s `self.unit_number[0]`) and
+  raises `NotImplementedError` — on **both** control lines, before any data is
+  interpreted as inline. (2) **Last-option rule** — `_parse_header` now rejects
+  any token after `TRANSIENTQ <±NBDQTIM>` with `ValueError`, since the Fortran
+  `TRANSIENTQ` branch does not loop back (USG-T would silently ignore trailing
+  options). Also added non-negative 0-based integer validation for
+  `transientq_nodes` on write (the upper bound is intentionally not range-checked,
+  consistent with `recipient_nodes`). Only `mfusgqrt.py` touched. Tests: 5 new
+  (external times/values, trailing option, negative node, non-unit `CNSTM`
+  round-trip); `-k mfusgqrt` **31**, focused **229**, exe **4**, combined **233**
+  (ARM). See `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

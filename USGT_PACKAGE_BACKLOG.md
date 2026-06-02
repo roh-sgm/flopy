@@ -426,6 +426,18 @@ Problem:
   `NPQRT>0` (the Fortran reads `BDQV` past its `MXAQRT` allocation when `MXL>0`),
   external-unit data, dimension mismatch. 6 new tests; `-k mfusgqrt` 26 passed.
   See `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
+- **DONE** (Stage 4.5A review follow-up): closed two TRANSIENTQ contract gaps.
+  (1) **External-unit data now fails explicitly** — `_read_transientq_block`
+  validates each control line's `IQRTUN` against the QRT package's inline unit
+  (resolved from the NAM via `get_ext_dict_attr(..., pop_key=False)`, else
+  `_defaultunit()`, matching `write_file`'s `self.unit_number[0]`); a non-inline
+  unit raises `NotImplementedError` before any data is read as inline. (2)
+  **`TRANSIENTQ` must be the last item-1 option** — `_parse_header` rejects any
+  trailing token with `ValueError` (the Fortran branch does not loop back). Also
+  added non-negative 0-based integer validation for `transientq_nodes` on write.
+  5 new tests (external times/values, trailing option, negative node, non-unit
+  `CNSTM` round-trip); `-k mfusgqrt` **31 passed**, focused **229**, combined
+  **233** (ARM). Only `mfusgqrt.py` touched in code.
 
 Fortran facts to verify:
 

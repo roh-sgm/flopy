@@ -4031,6 +4031,110 @@ def test_mfusgqrt_transientq_dim_mismatch_fails(function_tmpdir):
     assert not out.exists()
 
 
+# --- Stage 4.5A review follow-up: TRANSIENTQ contract guards ----------------
+
+
+def test_mfusgqrt_transientq_external_times_unit_fails(function_tmpdir):
+    """A TRANSIENTQ times control line whose IQRTUN is not the package's inline
+    unit raises NotImplementedError (external-unit data is unsupported)."""
+    unit = MfUsgQrt._defaultunit()  # inline unit when no ext_unit_dict is given
+    qrt_f = function_tmpdir / "tqxt.qrt"
+    qrt_f.write_text(
+        "# external times unit\n"
+        " 1 0 0 0 0 TRANSIENTQ 2\n"
+        " 999 1.000000e+00\n"  # external unit on the TIMES control line
+        " 0.0 10.0\n"
+        f" {unit} 1.000000e+00\n"
+        " 1 -1.0 -2.0\n"
+        " 1   Stress Period 1\n"
+        " 1 -10.0\n"
+    )
+    with pytest.raises(NotImplementedError, match=r"times.*999|999.*times"):
+        MfUsgQrt.load(str(qrt_f), _qrt_model(function_tmpdir, "tqxt"), nper=1)
+
+
+def test_mfusgqrt_transientq_external_values_unit_fails(function_tmpdir):
+    """A TRANSIENTQ values control line whose IQRTUN is not the package's inline
+    unit raises NotImplementedError (the times line is fine, the values line is
+    external)."""
+    unit = MfUsgQrt._defaultunit()
+    qrt_f = function_tmpdir / "tqxv.qrt"
+    qrt_f.write_text(
+        "# external values unit\n"
+        " 1 0 0 0 0 TRANSIENTQ 2\n"
+        f" {unit} 1.000000e+00\n"  # inline times OK
+        " 0.0 10.0\n"
+        " 888 1.000000e+00\n"  # external unit on the VALUES control line
+        " 1 -1.0 -2.0\n"
+        " 1   Stress Period 1\n"
+        " 1 -10.0\n"
+    )
+    with pytest.raises(NotImplementedError, match=r"values.*888|888.*values"):
+        MfUsgQrt.load(str(qrt_f), _qrt_model(function_tmpdir, "tqxv"), nper=1)
+
+
+def test_mfusgqrt_transientq_trailing_option_fails(function_tmpdir):
+    """TRANSIENTQ must be the last item-1 option: any trailing token raises
+    ValueError on load (the Fortran branch would silently ignore it)."""
+    for trailing in ("AUX C01", "NOPRINT"):
+        qrt_f = function_tmpdir / f"tqtr_{trailing.split()[0].lower()}.qrt"
+        qrt_f.write_text(
+            "# trailing option after TRANSIENTQ\n"
+            f" 1 0 0 0 0 RETURNFLOW TRANSIENTQ 2 {trailing}\n"
+            " 1 0   Stress Period 1\n"
+        )
+        with pytest.raises(ValueError, match=r"(?i)last option"):
+            MfUsgQrt.load(str(qrt_f), _qrt_model(function_tmpdir, "tqtr"), nper=1)
+
+
+def test_mfusgqrt_transientq_negative_node_fails(function_tmpdir):
+    """A negative transientq_nodes entry raises ValueError before the file is
+    opened (0-based node tags must be non-negative); no partial file."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(0, -10.0)], dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqng"),
+        stress_period_data=spd,
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-1.0, -2.0]],
+        transientq_nodes=[-1],  # invalid 0-based node
+    )
+    out = function_tmpdir / "tqng.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="non-negative"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_transientq_multipliers_roundtrip(function_tmpdir):
+    """Non-unit CNSTM multipliers (times and values) survive load -> write ->
+    reload, and the stored times/values stay raw (pre-multiplier)."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(0, -10.0)], dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqm"),
+        stress_period_data=spd,
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-100.0, -50.0]],
+        transientq_nodes=[0],
+        transientq_times_mult=2.5,
+        transientq_values_mult=0.5,
+    )
+    out = function_tmpdir / "tqm.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    # Control lines carry the multipliers verbatim.
+    text = out.read_text()
+    assert "2.500000e+00" in text and "5.000000e-01" in text
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "tqm2"), nper=1)
+    assert np.isclose(re.transientq_times_mult, 2.5)
+    assert np.isclose(re.transientq_values_mult, 0.5)
+    # Raw (pre-multiplier) times/values are preserved.
+    assert np.allclose(re.transientq_times, [0.0, 10.0])
+    assert np.allclose(re.transientq_values, [[-100.0, -50.0]])
+
+
 # ---------------------------------------------------------------------------
 # MfUsgDrt tests (Drain Return DRT8, gwf2drt8u.f)
 # ---------------------------------------------------------------------------

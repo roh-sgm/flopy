@@ -73,8 +73,12 @@ Not supported (explicit failure rather than partial write):
 * ``TRANSIENTQ`` combined with ``NPQRT > 0`` -> ``NotImplementedError`` (the
   Fortran reads ``BDQV`` past its ``MXAQRT`` allocation when ``MXL > 0``; see
   ``USGT_STAGE4_05_QRT_TRANSIENTQ.md``).
-* External-unit ``TRANSIENTQ`` data (``IQRTUN`` referencing a separate file);
-  only the inline form is supported.
+* External-unit ``TRANSIENTQ`` data: a control-line ``IQRTUN`` that is not the
+  QRT package's own (inline) unit -> load raises ``NotImplementedError``. Only
+  the inline form is supported.
+* A ``TRANSIENTQ`` option that is not last on item 1: any trailing token ->
+  load raises ``ValueError`` (the Fortran ``TRANSIENTQ`` branch does not loop
+  back, so USG-T would ignore it).
 * ``EXTERNAL`` / ``OPEN/CLOSE`` recipient-node lists (see
   :mod:`flopy.mfusg._usgt_returnflow`).
 """
@@ -453,6 +457,16 @@ class MfUsgQrt(Package):
                 "MfUsgQrt.write_file: transientq_nodes must have exactly MXAQRT="
                 f"{mxaqrt} entries (one node tag per value row); got {got}."
             )
+        for k, nd in enumerate(self.transientq_nodes):
+            # 0-based internal node tags: non-negative integers (the file is
+            # 1-based, written as node+1). Like recipient_nodes, the upper bound
+            # is not range-checked against a node count (USG node numbering is
+            # not tied to the structured DIS shape of synthetic models).
+            if not float(nd).is_integer() or int(nd) < 0:
+                raise ValueError(
+                    "MfUsgQrt.write_file: transientq_nodes must be non-negative "
+                    f"0-based integers; entry {k} is {nd!r}."
+                )
         if self.transientq_values.shape != (mxaqrt, nbd):
             raise ValueError(
                 "MfUsgQrt.write_file: transientq_values must have shape "
@@ -627,9 +641,21 @@ class MfUsgQrt(Package):
                 }
 
         # TRANSIENTQ block (GWF2QRT8U1AR, after the parameter definitions and
-        # before the first stress period). Inline form only -- IQRTUN is read
-        # and discarded; the data follow in the same stream.
-        transientq_kwargs = cls._read_transientq_block(f, transientq_nbdqtim, mxaqrt)
+        # before the first stress period). Inline form only: IQRTUN on each
+        # control line must equal the QRT package's own unit (what write_file
+        # emits as self.unit_number[0]). Resolve that unit from the NAM when
+        # available (non-destructively -- the end-of-load lookup still pops it),
+        # else the package default; external units raise NotImplementedError.
+        inline_unit = None
+        if ext_unit_dict is not None:
+            inline_unit, _ = model.get_ext_dict_attr(
+                ext_unit_dict, filetype=cls._ftype(), pop_key=False
+            )
+        if inline_unit is None:
+            inline_unit = cls._defaultunit()
+        transientq_kwargs = cls._read_transientq_block(
+            f, transientq_nbdqtim, mxaqrt, inline_unit
+        )
 
         spd = {}
         recipient_nodes = {}
@@ -716,15 +742,36 @@ class MfUsgQrt(Package):
             toks.extend(line.split())
         return toks[:n]
 
+    @staticmethod
+    def _require_inline_transientq_unit(iqrtun_token, inline_unit, which):
+        """Reject external-unit TRANSIENTQ data before interpreting it as inline.
+
+        The Fortran reads the times/values from unit ``IQRTUN`` (``READ(IN,*)
+        IQRTUN,CNSTM`` then ``READ(IQRTUN,*) ...``). FloPy supports only the
+        inline form, where ``IQRTUN`` equals the QRT package's own unit; any
+        other unit means the data live in a separate file we cannot resolve.
+        """
+        iqrtun = int(iqrtun_token)
+        if iqrtun != inline_unit:
+            raise NotImplementedError(
+                f"MfUsgQrt.load: the TRANSIENTQ {which} control line references "
+                f"unit {iqrtun}, but only inline TRANSIENTQ data are supported "
+                f"(IQRTUN must equal the QRT package's own unit {inline_unit}, "
+                "so the data follow in the same file). External-unit TRANSIENTQ "
+                f"data are not supported -- inline the {which} on unit "
+                f"{inline_unit}. See USGT_STAGE4_05_QRT_TRANSIENTQ.md."
+            )
+
     @classmethod
-    def _read_transientq_block(cls, f, transientq_nbdqtim, mxaqrt):
+    def _read_transientq_block(cls, f, transientq_nbdqtim, mxaqrt, inline_unit):
         """Read the inline TRANSIENTQ block and return constructor kwargs.
 
         Returns an empty dict when TRANSIENTQ is absent. Times/values are kept
-        raw and the CNSTM multipliers preserved. ``IQRTUN`` (the unit token on
-        each control line) is read and discarded -- only the inline form is
-        supported. The ``TRANSIENTQ`` + ``NPQRT>0`` combination is rejected
-        earlier in ``load``.
+        raw and the CNSTM multipliers preserved. ``IQRTUN`` on each control line
+        is validated against ``inline_unit`` (the QRT package's own unit): only
+        the inline form is supported, so an external unit raises
+        ``NotImplementedError`` *before* any data is interpreted as inline. The
+        ``TRANSIENTQ`` + ``NPQRT>0`` combination is rejected earlier in ``load``.
         """
         if transientq_nbdqtim == 0:
             return {}
@@ -732,10 +779,12 @@ class MfUsgQrt(Package):
         staircase = transientq_nbdqtim < 0
 
         # Times control line (IQRTUN CNSTM), then the NBDQTIM times.
-        _, times_mult = cls._read_record(f, 2)
+        times_unit, times_mult = cls._read_record(f, 2)
+        cls._require_inline_transientq_unit(times_unit, inline_unit, "times")
         times = [float(t) for t in cls._read_record(f, nbd)]
         # Values control line, then exactly MXAQRT rows of (node, NBDQTIM values).
-        _, values_mult = cls._read_record(f, 2)
+        values_unit, values_mult = cls._read_record(f, 2)
+        cls._require_inline_transientq_unit(values_unit, inline_unit, "values")
         nodes = []
         values = []
         for _ in range(mxaqrt):
@@ -839,6 +888,16 @@ class MfUsgQrt(Package):
                     )
                 transientq_nbdqtim = int(tokens[i + 1])
                 i += 2
+                if i < len(tokens):
+                    # The Fortran TRANSIENTQ branch (gwf2QRT8u.f) does not loop
+                    # back to read further options, so USG-T silently ignores
+                    # anything after it. Reject rather than reorder silently.
+                    raise ValueError(
+                        "MfUsgQrt.load: TRANSIENTQ must be the LAST option on "
+                        f"item 1 (its Fortran branch does not read further "
+                        f"options); found trailing tokens after "
+                        f"'TRANSIENTQ {tokens[i - 1]}': {tokens[i:]}."
+                    )
             else:
                 options.append(tokens[i])
                 i += 1

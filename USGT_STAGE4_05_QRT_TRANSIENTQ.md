@@ -143,7 +143,7 @@ token from the arrays and appends it **last** on item 1.
 
 ### Explicit failures (no partial write)
 
-Validated **before the file is opened**:
+On **write**, validated **before the file is opened**:
 
 - `TRANSIENTQ` + `NPQRT>0` (loaded params or any active params) →
   `NotImplementedError` (the fragile Fortran combination above).
@@ -151,10 +151,26 @@ Validated **before the file is opened**:
 - `len(transientq_nodes) != MXAQRT` or `transientq_values.shape != (MXAQRT,
   NBDQTIM)` → `ValueError` (the Fortran reads exactly `MXAQRT` rows of
   `NBDQTIM` values).
+- A `transientq_nodes` entry that is not a non-negative 0-based integer →
+  `ValueError` (the file is 1-based, written as `node+1`). The upper bound is
+  not range-checked against a node count, consistent with `recipient_nodes`
+  (USG node numbering is not tied to a synthetic model's structured shape).
 - `NBDQTIM < 1` → `ValueError`.
 
-On **load**, `TRANSIENTQ` + `NPQRT>0` also raises `NotImplementedError`, and an
-unexpected EOF inside the block raises `ValueError`.
+On **load** (Stage 4.5A review follow-up closes two contract gaps):
+
+- **External-unit `TRANSIENTQ` data** — a control-line `IQRTUN` that is not the
+  QRT package's own (inline) unit → `NotImplementedError`, raised *before* any
+  data is interpreted as inline (checked on **both** the times and values
+  control lines). The inline unit is resolved from the NAM via
+  `model.get_ext_dict_attr(..., pop_key=False)` when an `ext_unit_dict` is
+  available, else `MfUsgQrt._defaultunit()` — matching what `write_file` emits
+  (`self.unit_number[0]`).
+- **`TRANSIENTQ` not last on item 1** — any trailing token after
+  `TRANSIENTQ <±NBDQTIM>` → `ValueError` (the Fortran branch does not loop back,
+  so USG-T would silently ignore it; FloPy rejects rather than reorder).
+- `TRANSIENTQ` + `NPQRT>0` → `NotImplementedError`; an unexpected EOF inside the
+  block → `ValueError`.
 
 ## Tests (`autotest/test_usg_transport.py`)
 
@@ -172,8 +188,21 @@ unexpected EOF inside the block raises `ValueError`.
 - `test_mfusgqrt_transientq_dim_mismatch_fails` — wrong `transientq_values`
   shape raises `ValueError` with no partial file.
 
+Review follow-up tests (contract guards):
+
+- `test_mfusgqrt_transientq_external_times_unit_fails` /
+  `test_mfusgqrt_transientq_external_values_unit_fails` — an external `IQRTUN`
+  on the times / values control line raises `NotImplementedError`.
+- `test_mfusgqrt_transientq_trailing_option_fails` — a token after
+  `TRANSIENTQ <N>` (e.g. `AUX C01` or `NOPRINT`) raises `ValueError`.
+- `test_mfusgqrt_transientq_negative_node_fails` — a negative `transientq_nodes`
+  entry raises `ValueError` with no partial file.
+- `test_mfusgqrt_transientq_multipliers_roundtrip` — non-unit `CNSTM`
+  multipliers survive load → write → reload (stored times/values stay raw).
+
 The existing QRT suite (parameters, return flow, CHANGEC, list controls) stays
-green (`-k mfusgqrt`).
+green: `-k mfusgqrt` **31 passed**; focused **229**; exe **4**; combined
+**233** under the USG-T 2.7 ARM binary.
 
 ## Validation
 
