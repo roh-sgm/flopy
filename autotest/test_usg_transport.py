@@ -4936,6 +4936,30 @@ def test_mfusghfb_param_write_undefined_active_name_fails(function_tmpdir):
         hfb.write_file()
 
 
+def test_mfusghfb_param_write_duplicate_active_fails(function_tmpdir):
+    """Activating the same HFB parameter more than once (case-insensitive) raises
+    ValueError before the file is opened (the Fortran aborts 'already activated'
+    in SGWF2HFB7SUB); no partial file is written."""
+    from flopy.mfusg import MfUsgHfb
+
+    params = {
+        "p1": {"partyp": "hfb", "parval": "1.0", "nlst": 1, "data": _hfb_param_def(1)}
+    }
+    hfb = MfUsgHfb(
+        _hfb_model(function_tmpdir, "dup"),
+        nphfb=1,
+        mxfb=1,
+        parameters=params,
+        acthfb_names=["p1", "P1"],  # same parameter twice (case-insensitive)
+        nacthfb=2,
+    )
+    out = function_tmpdir / "dup.hfb"
+    hfb.fn_path = str(out)
+    with pytest.raises(ValueError, match="more than once"):
+        hfb.write_file()
+    assert not out.exists()
+
+
 def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
     """DPT immobile-domain air-water adsorption (A-W_ADSORBIM) fails explicitly.
 

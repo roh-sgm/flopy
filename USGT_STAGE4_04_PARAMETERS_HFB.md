@@ -168,15 +168,19 @@ file is produced):
 - **`ValueError`** when definitions are present but inconsistent:
   `len(parameters) != NPHFB`; a definition missing any of
   `partyp`/`parval`/`nlst`/`data`; `len(pdef["data"]) != pdef["nlst"]`;
-  `nacthfb != len(acthfb_names)`; or an active name not defined in `parameters`
-  (matched case-insensitively, as the Fortran upper-cases parameter names).
+  `nacthfb != len(acthfb_names)`; an active name not defined in `parameters`
+  (matched case-insensitively, as the Fortran upper-cases parameter names); or
+  **a parameter activated more than once** in the active list (case-insensitive)
+  — the Fortran `SGWF2HFB7SUB` aborts "already activated" when `IACTIVE(IP)>0`
+  (Stage 4.4 final polish).
 
 Files read by `MfUsgHfb.load` always satisfy these invariants, so valid
 round-trips are unaffected. Negative tests:
 `test_mfusghfb_param_write_empty_dict_fails` (asserts no partial file),
 `test_mfusghfb_param_write_count_mismatch_fails`,
 `test_mfusghfb_param_write_nlst_mismatch_fails`,
-`test_mfusghfb_param_write_undefined_active_name_fails`.
+`test_mfusghfb_param_write_undefined_active_name_fails`, and
+`test_mfusghfb_param_write_duplicate_active_fails`.
 
 ## Validation
 
@@ -189,6 +193,7 @@ git diff --check
 git status --short
 ```
 
-Results (after the writer-validation polish): `-k "mfusghfb or usgt_list"`
-**22 passed**; `-k mfusghfb` **19 passed**; focused **184 passed**; exe
-**4 passed**; combined **188 passed** under the USG-T 2.7 ARM binary.
+Results (after the Stage 4.4 final polish — duplicate-active guard):
+`-k mfusghfb` **20 passed**; `-k "mfusghfb or mfusgqrt or mfusgdrt"` **64
+passed**; focused **218 passed**; exe **4 passed**; combined **222 passed** under
+the USG-T 2.7 ARM binary.

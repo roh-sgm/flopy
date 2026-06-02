@@ -274,6 +274,13 @@ class MfUsgHfb(ModflowHfb):
                 f"({self.nacthfb}) must equal the number of active parameter "
                 f"names ({len(self.acthfb_names)})."
             )
+        lowered = [nm.lower() for nm in self.acthfb_names]
+        if len(set(lowered)) != len(lowered):
+            raise ValueError(
+                "MfUsgHfb.write_file: a parameter is activated more than once in "
+                f"the HFB active list: {self.acthfb_names}. USG-T aborts when a "
+                "parameter is already activated (SGWF2HFB7SUB)."
+            )
         defined = {name.lower() for name in self.parameters}
         for nm in self.acthfb_names:
             if nm.lower() not in defined:

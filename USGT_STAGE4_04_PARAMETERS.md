@@ -72,21 +72,29 @@ explicit, audited status with its caveats.
   `write_array_parameter_defs`, `read_active_array_parameters`,
   `write_active_array_parameters`. The parsed `ModflowParBc.bc_parms` dict is the
   structured representation preserved on the package.
-- **List parameters** (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB`, HFB 4.4B + SGB 4.4C):
-  `read_list_parameter_count` / `write_list_parameter_count` (the leading
-  `PARAMETER NP MXL` record, for packages that carry it — SGB/DRT/QRT);
-  `read_list_parameter_header` / `write_list_parameter_header` (the
-  `PARNAM PARTYP PARVAL NLST [INSTANCES n]` definition header); and
+- **List parameters** (`UPARLSTAL`/`UPARLSTRP`/`UPARLSTSUB`, HFB/SGB/DRT/QRT):
+  `read_list_parameter_count` / `write_list_parameter_count` handle the leading
+  `PARAMETER NP MXL` record — used **only by packages that carry it, i.e. SGB**
+  (via `UPARLSTAL`). HFB's `NPHFB` is in item 1, and **DRT's `NPDRT`/`MXL` and
+  QRT's `NPQRT`/`MXL` are also in item 1**, so DRT/QRT/HFB do *not* use the count
+  helpers. `read_list_parameter_header` / `write_list_parameter_header` (the
+  `PARNAM PARTYP PARVAL NLST [INSTANCES n]` definition header) and
   `read_active_list_parameters` / `write_active_list_parameters` (the activation
-  names). The per-parameter `NLST` rows are package-specific, so the row
-  reader/writer stays in the package (HFB `_read_hfb_rows`/`_write_hfb_rows`; SGB
+  names) are shared by all four. `resolve_list_parameter` resolves a definition
+  by name case-insensitively (Fortran `UPCASE`) and is used by DRT/QRT to size
+  `MXADRT`/`MXAQRT` from the active parameters; HFB already validates active
+  names case-insensitively and now also rejects duplicate activations. The
+  per-parameter `NLST` rows are package-specific, so the row reader/writer stays
+  in the package (HFB `_read_hfb_rows`/`_write_hfb_rows`; SGB
   `_read_sgb_rows`/`_write_sgb_rows`; DRT `_read_drain_rows`/`_write_drain_line`
   and QRT `_read_sink_rows`/`_write_sink_block`, the last two carrying their
   RETURNFLOW recipients — interleaved for DRT, after the rows for QRT), each with
   0-based↔1-based conversion.
 
 No ad-hoc string preservation, no second parser. All four list-parameter
-packages (HFB, SGB, DRT, QRT) now reuse these helpers.
+packages (HFB, SGB, DRT, QRT) reuse these helpers; each rejects activating the
+same parameter more than once (case-insensitive), matching the Fortran
+"already activated" abort.
 
 ## Fortran Sources
 

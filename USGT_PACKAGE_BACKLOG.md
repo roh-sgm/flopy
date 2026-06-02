@@ -536,7 +536,13 @@ or empty `{}`) raises `NotImplementedError`; inconsistent definitions raise
 len(acthfb_names)`, or an active name not defined (case-insensitive). Files read
 by `load` satisfy these invariants, so valid round-trips are unaffected.
 
-Required tests (all green, `-k mfusghfb` 19 passed):
+Stage 4.4 final polish (executed): `write_file` now also rejects activating the
+same parameter more than once (case-insensitive) with `ValueError` — the Fortran
+`SGWF2HFB7SUB` aborts "already activated". This matches the duplicate-active
+guard added to DRT/QRT, so all four list-parameter packages are consistent.
+1 new test (`-k mfusghfb` 20 passed).
+
+Required tests (all green, `-k mfusghfb` 20 passed):
 
 - Static non-parametric authoring. (Done.)
 - Transient non-parametric authoring; `IHFBRD=-1`, `0`, `>0`. (Done.)

@@ -446,6 +446,17 @@ honest, upstream-ready USG-T 2.7 story.
   `-k "mfusgqrt or mfusgdrt or usgt_list"` **47**; focused **217**, exe **4**,
   combined **221** (ARM). See `USGT_STAGE4_04_PARAMETERS_QRT.md` /
   `USGT_STAGE4_04_PARAMETERS_DRT.md`.
+- **Stage 4.4 final polish — HFB duplicate-active guard (executed):** closes the
+  consistency gap left by the QRT/DRT follow-up. HFB already validated active
+  names case-insensitively, but did not reject the same parameter being activated
+  more than once. `MfUsgHfb._validate_parameter_write` now raises `ValueError`
+  before the file is opened when `acthfb_names` repeats a parameter
+  (case-insensitive), matching the Fortran `SGWF2HFB7SUB` "already activated"
+  abort (`IACTIVE(IP)>0`). All four list-parameter packages (HFB/SGB/DRT/QRT) are
+  now consistent on duplicate activation. Only `mfusghfb.py` touched. Tests: 1 new
+  (`test_mfusghfb_param_write_duplicate_active_fails`); `-k mfusghfb` **20**,
+  focused **218**, exe **4**, combined **222** (ARM). See
+  `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
