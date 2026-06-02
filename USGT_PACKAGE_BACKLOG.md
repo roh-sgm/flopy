@@ -391,9 +391,9 @@ Problem:
 
 - **DONE** (2026-05-30): `MfUsgQrt` added (`flopy/mfusg/mfusgqrt.py`) and
   registered as `"qrt"`. Per-sink `(node, q, rfprop)` + recipient-node lists,
-  `CHANGEC`/`IQCHNGTYP`, AUX, reuse; `TRANSIENTQ` explicit failure; shares
-  `_usgt_returnflow.py` with DRT. Authoring (minimal, return-flow concentration,
-  multi-recipient) + round-trip + registry tests.
+  `CHANGEC`/`IQCHNGTYP`, AUX, reuse; `TRANSIENTQ` explicit failure (lifted in
+  Stage 4.5A, below); shares `_usgt_returnflow.py` with DRT. Authoring (minimal,
+  return-flow concentration, multi-recipient) + round-trip + registry tests.
 - **DONE** (Stage 4.4E): `NPQRT>0` list parameters are **structurally preserved**
   (load → write → reload of definitions + recipient blocks + per-SP activations;
   `MXAQRT` = non-parametric + active rows; `MXRTCELLS` reflects definition
@@ -402,11 +402,10 @@ Problem:
   **but not execution-guaranteed**: the parameter value scales `QRTF(5)=NumRT`,
   not `Q` (`IPVL=5`; a Fortran bug, `SFAC` scales `Q` at `ISCLOC=4`), and
   `NodQRT` is not copied on activation (like DRT). FloPy does not apply the
-  parameter value to `Q`. From-scratch authoring and `INSTANCES` →
-  `NotImplementedError`; `MXL`/consistency → `ValueError`; `TRANSIENTQ` still
-  fails. Reuses the shared list-parameter helpers. See
-  `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This completes the Stage 4.4
-  list-parameter family (HFB/SGB/DRT/QRT).**
+  parameter value to `Q`. From-scratch parameter authoring and `INSTANCES` →
+  `NotImplementedError`; `MXL`/consistency → `ValueError`. Reuses the shared
+  list-parameter helpers. See `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This
+  completes the Stage 4.4 list-parameter family (HFB/SGB/DRT/QRT).**
 - **DONE** (Stage 4.4E review follow-up, applies to QRT and DRT): active
   parameter names are resolved **case-insensitively** when sizing `MXAQRT`/
   `MXADRT` (shared `resolve_list_parameter` helper), matching the validation and
@@ -414,6 +413,19 @@ Problem:
   dropped the active `NLST` from the header. Duplicate activation of a parameter
   in one stress period now raises `ValueError`. 4 new tests; `-k mfusgqrt` 20,
   `-k mfusgdrt` 24 passed.
+- **DONE** (Stage 4.5A): the inline **`TRANSIENTQ`** transient extraction-flow
+  time series is now supported (replacing the prior explicit failure). Fortran
+  audit (`gwf2QRT8u.f`): the block is read in `GWF2QRT8U1AR` after the parameter
+  definitions and before stress periods (times control + `NBDQTIM` times, values
+  control + exactly `MXAQRT` rows of `(node, NBDQTIM values)`); `GWF2QRT8U1AD`
+  overrides `QRTF(4)=Q` only (recipients untouched); `NBDQTIM<0` selects
+  staircasing; `IQRTN` is an informational node tag (series applied
+  positionally). FloPy adds `transientq_times`/`values`/`nodes`/`staircase` +
+  `CNSTM` multipliers, preserved raw on load → write → reload and authorable from
+  scratch; 0-based internal / 1-based file. Explicit failures: `TRANSIENTQ` +
+  `NPQRT>0` (the Fortran reads `BDQV` past its `MXAQRT` allocation when `MXL>0`),
+  external-unit data, dimension mismatch. 6 new tests; `-k mfusgqrt` 26 passed.
+  See `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
 
 Fortran facts to verify:
 

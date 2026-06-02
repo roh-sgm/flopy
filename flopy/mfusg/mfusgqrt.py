@@ -13,6 +13,13 @@ File layout (unstructured, free format)::
     Item 1:  MXAQRT MXRTCELLS IQRTCB NPQRT MXL [options]
              options: [AUX <name> ...] [RETURNFLOW] [AUTOFLOWREDUCE]
                       [CHANGEC] [NOPRINT] [IUNIT_AFR_QRT <unit>]
+                      [TRANSIENTQ <±NBDQTIM>]   (must be the last option)
+    TRANSIENTQ block (only when TRANSIENTQ is given, read once after item 1 /
+    the parameter definitions and before the first stress period):
+             IQRTUN  CNSTM                 (times control line)
+             BDQTIM(1..NBDQTIM)            (the times)
+             IQRTUN  CNSTM                 (values control line)
+             then MXAQRT rows: NODE  BDQV(1..NBDQTIM)
     Per SP:  ITMP
              ITMP sink lines, each:
                 NODE  Q  [NumRT  Rfprop]  [IQCHNGTYP]  [aux ...]
@@ -22,6 +29,18 @@ File layout (unstructured, free format)::
 ``ITMP < 0`` reuses the previous stress period's sinks and recipients.
 
 Internal ``node`` and recipient values are 0-based; the file is 1-based.
+
+The ``TRANSIENTQ`` option (Stage 4.5A) supplies a transient extraction-flow time
+series that overrides ``QRTF(4)=Q`` at every time step (``GWF2QRT8U1AD``);
+recipient count and proportion are not affected. It is loaded, written, and
+authorable from scratch via the ``transientq_*`` attributes (see
+``USGT_STAGE4_05_QRT_TRANSIENTQ.md``). Only the **inline** form is supported
+(``IQRTUN`` = the package's own unit); the times array ``BDQTIM`` and the
+per-sink value rows ``BDQV`` (one row per active sink, ``MXAQRT`` rows of
+``NBDQTIM`` values) are preserved raw together with their ``CNSTM`` multipliers.
+``NBDQTIM < 0`` in the file selects staircasing (``transientq_staircase``);
+``IQRTN`` is an informational node tag (the Fortran applies the series
+positionally, not by node).
 
 Named parameters (``NPQRT > 0``) are **structurally preserved** (load -> write ->
 reload) as of Stage 4.4E, but **not execution-guaranteed**. QRT is type-consistent
@@ -51,7 +70,11 @@ Not supported (explicit failure rather than partial write):
   not yet -> load raises ``NotImplementedError``.
 * From-scratch parameter authoring (active parameters with no loaded
   definitions) -> ``NotImplementedError``.
-* The ``TRANSIENTQ`` transient-flow time-series option.
+* ``TRANSIENTQ`` combined with ``NPQRT > 0`` -> ``NotImplementedError`` (the
+  Fortran reads ``BDQV`` past its ``MXAQRT`` allocation when ``MXL > 0``; see
+  ``USGT_STAGE4_05_QRT_TRANSIENTQ.md``).
+* External-unit ``TRANSIENTQ`` data (``IQRTUN`` referencing a separate file);
+  only the inline form is supported.
 * ``EXTERNAL`` / ``OPEN/CLOSE`` recipient-node lists (see
   :mod:`flopy.mfusg._usgt_returnflow`).
 """
@@ -89,6 +112,21 @@ class MfUsgQrt(Package):
         Dictionary keyed by zero-based stress period. Each value is a list
         (one entry per sink record, in the same order as ``stress_period_data``)
         of 0-based recipient node lists. Only used with ``RETURNFLOW``.
+    transientq_times : array-like, optional
+        The ``TRANSIENTQ`` time points (``BDQTIM``, length ``NBDQTIM``), raw
+        (pre-multiplier). Providing this activates ``TRANSIENTQ``.
+    transientq_values : array-like, optional
+        The ``TRANSIENTQ`` flow values (``BDQV``) shaped ``(MXAQRT, NBDQTIM)`` =
+        (sink, time), raw. One row per active sink; ``MXAQRT`` rows required.
+    transientq_nodes : array-like, optional
+        The informational node tag per row (``IQRTN``, length ``MXAQRT``),
+        **0-based internal / 1-based file**. The series is applied positionally.
+    transientq_staircase : bool, optional
+        If True, use staircasing instead of interpolation (``ISTEPQ``; written as
+        a negative ``NBDQTIM`` on item 1). Default False.
+    transientq_times_mult, transientq_values_mult : float, optional
+        The ``CNSTM`` multipliers for the times and values control lines
+        (preserved on round-trip). Default ``1.0``.
     dtype : np.dtype, optional
         Custom dtype. If None, derived from the active options.
     options : list of str, optional
@@ -114,6 +152,12 @@ class MfUsgQrt(Package):
         parameters=None,
         mxl=0,
         active_params=None,
+        transientq_times=None,
+        transientq_values=None,
+        transientq_nodes=None,
+        transientq_staircase=False,
+        transientq_times_mult=1.0,
+        transientq_values_mult=1.0,
         extension="qrt",
         unitnumber=None,
         filenames=None,
@@ -174,8 +218,32 @@ class MfUsgQrt(Package):
         self.mxl = mxl
         self.active_params = active_params if active_params is not None else {}
 
+        # TRANSIENTQ (Stage 4.5A): inline transient extraction-flow series that
+        # overrides Q each time step. Active iff transientq_times is not None.
+        # Times/values are stored raw; the CNSTM multipliers are preserved.
+        self.transientq_times = (
+            np.asarray(transientq_times, dtype=np.float64)
+            if transientq_times is not None
+            else None
+        )
+        self.transientq_values = (
+            np.asarray(transientq_values, dtype=np.float64)
+            if transientq_values is not None
+            else None
+        )
+        self.transientq_nodes = (
+            list(transientq_nodes) if transientq_nodes is not None else None
+        )
+        self.transientq_staircase = bool(transientq_staircase)
+        self.transientq_times_mult = float(transientq_times_mult)
+        self.transientq_values_mult = float(transientq_values_mult)
+
         if add_package:
             self.parent.add_package(self)
+
+    def _transientq_active(self):
+        """True when a TRANSIENTQ time series is present."""
+        return self.transientq_times is not None
 
     # ------------------------------------------------------------------
     # Static / helper constructors
@@ -353,6 +421,58 @@ class MfUsgQrt(Package):
             mx = max(mx, def_total)
         return mx
 
+    def _validate_transientq_write(self, mxaqrt, preserve):
+        """Validate the TRANSIENTQ state before a write (no partial file).
+
+        Raises ``NotImplementedError`` for the fragile ``TRANSIENTQ`` + ``NPQRT>0``
+        combination (the Fortran reads ``BDQV`` past its ``MXAQRT`` allocation
+        when ``MXL>0``), and ``ValueError`` for inconsistent dimensions: the
+        Fortran reads exactly ``MXAQRT`` rows of ``NBDQTIM`` values.
+        """
+        if preserve:
+            raise NotImplementedError(
+                "MfUsgQrt.write_file does not support TRANSIENTQ together with "
+                "QRT parameters (NPQRT>0): BDQV is allocated (NBDQTIM, MXAQRT) "
+                "but GWF2QRT8U1AD loops to MXQRT=MXAQRT+MXL, reading past the "
+                "allocation. See USGT_STAGE4_05_QRT_TRANSIENTQ.md."
+            )
+        nbd = len(self.transientq_times)
+        if nbd < 1:
+            raise ValueError(
+                "MfUsgQrt.write_file: TRANSIENTQ requires at least one time point "
+                "(transientq_times is empty)."
+            )
+        if mxaqrt < 1:
+            raise ValueError(
+                "MfUsgQrt.write_file: TRANSIENTQ requires at least one active sink "
+                f"(MXAQRT>0); got MXAQRT={mxaqrt}. Provide stress_period_data."
+            )
+        if self.transientq_nodes is None or len(self.transientq_nodes) != mxaqrt:
+            got = None if self.transientq_nodes is None else len(self.transientq_nodes)
+            raise ValueError(
+                "MfUsgQrt.write_file: transientq_nodes must have exactly MXAQRT="
+                f"{mxaqrt} entries (one node tag per value row); got {got}."
+            )
+        if self.transientq_values.shape != (mxaqrt, nbd):
+            raise ValueError(
+                "MfUsgQrt.write_file: transientq_values must have shape "
+                f"(MXAQRT, NBDQTIM)=({mxaqrt}, {nbd}); got "
+                f"{self.transientq_values.shape}."
+            )
+
+    def _write_transientq_block(self, f, mxaqrt):
+        """Write the inline TRANSIENTQ block (times control + times, then values
+        control + MXAQRT rows). IQRTUN is the package's own unit so the data are
+        read inline at run time; nodes are written 1-based."""
+        unit = self.unit_number[0]
+        f.write(f" {unit} {self.transientq_times_mult:.6e}\n")
+        f.write(" " + " ".join(f"{float(t):.6e}" for t in self.transientq_times) + "\n")
+        f.write(f" {unit} {self.transientq_values_mult:.6e}\n")
+        for i in range(mxaqrt):
+            node1 = int(self.transientq_nodes[i]) + 1
+            vals = " ".join(f"{float(v):.6e}" for v in self.transientq_values[i])
+            f.write(f" {node1} {vals}\n")
+
     def write_file(self):
         """Write the package file in MODFLOW-USG-T QRT format."""
         preserve = bool(self.parameters) or any(self.active_params.values())
@@ -367,6 +487,11 @@ class MfUsgQrt(Package):
         npqrt = len(self.parameters) if preserve else 0
         mxl = self.mxl if preserve else 0
 
+        transientq = self._transientq_active()
+        if transientq:
+            # Validate before opening so no partial file is produced.
+            self._validate_transientq_write(mxaqrt, preserve)
+
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
 
@@ -374,6 +499,11 @@ class MfUsgQrt(Package):
             line = f" {mxaqrt:9d} {mxrtcells:9d} {self.ipakcb} {npqrt} {mxl}"
             for opt in self.options:
                 line += f" {opt}"
+            if transientq:
+                # TRANSIENTQ must be the LAST option (its Fortran branch does not
+                # loop back to read further options); NBDQTIM<0 => staircase.
+                nbd = len(self.transientq_times)
+                line += f" TRANSIENTQ {-nbd if self.transientq_staircase else nbd}"
             f.write(line + "\n")
 
             # Items 2-3: parameter definitions (UPARLSTRP header + NLST sink rows
@@ -386,6 +516,11 @@ class MfUsgQrt(Package):
                     self._write_sink_block(
                         f, pdef["data"], pdef["recipient_nodes"], has_aux, aux_names
                     )
+
+            # TRANSIENTQ block: read in GWF2QRT8U1AR after the parameter
+            # definitions and before the first stress period.
+            if transientq:
+                self._write_transientq_block(f, mxaqrt)
 
             for kper in range(nper):
                 active = self.active_params.get(kper, []) if preserve else []
@@ -441,13 +576,29 @@ class MfUsgQrt(Package):
         while line.startswith("#"):
             line = f.readline()
 
-        options, aux_names, ipakcb, returnflow, changec, npqrt, mxl = cls._parse_header(
-            line
-        )
+        (
+            options,
+            aux_names,
+            ipakcb,
+            returnflow,
+            changec,
+            npqrt,
+            mxl,
+            mxaqrt,
+            transientq_nbdqtim,
+        ) = cls._parse_header(line)
         dtype = cls.get_default_dtype(
             returnflow=returnflow, changec=changec, aux_names=aux_names
         )
         naux = len(aux_names)
+
+        if transientq_nbdqtim != 0 and npqrt > 0:
+            # Fragile Fortran combination: BDQV is allocated (NBDQTIM, MXAQRT)
+            # but GWF2QRT8U1AD loops to MXQRT=MXAQRT+MXL, reading past it.
+            raise NotImplementedError(
+                "MfUsgQrt.load does not support TRANSIENTQ together with QRT "
+                "parameters (NPQRT>0). See USGT_STAGE4_05_QRT_TRANSIENTQ.md."
+            )
 
         # Items 2-3: NPQRT parameter definitions (UPARLSTRP header + NLST rows +
         # recipient blocks). Structurally preserved -- see module docstring.
@@ -474,6 +625,11 @@ class MfUsgQrt(Package):
                     "data": data,
                     "recipient_nodes": recips,
                 }
+
+        # TRANSIENTQ block (GWF2QRT8U1AR, after the parameter definitions and
+        # before the first stress period). Inline form only -- IQRTUN is read
+        # and discarded; the data follow in the same stream.
+        transientq_kwargs = cls._read_transientq_block(f, transientq_nbdqtim, mxaqrt)
 
         spd = {}
         recipient_nodes = {}
@@ -537,10 +693,64 @@ class MfUsgQrt(Package):
             parameters=parameters,
             mxl=mxl,
             active_params=active_params,
+            **transientq_kwargs,
             extension="qrt",
             unitnumber=unitnumber,
             filenames=filenames,
         )
+
+    @staticmethod
+    def _read_record(f, n):
+        """Read one Fortran list-directed record of ``n`` tokens from ``f``,
+        starting at the next line and spanning lines if needed. Extra tokens on
+        the final line are discarded (as Fortran does once the I/O list is
+        satisfied)."""
+        toks = []
+        while len(toks) < n:
+            line = f.readline()
+            if not line:
+                raise ValueError(
+                    "MfUsgQrt.load: unexpected EOF while reading the TRANSIENTQ "
+                    f"block (needed {n} values, got {len(toks)})."
+                )
+            toks.extend(line.split())
+        return toks[:n]
+
+    @classmethod
+    def _read_transientq_block(cls, f, transientq_nbdqtim, mxaqrt):
+        """Read the inline TRANSIENTQ block and return constructor kwargs.
+
+        Returns an empty dict when TRANSIENTQ is absent. Times/values are kept
+        raw and the CNSTM multipliers preserved. ``IQRTUN`` (the unit token on
+        each control line) is read and discarded -- only the inline form is
+        supported. The ``TRANSIENTQ`` + ``NPQRT>0`` combination is rejected
+        earlier in ``load``.
+        """
+        if transientq_nbdqtim == 0:
+            return {}
+        nbd = abs(transientq_nbdqtim)
+        staircase = transientq_nbdqtim < 0
+
+        # Times control line (IQRTUN CNSTM), then the NBDQTIM times.
+        _, times_mult = cls._read_record(f, 2)
+        times = [float(t) for t in cls._read_record(f, nbd)]
+        # Values control line, then exactly MXAQRT rows of (node, NBDQTIM values).
+        _, values_mult = cls._read_record(f, 2)
+        nodes = []
+        values = []
+        for _ in range(mxaqrt):
+            rec = cls._read_record(f, nbd + 1)
+            nodes.append(int(rec[0]) - 1)
+            values.append([float(v) for v in rec[1:]])
+
+        return {
+            "transientq_times": times,
+            "transientq_values": values,
+            "transientq_nodes": nodes,
+            "transientq_staircase": staircase,
+            "transientq_times_mult": float(times_mult),
+            "transientq_values_mult": float(values_mult),
+        }
 
     @classmethod
     def _read_sink_rows(
@@ -579,10 +789,15 @@ class MfUsgQrt(Package):
     def _parse_header(line):
         """Parse QRT item 1: MXAQRT MXRTCELLS IQRTCB NPQRT MXL [options].
 
-        Returns (options, aux_names, ipakcb, returnflow, changec, npqrt, mxl).
-        NPQRT/MXL come from item 1 directly (QRT has no separate PARAMETER line).
+        Returns (options, aux_names, ipakcb, returnflow, changec, npqrt, mxl,
+        mxaqrt, transientq_nbdqtim). NPQRT/MXL come from item 1 directly (QRT has
+        no separate PARAMETER line). ``transientq_nbdqtim`` is the signed value
+        following a ``TRANSIENTQ`` token (0 if absent); ``mxaqrt`` (token 0) is
+        needed to size the TRANSIENTQ value block. ``TRANSIENTQ`` is not added to
+        ``options`` -- the writer re-derives it from the transientq_* state.
         """
         tokens = line.split()
+        mxaqrt = int(tokens[0]) if len(tokens) > 0 else 0
         ipakcb = int(tokens[2]) if len(tokens) > 2 else 0
         npqrt = int(tokens[3]) if len(tokens) > 3 else 0
         mxl = int(tokens[4]) if len(tokens) > 4 else 0
@@ -591,6 +806,7 @@ class MfUsgQrt(Package):
         aux_names = []
         returnflow = False
         changec = False
+        transientq_nbdqtim = 0
         i = 5
         while i < len(tokens):
             t = tokens[i].upper()
@@ -616,16 +832,29 @@ class MfUsgQrt(Package):
                 options.append(f"IUNIT_AFR_QRT {tokens[i + 1]}")
                 i += 2
             elif t == "TRANSIENTQ":
-                raise NotImplementedError(
-                    "MfUsgQrt does not support the TRANSIENTQ transient-flow "
-                    "time-series option."
-                )
+                if i + 1 >= len(tokens):
+                    raise ValueError(
+                        "MfUsgQrt.load: TRANSIENTQ on item 1 must be followed by "
+                        "a (signed) NBDQTIM count."
+                    )
+                transientq_nbdqtim = int(tokens[i + 1])
+                i += 2
             else:
                 options.append(tokens[i])
                 i += 1
 
         changec = changec and returnflow
-        return options, aux_names, ipakcb, returnflow, changec, npqrt, mxl
+        return (
+            options,
+            aux_names,
+            ipakcb,
+            returnflow,
+            changec,
+            npqrt,
+            mxl,
+            mxaqrt,
+            transientq_nbdqtim,
+        )
 
     @staticmethod
     def _parse_sink_tokens(toks, returnflow, changec, naux):

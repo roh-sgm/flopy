@@ -424,9 +424,10 @@ honest, upstream-ready USG-T 2.7 story.
   full"). `NPQRT>0` definitions (with recipient `U1DINT` blocks read after the
   rows), `MXAQRT` (active total per period), `MXRTCELLS` (definition recipients),
   and per-SP `ITMP NP` activations all round-trip; FloPy does **not** apply the
-  parameter value to `Q`. From-scratch authoring / `INSTANCES` →
-  `NotImplementedError`; `MXL`/consistency → `ValueError`; `TRANSIENTQ` still
-  fails. Reuses the shared list-parameter helpers + a factored `_read_sink_rows`.
+  parameter value to `Q`. From-scratch parameter authoring / `INSTANCES` →
+  `NotImplementedError`; `MXL`/consistency → `ValueError` (`TRANSIENTQ` is now
+  supported — Stage 4.5A, below).
+  Reuses the shared list-parameter helpers + a factored `_read_sink_rows`.
   Only `MfUsgQrt` touched in code. Tests: `-k mfusgqrt` **18 passed** (10 new);
   `-k "mfusgqrt or usgt_list"` **21**; focused **213**, exe **4**, combined
   **217** (ARM). See `USGT_STAGE4_04_PARAMETERS_QRT.md`.
@@ -457,6 +458,30 @@ honest, upstream-ready USG-T 2.7 story.
   (`test_mfusghfb_param_write_duplicate_active_fails`); `-k mfusghfb` **20**,
   focused **218**, exe **4**, combined **222** (ARM). See
   `USGT_STAGE4_04_PARAMETERS_HFB.md`.
+- **Stage 4.5A — QRT `TRANSIENTQ` support (executed):** replaced QRT's explicit
+  `NotImplementedError` for `TRANSIENTQ` with real semantic support. Fortran
+  audit (`gwf2QRT8u.f`): the inline block is read in `GWF2QRT8U1AR` after the
+  parameter definitions and before stress periods — a times control line
+  (`IQRTUN CNSTM`) + `NBDQTIM` times, then a values control line + exactly
+  `MXAQRT` rows of `(node, NBDQTIM values)`; `GWF2QRT8U1AD` overrides
+  `QRTF(4)=Q` only (recipients `QRTF(5)`/`QRTF(6)` are untouched, answering "what
+  varies: Q, not recipients"); `NBDQTIM<0` selects staircasing; `IQRTN` is read
+  and printed but unused in `AD` (the series is applied positionally, so it is an
+  informational node tag). `MfUsgQrt` gains `transientq_times`/`values`/`nodes`/
+  `staircase` + `times_mult`/`values_mult`, preserved raw on load → write →
+  reload and authorable from scratch; nodes are 0-based internal / 1-based file;
+  the writer emits `IQRTUN` = the package's own unit so the data are inline and
+  runnable, and writes `TRANSIENTQ` last on item 1 (its Fortran branch does not
+  loop back to read further options). Explicit failures (no partial file):
+  `TRANSIENTQ` + `NPQRT>0` (the Fortran reads `BDQV` past its `(NBDQTIM, MXAQRT)`
+  allocation when `MXQRT=MXAQRT+MXL>MXAQRT`), external-unit `TRANSIENTQ` data,
+  and dimension mismatch. Only `mfusgqrt.py` touched. Tests: 6 new + the existing
+  unsupported-modes test repurposed to the `NPQRT>0` combo; `-k mfusgqrt` **26**,
+  focused **224**, exe **4**, combined **228** (ARM). Empirically verified at the
+  FloPy round-trip level and against the line-by-line Fortran read order; an
+  actual USG-T execution of a `TRANSIENTQ` model was not run (it needs a
+  from-scratch unstructured QRT model, beyond the synthetic scope). See
+  `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
@@ -575,7 +600,7 @@ all in `autotest/test_usg_transport.py`):
 | Package | File | What it does |
 |---|---|---|
 | `MfUsgSgb` | `flopy/mfusg/mfusgsgb.py` | **New.** Specified Gradient Boundary (`glo2sgbu1.f`). Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse. Registered as `"sgb"`, so `MfUsg.load()` no longer silently skips SGB. `NPSGB>0` fails explicitly. |
-| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` and `TRANSIENTQ` fail explicitly. Registered as `"qrt"`. |
+| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` structurally preserved (Stage 4.4E); inline `TRANSIENTQ` supported (Stage 4.5A). `TRANSIENTQ`+`NPQRT>0`, external-unit `TRANSIENTQ`, from-scratch parameter authoring and `INSTANCES` fail explicitly. Registered as `"qrt"`. |
 | `MfUsgDrt` | `flopy/mfusg/mfusgdrt.py` | **New** (replaces base `ModflowDrt` in the registry). DRT8 (`gwf2drt8u.f`): EL+COND, `RETURNFLOW` single recipient (`NR>0`) or `SPREAD` multi-node (`NR<0`, `U1DINT` block), `CHANGEC`/`IDCHNGTYP` transport, AUX, reuse. `NPDRT>0` fails explicitly; structured grids delegate to base `ModflowDrt`. |
 | `MfUsgBcf` / `MfUsgLpf` TABRICH | `flopy/mfusg/mfusgbcf.py`, `mfusglpf.py`, `_tabrich.py` | TABRICH items 1c (`IUZONTAB` zone map) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = capillary head / saturation / relative permeability) are now authored/loaded/written via a shared helper. For LPF the per-layer Richards arrays are skipped under TABRICH (matching `ITABRICH/=0`) and a token-index/`int` parse bug was fixed. Incomplete TABRICH writes fail explicitly. |
 

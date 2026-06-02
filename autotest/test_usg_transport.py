@@ -3533,20 +3533,22 @@ def test_mfusgqrt_nam_registry():
 
 
 def test_mfusgqrt_unsupported_modes_fail_explicitly(function_tmpdir):
-    """TRANSIENTQ raises NotImplementedError rather than partial-write.
+    """TRANSIENTQ combined with NPQRT>0 raises NotImplementedError on load.
 
-    (NPQRT>0 is now preserved -- see the Stage 4.4E parameter tests below.)
+    Plain TRANSIENTQ is supported as of Stage 4.5A; the combination with named
+    parameters is the remaining explicit failure (the Fortran reads BDQV past
+    its MXAQRT allocation when MXL>0). NPQRT>0 alone is preserved (Stage 4.4E).
     """
     from flopy.modflow import ModflowDis
 
     ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
 
-    # TRANSIENTQ option
+    # TRANSIENTQ + NPQRT>0 (4th token = NPQRT = 1)
     qrt_tq = function_tmpdir / "tq.qrt"
     qrt_tq.write_text(
-        "# qrt transientq\n"
-        "        10        10 0 0 0 RETURNFLOW TRANSIENTQ 5\n"
+        "# qrt transientq + params\n"
+        "        10        10 0 1 5 RETURNFLOW TRANSIENTQ 5\n"
         " 0    Stress Period 1\n"
     )
     with pytest.raises(NotImplementedError, match="TRANSIENTQ"):
@@ -3851,6 +3853,180 @@ def test_mfusgqrt_parameter_duplicate_active_fails(function_tmpdir):
     out = function_tmpdir / "dup.qrt"
     qrt.fn_path = str(out)
     with pytest.raises(ValueError, match="more than once"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+# --- Stage 4.5A: QRT TRANSIENTQ transient extraction-flow time series ------
+#
+# TRANSIENTQ overrides QRTF(4)=Q at each time step (GWF2QRT8U1AD); recipients
+# (NumRT/Rfprop) are untouched. The inline block (IQRTUN = the package unit) is
+# read in GWF2QRT8U1AR after the parameter definitions and before the first
+# stress period: a times control line + NBDQTIM times, then a values control
+# line + exactly MXAQRT rows of (node, NBDQTIM values). NBDQTIM<0 => staircase.
+# See USGT_STAGE4_05_QRT_TRANSIENTQ.md.
+
+
+def test_mfusgqrt_transientq_authoring(function_tmpdir):
+    """From-scratch QRT with a minimal TRANSIENTQ (interpolation, NBDQTIM=2):
+    the item-1 token, the inline control lines, and 1-based node tags."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True)
+    spd = {0: np.array([(0, -100.0, 0.75)], dtype=dtype).view(np.recarray)}
+    recips = {0: [[9, 10]]}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqa"),
+        stress_period_data=spd,
+        recipient_nodes=recips,
+        options=["RETURNFLOW"],
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-100.0, -50.0]],  # 1 sink (MXAQRT=1) x 2 times
+        transientq_nodes=[0],  # 0-based -> file 1
+    )
+    out = function_tmpdir / "tqa.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    text = out.read_text()
+
+    # TRANSIENTQ is the last item-1 option, count = NBDQTIM = 2 (positive).
+    assert text.splitlines()[1].rstrip().endswith("TRANSIENTQ 2")
+    # Inline: IQRTUN = the package's own unit, CNSTM = 1.0 (two control lines).
+    unit = qrt.unit_number[0]
+    assert text.count(f" {unit} 1.000000e+00") == 2
+    # Times line, then the MXAQRT=1 value row with the 1-based node tag.
+    assert "\n 0.000000e+00 1.000000e+01\n" in text
+    assert "\n 1 -1.000000e+02 -5.000000e+01\n" in text
+
+
+def test_mfusgqrt_transientq_roundtrip(function_tmpdir):
+    """load -> write -> reload preserves the TRANSIENTQ block and the per-SP
+    sink data; the written text is stable across the cycle."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True)
+    spd = {0: np.array([(0, -100.0, 0.75), (4, -30.0, 0.0)], dtype=dtype).view(
+        np.recarray
+    )}
+    recips = {0: [[9, 10], []]}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqr"),
+        stress_period_data=spd,
+        recipient_nodes=recips,
+        options=["RETURNFLOW"],
+        transientq_times=[0.0, 5.0, 10.0],
+        transientq_values=[[-100.0, -80.0, -60.0], [-30.0, -20.0, -10.0]],
+        transientq_nodes=[0, 4],  # MXAQRT = 2
+    )
+    out1 = function_tmpdir / "tqr1.qrt"
+    qrt.fn_path = str(out1)
+    qrt.write_file()
+
+    re1 = MfUsgQrt.load(str(out1), _qrt_model(function_tmpdir, "tqr2"), nper=1)
+    out2 = function_tmpdir / "tqr2.qrt"
+    re1.fn_path = str(out2)
+    re1.write_file()
+    re2 = MfUsgQrt.load(str(out2), _qrt_model(function_tmpdir, "tqr3"), nper=1)
+
+    # Written text is stable (body after the heading line).
+    assert out1.read_text().split("\n", 1)[1] == out2.read_text().split("\n", 1)[1]
+    # TRANSIENTQ block preserved.
+    assert re2._transientq_active()
+    assert np.allclose(re2.transientq_times, [0.0, 5.0, 10.0])
+    assert np.allclose(
+        re2.transientq_values, [[-100.0, -80.0, -60.0], [-30.0, -20.0, -10.0]]
+    )
+    assert re2.transientq_nodes == [0, 4]
+    assert re2.transientq_staircase is False
+    # Per-SP sink data still intact.
+    assert list(re2.stress_period_data[0]["node"]) == [0, 4]
+    assert re2.recipient_nodes[0][0] == [9, 10]
+    assert re2.recipient_nodes[0][1] == []
+
+
+def test_mfusgqrt_transientq_staircase(function_tmpdir):
+    """NBDQTIM<0 (staircase) round-trips: a negative item-1 count and
+    transientq_staircase=True."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(2, -10.0)], dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqs"),
+        stress_period_data=spd,
+        transientq_times=[0.0, 5.0, 10.0],
+        transientq_values=[[-1.0, -2.0, -3.0]],
+        transientq_nodes=[2],
+        transientq_staircase=True,
+    )
+    out = function_tmpdir / "tqs.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    assert out.read_text().splitlines()[1].rstrip().endswith("TRANSIENTQ -3")
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "tqs2"), nper=1)
+    assert re.transientq_staircase is True
+    assert np.allclose(re.transientq_times, [0.0, 5.0, 10.0])
+    assert np.allclose(re.transientq_values, [[-1.0, -2.0, -3.0]])
+
+
+def test_mfusgqrt_transientq_nodes_1based(function_tmpdir):
+    """transientq_nodes are 0-based internally and 1-based in the file."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(4, -10.0)], dtype=dtype).view(np.recarray)}
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqn"),
+        stress_period_data=spd,
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-5.0, -7.0]],
+        transientq_nodes=[4],  # 0-based -> file 5
+    )
+    out = function_tmpdir / "tqn.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    # Value row begins with the 1-based node tag 5.
+    assert "\n 5 -5.000000e+00 -7.000000e+00\n" in out.read_text()
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "tqn2"), nper=1)
+    assert re.transientq_nodes == [4]
+
+
+def test_mfusgqrt_transientq_with_params_fails(function_tmpdir):
+    """TRANSIENTQ together with QRT parameters (NPQRT>0) raises
+    NotImplementedError before the file is opened (no partial file)."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(0, -10.0)], dtype=dtype).view(np.recarray)}
+    params = {
+        "qp": {"partyp": "QRT", "parval": "1.0", "nlst": 1,
+               "data": np.array([(0, -10.0)], dtype=dtype).view(np.recarray),
+               "recipient_nodes": [[]]},
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqp"),
+        stress_period_data=spd,
+        parameters=params,
+        mxl=5,
+        active_params={0: ["qp"]},
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-1.0, -2.0]],
+        transientq_nodes=[0],
+    )
+    out = function_tmpdir / "tqp.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(NotImplementedError, match="TRANSIENTQ"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_transientq_dim_mismatch_fails(function_tmpdir):
+    """transientq_values not shaped (MXAQRT, NBDQTIM) raises ValueError before
+    the file is opened (the Fortran reads exactly MXAQRT rows of NBDQTIM)."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    spd = {0: np.array([(0, -10.0)], dtype=dtype).view(np.recarray)}  # MXAQRT=1
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "tqd"),
+        stress_period_data=spd,
+        transientq_times=[0.0, 10.0],
+        transientq_values=[[-1.0, -2.0], [-3.0, -4.0]],  # 2 rows, MXAQRT=1
+        transientq_nodes=[0, 1],
+    )
+    out = function_tmpdir / "tqd.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="MXAQRT"):
         qrt.write_file()
     assert not out.exists()
 
