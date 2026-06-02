@@ -31,12 +31,15 @@ array and `utl7u1.f`).
    (Fortran-spec + from-scratch authoring tests + round-trip + explicit
    unsupported-mode failures). The flow core, transport core (BCT/PCB/DDF/DPF),
    CLN, TVM, and the boundary conditions all author from Python.
-2. **No silent-wrong-write P0 remains for in-scope packages.** The project's
-   consistent *fail-explicitly* discipline (60+ `NotImplementedError` / writer
-   `ValueError` sites across `flopy/mfusg`) means unsupported modes refuse to
-   write rather than emit a partial/misread file. The single **latent** P0 is the
-   six base-class compatibility packages (§4, W1): they are *documented* unused,
-   not *guarded*.
+2. **No silent-wrong-write P0 remains.** The project's consistent
+   *fail-explicitly* discipline (60+ `NotImplementedError` / writer `ValueError`
+   sites across `flopy/mfusg`) means unsupported modes refuse to write rather
+   than emit a partial/misread file. The one *latent* P0 this audit flagged — the
+   base-class compatibility packages — was **closed by Stage 4.6A**: STR/SUB/SWT
+   are now guarded (`mfusgcompat.py`) so unstructured-`MfUsg` use fails
+   explicitly. SFR was *excluded* from the guard because it is empirically
+   DISU-validated (`freyberg_usg` loads/writes/runs it via base `ModflowSfr2`);
+   FHB/GAGE remain compatibility (Ex8). See §4 / §3.2–3.3.
 3. **The dead `CUNIT` slots are truly dead.** `EVS`, `RTS`, `RES`, `IBS` appear
    in `mfusg.f`'s `CUNIT` array but have **no reader** in USG-T 2.7 (`RES`/`IBS`
    dispatch is commented out with `CSP`; `EVS`/`RTS` have no `CALL` sites). So
@@ -77,7 +80,9 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | SGB | FA + **Param-definition-preserve** (no activations) + **Expanded** | Active SGB params abort the Fortran (`PARTYP='SGB'` vs `'G'`); `NP>0`/`INSTANCES` → `NotImplementedError`. |
 | QRT | FA + **ParamPreserve** (structural, not exec-guaranteed) + **Expanded** + `TRANSIENTQ` | Active param value scales `NumRT` not `Q` (Fortran bug); `NodQRT` not copied. From-scratch param authoring → `NotImplementedError`. |
 | DPT | FS-exec **except** `A-W_ADSORBIM` (explicit fail) | Immobile air-water adsorption unsupported (rare PFAS sub-mode). |
-| SFR, STR, GAGE, FHB, SUB, SWT | **Compat** | Base MODFLOW-2005 classes; USG-T unstructured format not validated. FHB/GAGE round-trip via base in `Ex8`; SFR/STR/SUB/SWT used by no target model. |
+| SFR | **Compat (DISU-validated)** | Base `ModflowSfr2`, kept enabled: `freyberg_usg` (DISU+SFR) loads → writes → runs via the base class in `test_usg.py`. *Not* a Full USG-T transport claim; not guarded. |
+| FHB, GAGE | **Compat** | Base classes; round-trip via base in the `Ex8` real model. Untouched by Stage 4.6A. |
+| STR, SUB, SWT | **Compat (guarded, Stage 4.6A)** | Base layout unvalidated for USG-T unstructured; `mfusgcompat.py` wrappers raise `NotImplementedError` on load/authoring for an unstructured `MfUsg` model. Used by no target model. |
 | HOB/DROB/RVOB/GBOB/CHOB/hyd, MNW1/2, UZF, GMG/PCG/SIP/DE4, LVDA/KDEP, SYF, lmt6, gwm, PATH/PTH | Intentionally absent | Observations/HUF/coupling/solvers; documented out of scope. |
 | EVS, RTS, RES, IBS | n/a (dead) | `CUNIT` placeholders with no functional reader in USG-T 2.7. |
 
@@ -106,16 +111,22 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
   `model.verbose` is False (`mfusg.py` prints "package load...skipped" only under
   verbose). Impact is *theoretical*: every functional USG-T 2.7 package is
   registered; only intentionally-absent obs/HUF/coupling packages would skip.
-- **L2 — Compat packages load via base classes** (SFR/STR/SUB/SWT); the USG-T
-  unstructured item layout is unvalidated, so a load could misread *if used*.
-  FHB/GAGE are proven via the `Ex8` real model.
+- **L2 — Compat-package load via base classes — addressed (Stage 4.6A).**
+  - **SFR:** kept on base `ModflowSfr2`; the USG-T unstructured layout is
+    empirically supported (`freyberg_usg` DISU+SFR loads via base in
+    `test_usg.py`). Compatibility/base support; **no** Full USG-T transport claim.
+  - **STR/SUB/SWT:** their USG-T unstructured layout is unvalidated, so they are
+    now **guarded** — `mfusgcompat.py` raises `NotImplementedError` on load for an
+    unstructured `MfUsg` model instead of mis-reading via the structured base.
+  - **FHB/GAGE:** compatibility retained (proven via the `Ex8` real model).
 
 ### 3.3 Writer gaps
 
-- **W1 — Compat packages write via base classes** (SFR/STR/SUB/SWT). If a USG-T
-  model used them, the base writer could emit a structured-format / semantically
-  different file **without warning** — the one latent P0. Mitigated only by "no
-  target/example model uses them"; not enforced by a guard.
+- **W1 — Compat-package write via base classes — resolved (Stage 4.6A).**
+  STR/SUB/SWT are guarded so a write/authoring on an unstructured `MfUsg` model
+  raises before any file is produced (no silent structured-format output). SFR
+  stays enabled (DISU-validated via `freyberg_usg`); FHB/GAGE unchanged (Ex8).
+  This closed the audit's one latent P0.
 - **W2 — OC `SAVE IBOUND`** preserved on write though USG-T 2.7's solver rejects
   it (`check()` warns); numeric-format OC is rewritten as words.
 
@@ -176,7 +187,8 @@ Priorities use the review's definitions:
 - **A3 — DPT `A-W_ADSORBIM`** (implement or formally keep deferred — old 4.6).
 - **A4 — EVT ETS-zonal time series + `NPEVT` param authoring.**
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`; `INSTANCES` (all param packages).**
-- **L2 — compat-package load validation** (or formal raw/text decision).
+- ~~**L2 — compat-package load validation.**~~ Addressed by Stage 4.6A
+  (STR/SUB/SWT guarded; SFR DISU-validated via `freyberg_usg`; FHB/GAGE via Ex8).
 - **W2 — OC `SAVE IBOUND` / numeric-format** behavior tightening.
 - **E2/E3 — OC BOOTSTRAPPING & MDT chained-decay exe verification.**
 

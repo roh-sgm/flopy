@@ -38,7 +38,9 @@ All priority tiers below have been worked through. Commits on `develop`:
 - **P4 — base-class packages:** GSF text round-trip in P4, promoted to **Full
   (authoring)** in Stage 4.2; LAK from-scratch authoring + round-trip tested in
   Stage 4 Card D (six bugs fixed; kept `✅` not Full, gaps listed) plus Ex8;
-  SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented).
+  SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented) — later refined by
+  Stage 4.6A: STR/SUB/SWT guarded, SFR kept (DISU-validated via `freyberg_usg`),
+  FHB/GAGE retained.
 - **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
   real-model run-validation is a documented manual tier (Ex* loads in CI).
 
@@ -969,6 +971,17 @@ Tasks:
   not Full with the gaps above listed precisely.)
 
 ### SFR / STR / GAGE / FHB / SUB / SWT
+
+> **Superseded by Stage 4.6A (2026-06-02).** The "all six compatibility-only,
+> not pursued" decision below was refined after the final gap audit. Current
+> truth: **SFR** is kept on the base class (DISU+SFR is validated by
+> `examples/data/freyberg_usg`, loaded/written/run in `autotest/test_usg.py`) —
+> compatibility/base support, *not* a Full USG-T transport claim. **STR/SUB/SWT**
+> are now **guarded** (`flopy/mfusg/mfusgcompat.py`): using them on an
+> unstructured `MfUsg` model raises `NotImplementedError` on load/authoring.
+> **FHB/GAGE** remain compatibility (round-trip via base in `Ex8`). See the
+> "Stage 4.6A — DONE" addendum and `USGT_STAGE4_09_FINAL_GAP_AUDIT.md`. The
+> historical text below is kept for provenance.
 
 Classes: base FloPy classes
 

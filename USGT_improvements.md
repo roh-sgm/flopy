@@ -542,6 +542,26 @@ honest, upstream-ready USG-T 2.7 story.
   `NotImplementedError`); abbreviated-form tests stay green. `-k "mfusgdrt or
   mfusgqrt or usgt_recipient"` **64**, focused **238**, exe **4**, combined
   **242** (ARM). See `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`.
+- **Stage 4.6A — STR/SUB/SWT compatibility guard on unstructured MfUsg
+  (executed):** the final gap audit (`USGT_STAGE4_09_FINAL_GAP_AUDIT.md`) flagged
+  the base-class compatibility packages as the one place a USG-T model could be
+  written silently wrong. New `flopy/mfusg/mfusgcompat.py` defines thin guarded
+  wrappers `MfUsgStr`/`MfUsgSub`/`MfUsgSwt` (registered in
+  `MfUsg.mfnam_packages`) that raise `NotImplementedError` on **load and
+  authoring** for an unstructured `MfUsg` model (`version=="mfusg"` and `not
+  structured`), before any read/write — no partial file. Structured `MfUsg`
+  delegates to the base class and plain `flopy.modflow.Modflow` is unaffected.
+  **SFR is deliberately not guarded**: the original "guard all four" plan was too
+  aggressive — `examples/data/freyberg_usg` is a DISU model that **uses SFR** and
+  is loaded → written → run via base `ModflowSfr2` in `autotest/test_usg.py`, so
+  unstructured SFR is empirically supported and a blanket guard would break those
+  passing tests. SFR stays compatibility/base support (DISU-validated via
+  `freyberg_usg`), *not* a Full USG-T transport claim; **FHB/GAGE** untouched
+  (Ex8). Code touched: `mfusgcompat.py` (new), `mfusg.py` (register STR/SUB/SWT),
+  `__init__.py` (exports). 3 tests (`-k compat`): load guard, write/authoring
+  guard, and a no-op + SFR/FHB/GAGE-registry-untouched check; `freyberg_usg` SFR
+  tests still pass; focused **241**, combined **245** (ARM). See
+  `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` / `USGT_STAGE4_07_COMPAT_PACKAGES.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
@@ -582,11 +602,12 @@ honest, upstream-ready USG-T 2.7 story.
   (5 original + 5 follow-up).
 - **Card 6 — base-class compatibility (SFR/STR/GAGE/FHB/SUB/SWT):** all six
   classified **Compatibility-only** in the roadmap (base MODFLOW-2005 classes;
-  CLN is the project's coupling). Usage scan: only **FHB and GAGE** appear in a
-  target/example model (the Ex8 lake model), where they load via the base class
-  and round-trip is exercised; SFR/STR/SUB/SWT are used by no target model and
-  are out of scope. No USG-T-specific semantics added; a dedicated per-package
-  card would be opened only if a real model requires it.
+  CLN is the project's coupling). Usage scan: **FHB and GAGE** appear in the Ex8
+  lake model (load via base, round-trip exercised), and **SFR** appears in the
+  `freyberg_usg` DISU model (loaded/written/run via base in `test_usg.py`).
+  *(Refined by Stage 4.6A, below — the "SFR/STR/SUB/SWT used by no target model"
+  wording was wrong for SFR: `freyberg_usg` uses DISU+SFR. SFR is kept on the
+  base class; STR/SUB/SWT, which no model uses, are now guarded.)*
 - **Card 7 — QRT/DRT recipient `U1DINT` controls:** the Fortran `U1DINT`
   technically accepts `EXTERNAL`/`OPEN/CLOSE` for recipient-node lists, but
   these are short inline blocks in practice. Decision: support `INTERNAL` and
@@ -693,9 +714,10 @@ explicitly rather than producing incomplete or mis-parsed files.
   `TRANSPORTBOUNDARY` / classic-transport authoring + round-trip tests (Stage 4
   Card D; six bugs fixed) plus the `Ex8_Lake` round-trip, but stays `✅` not Full
   (sill/connectivity + multi-lake authoring, TABLEINPUT table contents, and GAGE
-  remain out of scope). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility-only**
-  (base MODFLOW-2005 classes; USG-T unstructured records not validated; CLN is
-  the preferred coupling) — documented, not silently "supported".
+  remain out of scope). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility** base
+  MODFLOW-2005 classes; CLN is the preferred coupling. (Refined by Stage 4.6A:
+  STR/SUB/SWT guarded on unstructured `MfUsg`; SFR kept — DISU-validated via
+  `freyberg_usg`; FHB/GAGE retained via Ex8.)
 - **Post-processing (Priority 5):** `MfusgTransportListBudget` old/new format
   and multi-species isolation are tested. Real-model run-validation stays a
   manual, out-of-CI tier (see the Validation section below); the `Ex*`
