@@ -6071,7 +6071,8 @@ def test_mfusgets_parameter_instances_roundtrip(function_tmpdir):
     assert re.evtr_parm[0] == [("etsrate", "spring")]
 
 
-# --- Stage 3 Card 7: recipient-node U1DINT controls (INTERNAL/CONSTANT) -----
+# --- recipient-node U1DINT controls (INTERNAL/CONSTANT; EXTERNAL/OPEN-CLOSE
+# --- added in Stage 4.5B, see the dedicated recipient tests above) ----------
 
 def test_mfusgdrt_recipient_constant_u1dint(function_tmpdir):
     """A spreading recipient list written as CONSTANT expands to that node."""
@@ -6087,11 +6088,13 @@ def test_mfusgdrt_recipient_constant_u1dint(function_tmpdir):
     assert drt.recipient_nodes[0][0] == [4, 4, 4]
 
 
-def test_mfusg_recipient_external_u1dint_unsupported(function_tmpdir):
-    """EXTERNAL/OPEN-CLOSE recipient U1DINT lists fail explicitly (rare; deferred).
+def test_mfusg_recipient_external_u1dint_unresolved_fails(function_tmpdir):
+    """An EXTERNAL recipient U1DINT unit that ext_unit_dict cannot resolve fails
+    with an actionable NotImplementedError (no silent mis-read).
 
-    The Fortran U1DINT technically accepts these controls, but recipient lists
-    are short inline blocks in practice, so they are documented unsupported.
+    Recipient U1DINT EXTERNAL/OPEN-CLOSE *is* supported as of Stage 4.5B when the
+    unit resolves (see the dedicated recipient tests above); this case has no
+    ext_unit_dict entry for unit 88, so it cannot be resolved and is rejected.
     """
     drt_ext = function_tmpdir / "ext.drt"
     drt_ext.write_text(
