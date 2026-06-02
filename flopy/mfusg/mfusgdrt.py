@@ -29,6 +29,13 @@ A recipient list of length 1 is written inline (``NR > 0``); length > 1 is
 written as a spreading block (``NR < 0``). The two forms are physically
 equivalent for a single node, so spreading-of-one normalizes to inline.
 
+The spreading ``U1DINT`` block is read with the full set of control records
+(Stage 4.5B): ``INTERNAL`` / ``CONSTANT`` (inline) and ``EXTERNAL <unit>`` /
+``OPEN/CLOSE <fname>`` (resolved via ``ext_unit_dict`` / ``model.model_ws``),
+matching USG-T's ``U1DINT`` (utl7u1.f). On write the recipients are always
+emitted inline (``INTERNAL (FREE)``, ``Expanded valid write``) -- EXTERNAL /
+OPEN-CLOSE are not preserved.
+
 Notes
 -----
 The USG-T transport extensions (RETURNFLOW recipient nodes, ``CHANGEC`` /
@@ -56,7 +63,8 @@ Not supported (explicit failure rather than partial write):
   ``NotImplementedError``.
 * From-scratch parameter authoring (active parameters with no loaded
   definitions) -> ``NotImplementedError``.
-* ``EXTERNAL`` / ``OPEN/CLOSE`` spreading-node lists.
+* An ``EXTERNAL`` spreading-node unit that cannot be resolved via
+  ``ext_unit_dict`` -> ``NotImplementedError`` (inline the nodes instead).
 """
 
 import numpy as np
@@ -488,7 +496,7 @@ class MfUsgDrt(ModflowDrt):
         for idx in range(count):
             row = first_line if idx == 0 else source.readline()
             rec, recips = cls._parse_drain_tokens(
-                row.split(), returnflow, changec, naux, source
+                row.split(), returnflow, changec, naux, source, model, ext_unit_dict
             )
             records.append(rec)
             recip_lists.append(recips)
@@ -673,7 +681,9 @@ class MfUsgDrt(ModflowDrt):
         return options, aux_names, ipakcb, returnflow, changec, npdrt, mxl
 
     @staticmethod
-    def _parse_drain_tokens(toks, returnflow, changec, naux, f):
+    def _parse_drain_tokens(
+        toks, returnflow, changec, naux, f, model=None, ext_unit_dict=None
+    ):
         """Parse one drain line (+ spreading block); return (record, recipients)."""
         idx = 0
         node = int(toks[idx]) - 1
@@ -699,7 +709,9 @@ class MfUsgDrt(ModflowDrt):
             if nr > 0:
                 recips = [nr - 1]  # inline single recipient
             elif nr < 0:
-                nodes_1based = read_u1dint_list(f, -nr)  # spreading block
+                nodes_1based = read_u1dint_list(  # spreading block
+                    f, -nr, model, ext_unit_dict, package="DRT"
+                )
                 recips = [n - 1 for n in nodes_1based]
         for j in range(naux):
             rec.append(float(toks[idx + j]))

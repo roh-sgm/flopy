@@ -21,12 +21,15 @@ produced on output.
 import os
 
 
-def _open_close_filename(line):
-    """Extract the filename from an ``OPEN/CLOSE`` control line.
+def parse_open_close(line):
+    """Split an ``OPEN/CLOSE`` control line into ``(filename, rest_tokens)``.
 
     Supports an unquoted token or a single/double-quoted name (which may itself
     contain spaces), mirroring the MODFLOW ``URWORD`` quoted-word convention and
-    FloPy's quote-stripping for ``OPEN/CLOSE`` array records.
+    FloPy's quote-stripping for ``OPEN/CLOSE`` array records. ``rest_tokens`` is
+    whatever follows the filename on the record (e.g. a U1DINT
+    ``ICNSTNT FMTIN IPRN``), so callers that need those fields do not re-parse
+    the quoting.
     """
     parts = line.split(None, 1)  # ["OPEN/CLOSE", "<remainder>"]
     rest = parts[1].strip() if len(parts) > 1 else ""
@@ -34,10 +37,17 @@ def _open_close_filename(line):
         quote = rest[0]
         end = rest.find(quote, 1)
         if end != -1:
-            return rest[1:end]
-        return rest[1:].strip()  # unmatched quote: best effort
+            return rest[1:end], rest[end + 1 :].split()
+        return rest[1:].strip(), []  # unmatched quote: best effort
     tokens = rest.split()
-    return tokens[0] if tokens else ""
+    if not tokens:
+        return "", []
+    return tokens[0], tokens[1:]
+
+
+def _open_close_filename(line):
+    """Filename from an ``OPEN/CLOSE`` control line (see :func:`parse_open_close`)."""
+    return parse_open_close(line)[0]
 
 
 def _resolve_external_filename(model, ext_unit_dict, unit):

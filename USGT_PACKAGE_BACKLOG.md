@@ -438,6 +438,21 @@ Problem:
   5 new tests (external times/values, trailing option, negative node, non-unit
   `CNSTM` round-trip); `-k mfusgqrt` **31 passed**, focused **229**, combined
   **233** (ARM). Only `mfusgqrt.py` touched in code.
+- **DONE** (Stage 4.5B): recipient-node `U1DINT` `EXTERNAL`/`OPEN-CLOSE` support
+  for DRT and QRT. Audit: both read recipients with `U1DINT` (`gwf2QRT8u.f:1057`,
+  `gwf2drt8u.f:833`/`:1005`), so the same control records as any U1DINT array
+  apply. `read_u1dint_list` (`_usgt_returnflow.py`) now resolves `EXTERNAL <unit>`
+  via `ext_unit_dict` (+ `model_ws`) and `OPEN/CLOSE <fname>` (quote-aware,
+  spaces) by reusing `_usgt_list._resolve_external_filename` + a shared
+  `parse_open_close`; the `ICNSTNT` multiplier is applied as in `INTERNAL`. DRT
+  (spreading `NR<0`) and QRT both call the one helper (no duplication). Write is
+  unchanged — recipients are expanded inline `INTERNAL (FREE)` 1-based (`Expanded
+  valid write`). Unresolved `EXTERNAL` → actionable `NotImplementedError`. 5 new
+  tests (DRT/QRT EXTERNAL, QRT/DRT OPEN-CLOSE incl. a quoted name with a space,
+  unresolved-EXTERNAL fail); `-k "mfusgdrt or mfusgqrt or usgt_recipient"` **60
+  passed**, focused **234**, combined **238** (ARM). Touched `_usgt_returnflow.py`,
+  `_usgt_list.py`, `mfusgqrt.py`, `mfusgdrt.py`. See
+  `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`. **This closes Stage 4.5.**
 
 Fortran facts to verify:
 

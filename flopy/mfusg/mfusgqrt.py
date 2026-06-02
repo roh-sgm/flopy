@@ -29,6 +29,12 @@ File layout (unstructured, free format)::
 ``ITMP < 0`` reuses the previous stress period's sinks and recipients.
 
 Internal ``node`` and recipient values are 0-based; the file is 1-based.
+The recipient ``U1DINT`` block is read with the full set of control records
+(Stage 4.5B): ``INTERNAL`` / ``CONSTANT`` (inline) and ``EXTERNAL <unit>`` /
+``OPEN/CLOSE <fname>`` (resolved via ``ext_unit_dict`` / ``model.model_ws``),
+matching USG-T's ``U1DINT`` (utl7u1.f). On write the recipients are always
+emitted inline (``INTERNAL (FREE)``, ``Expanded valid write``) -- EXTERNAL /
+OPEN-CLOSE are not preserved.
 
 The ``TRANSIENTQ`` option (Stage 4.5A) supplies a transient extraction-flow time
 series that overrides ``QRTF(4)=Q`` at every time step (``GWF2QRT8U1AD``);
@@ -79,8 +85,8 @@ Not supported (explicit failure rather than partial write):
 * A ``TRANSIENTQ`` option that is not last on item 1: any trailing token ->
   load raises ``ValueError`` (the Fortran ``TRANSIENTQ`` branch does not loop
   back, so USG-T would ignore it).
-* ``EXTERNAL`` / ``OPEN/CLOSE`` recipient-node lists (see
-  :mod:`flopy.mfusg._usgt_returnflow`).
+* An ``EXTERNAL`` recipient-node unit that cannot be resolved via
+  ``ext_unit_dict`` -> ``NotImplementedError`` (inline the nodes instead).
 """
 
 import numpy as np
@@ -823,7 +829,9 @@ class MfUsgQrt(Package):
         recip_lists = []
         for i in range(count):
             if returnflow and numrt_list[i] > 0:
-                nodes_1based = read_u1dint_list(source, numrt_list[i])
+                nodes_1based = read_u1dint_list(
+                    source, numrt_list[i], model, ext_unit_dict, package="QRT"
+                )
                 recip_lists.append([n - 1 for n in nodes_1based])
             else:
                 recip_lists.append([])

@@ -500,6 +500,30 @@ honest, upstream-ready USG-T 2.7 story.
   (external times/values, trailing option, negative node, non-unit `CNSTM`
   round-trip); `-k mfusgqrt` **31**, focused **229**, exe **4**, combined **233**
   (ARM). See `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
+- **Stage 4.5B — DRT/QRT recipient-node U1DINT EXTERNAL/OPEN-CLOSE (executed):**
+  closes the last Stage 4.5 gap. Audit: both packages read recipient nodes with
+  `U1DINT` (`gwf2QRT8u.f:1057` `CALL U1DINT(NodQRT(IRT),...)`;
+  `gwf2drt8u.f:833`/`:1005` `CALL U1DINT(NodDRT(IRTSTRT),...)`), and `U1DINT`
+  (utl7u1.f) honors `CONSTANT`/`INTERNAL`/`EXTERNAL <unit>`/`OPEN/CLOSE <fname>`
+  with an `ICNSTNT FMTIN IPRN` tail and an `ICNSTNT` multiplier — so external
+  controls apply to recipient lists like any U1DINT array. `read_u1dint_list`
+  (`_usgt_returnflow.py`) previously rejected `EXTERNAL`/`OPEN-CLOSE`; it now
+  resolves them, reusing `_usgt_list._resolve_external_filename` and a new shared
+  `parse_open_close` (factored out of `_open_close_filename`, returning the
+  filename **and** the remaining `ICNSTNT FMTIN IPRN` tokens, quote-aware incl.
+  spaces). Both DRT (spreading `NR<0`) and QRT call the single helper —
+  `model`/`ext_unit_dict` are threaded through `_parse_drain_tokens` and
+  `_read_sink_rows` — so no logic is duplicated. Internal node ids stay 0-based,
+  the file 1-based. Write is unchanged: recipients are always expanded inline
+  `INTERNAL (FREE)` 1-based (`Expanded valid write`); EXTERNAL/OPEN-CLOSE are not
+  preserved. An `EXTERNAL` unit absent from `ext_unit_dict` raises an actionable
+  `NotImplementedError` (not a raw `ValueError` or a silent mis-read). Touched
+  `_usgt_returnflow.py`, `_usgt_list.py`, `mfusgqrt.py`, `mfusgdrt.py`. Tests: 5
+  new (DRT/QRT EXTERNAL incl. write-back-inline assertions; QRT OPEN/CLOSE with a
+  double-quoted name containing a space; DRT OPEN/CLOSE; unresolved-EXTERNAL
+  fail); `-k "mfusgdrt or mfusgqrt or usgt_recipient"` **60**, focused **234**,
+  exe **4**, combined **238** (ARM). See
+  `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
@@ -618,8 +642,8 @@ all in `autotest/test_usg_transport.py`):
 | Package | File | What it does |
 |---|---|---|
 | `MfUsgSgb` | `flopy/mfusg/mfusgsgb.py` | **New.** Specified Gradient Boundary (`glo2sgbu1.f`). Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse. Registered as `"sgb"`, so `MfUsg.load()` no longer silently skips SGB. `NPSGB>0` fails explicitly. |
-| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` structurally preserved (Stage 4.4E); inline `TRANSIENTQ` supported (Stage 4.5A). `TRANSIENTQ`+`NPQRT>0`, external-unit `TRANSIENTQ`, from-scratch parameter authoring and `INSTANCES` fail explicitly. Registered as `"qrt"`. |
-| `MfUsgDrt` | `flopy/mfusg/mfusgdrt.py` | **New** (replaces base `ModflowDrt` in the registry). DRT8 (`gwf2drt8u.f`): EL+COND, `RETURNFLOW` single recipient (`NR>0`) or `SPREAD` multi-node (`NR<0`, `U1DINT` block), `CHANGEC`/`IDCHNGTYP` transport, AUX, reuse. `NPDRT>0` fails explicitly; structured grids delegate to base `ModflowDrt`. |
+| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` structurally preserved (Stage 4.4E); inline `TRANSIENTQ` supported (Stage 4.5A); recipient `U1DINT` `EXTERNAL`/`OPEN-CLOSE` read + expanded inline on write (Stage 4.5B). `TRANSIENTQ`+`NPQRT>0`, external-unit `TRANSIENTQ`, unresolvable `EXTERNAL` recipients, from-scratch parameter authoring and `INSTANCES` fail explicitly. Registered as `"qrt"`. |
+| `MfUsgDrt` | `flopy/mfusg/mfusgdrt.py` | **New** (replaces base `ModflowDrt` in the registry). DRT8 (`gwf2drt8u.f`): EL+COND, `RETURNFLOW` single recipient (`NR>0`) or `SPREAD` multi-node (`NR<0`, `U1DINT` block), `CHANGEC`/`IDCHNGTYP` transport, AUX, reuse. The spreading `U1DINT` block reads `EXTERNAL`/`OPEN-CLOSE` + expanded inline on write (Stage 4.5B). `NPDRT>0` list parameters preserved (Stage 4.4D); structured grids delegate to base `ModflowDrt`. |
 | `MfUsgBcf` / `MfUsgLpf` TABRICH | `flopy/mfusg/mfusgbcf.py`, `mfusglpf.py`, `_tabrich.py` | TABRICH items 1c (`IUZONTAB` zone map) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = capillary head / saturation / relative permeability) are now authored/loaded/written via a shared helper. For LPF the per-layer Richards arrays are skipped under TABRICH (matching `ITABRICH/=0`) and a token-index/`int` parse bug was fixed. Incomplete TABRICH writes fail explicitly. |
 
 Shared helpers: `flopy/mfusg/_usgt_returnflow.py` (DRT/QRT recipient-node

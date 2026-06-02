@@ -5694,6 +5694,123 @@ def test_usgt_list_external_positive_with_ext_unit_dict(function_tmpdir):
     assert drt.recipient_nodes[0][0] == [10, 11]
 
 
+# --- Stage 4.5B: recipient U1DINT EXTERNAL / OPEN-CLOSE -----------------------
+#
+# The DRT/QRT recipient-node lists are read with U1DINT (utl7u1.f), which honors
+# INTERNAL/CONSTANT (inline) and EXTERNAL <unit> / OPEN/CLOSE <fname> (separate
+# file). These exercise the *recipient block itself* being external (distinct
+# from the main list being EXTERNAL, covered above). On write the recipients are
+# always expanded inline (Expanded valid write), never preserved as EXTERNAL.
+
+
+def test_mfusgqrt_recipient_u1dint_external(function_tmpdir):
+    """QRT recipient U1DINT as EXTERNAL <unit> loads via ext_unit_dict (0-based),
+    and write_file re-emits it inline 1-based (no EXTERNAL/OPEN-CLOSE)."""
+    from flopy.utils.mfreadnam import NamData
+
+    (function_tmpdir / "qrecip.dat").write_text(" 10 11\n")  # 1-based -> 0-based 9,10
+    p = function_tmpdir / "qext.qrt"
+    p.write_text(
+        "# qrt external recipient\n"
+        "        1         2 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -1.000000e+02  2  7.500000e-01\n"
+        "EXTERNAL 81\n"
+    )
+    eud = {81: NamData("DATA", "qrecip.dat", None, {})}
+    qrt = MfUsgQrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict=eud
+    )
+    assert qrt.recipient_nodes[0][0] == [9, 10]
+
+    out = function_tmpdir / "qext_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    text = out.read_text()
+    assert "EXTERNAL" not in text and "OPEN/CLOSE" not in text  # not preserved
+    assert "INTERNAL" in text and "\n 10 11\n" in text  # expanded inline, 1-based
+
+
+def test_mfusgdrt_recipient_u1dint_external(function_tmpdir):
+    """DRT spreading (NR<0) recipient U1DINT as EXTERNAL <unit> loads via
+    ext_unit_dict (0-based), and write_file re-emits it inline 1-based."""
+    from flopy.utils.mfreadnam import NamData
+
+    (function_tmpdir / "drecip.dat").write_text(" 8 9\n")  # 1-based -> 0-based 7,8
+    p = function_tmpdir / "dext.drt"
+    p.write_text(
+        "# drt external spreading\n"
+        "         2 0 0 0 RETURNFLOW SPREAD 10\n"
+        " 1 SP1\n"
+        " 1  5.000000e+00  1.000000e+02  -2  7.000000e-01\n"
+        "EXTERNAL 82\n"
+    )
+    eud = {82: NamData("DATA", "drecip.dat", None, {})}
+    drt = MfUsgDrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict=eud
+    )
+    assert drt.recipient_nodes[0][0] == [7, 8]
+
+    out = function_tmpdir / "dext_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    text = out.read_text()
+    assert "EXTERNAL" not in text and "OPEN/CLOSE" not in text
+    assert "INTERNAL" in text and "\n 8 9\n" in text
+
+
+def test_mfusgqrt_recipient_u1dint_open_close_quoted(function_tmpdir):
+    """QRT recipient U1DINT as OPEN/CLOSE with a double-quoted filename that
+    contains a space (quote-aware parsing)."""
+    (function_tmpdir / "my recips.dat").write_text(" 3 4 5\n")  # -> 0-based 2,3,4
+    p = function_tmpdir / "qoc.qrt"
+    p.write_text(
+        "# qrt open/close quoted\n"
+        "        1         3 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -5.000000e+01  3  5.000000e-01\n"
+        'OPEN/CLOSE "my recips.dat"\n'
+    )
+    qrt = MfUsgQrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
+    assert qrt.recipient_nodes[0][0] == [2, 3, 4]
+
+
+def test_mfusgdrt_recipient_u1dint_open_close(function_tmpdir):
+    """DRT spreading recipient U1DINT as OPEN/CLOSE <fname> (unquoted)."""
+    (function_tmpdir / "dspread.dat").write_text(" 6 7\n")  # -> 0-based 5,6
+    p = function_tmpdir / "doc.drt"
+    p.write_text(
+        "# drt open/close\n"
+        "         2 0 0 0 RETURNFLOW SPREAD 10\n"
+        " 1 SP1\n"
+        " 1  5.000000e+00  1.000000e+02  -2  7.000000e-01\n"
+        "OPEN/CLOSE dspread.dat\n"
+    )
+    drt = MfUsgDrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
+    assert drt.recipient_nodes[0][0] == [5, 6]
+
+
+def test_mfusgqrt_recipient_u1dint_external_unresolved_fails(function_tmpdir):
+    """An EXTERNAL recipient unit absent from ext_unit_dict raises an actionable
+    NotImplementedError (not a raw ValueError or a silent mis-read)."""
+    p = function_tmpdir / "qbad.qrt"
+    p.write_text(
+        "# qrt external unresolved\n"
+        "        1         2 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -1.000000e+02  2  7.500000e-01\n"
+        "EXTERNAL 77\n"
+    )
+    with pytest.raises(NotImplementedError, match=r"EXTERNAL.*77|77.*EXTERNAL"):
+        MfUsgQrt.load(
+            str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+        )
+
+
 def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
     """DRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
     ml = _usgt_unstructured_model(function_tmpdir)
