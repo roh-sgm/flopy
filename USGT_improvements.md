@@ -412,6 +412,24 @@ honest, upstream-ready USG-T 2.7 story.
   updated. Only `MfUsgDrt` touched in code. Tests: `-k mfusgdrt` **22 passed**;
   `-k "mfusgdrt or usgt_list"` **25**; focused **203**, exe **4**, combined
   **207** (ARM). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
+- **Stage 4.4E — QRT list-parameter preservation, structural-only (executed):**
+  completes the list-parameter family. Audit-first, per the SGB/DRT lessons:
+  QRT is type-consistent (def + activation both `PARTYP='QRT'`,
+  gwf2QRT8u.f:183/:1118), so active QRT params are type-valid. But the audit
+  found **the parameter value scales the wrong field**: `SGWF2QRT8LS` uses
+  `IPVL=5`, scaling `QRTF(5)=NumRT` (recipient count), not `QRTF(4)=Q` — a
+  Fortran bug (`SFAC` correctly scales `Q` at `ISCLOC=4`); and, like DRT,
+  `NodQRT` is not copied on activation. So QRT is classified **structural
+  round-trip preserving, not execution-guaranteed** (honest, not "semantic
+  full"). `NPQRT>0` definitions (with recipient `U1DINT` blocks read after the
+  rows), `MXAQRT` (active total per period), `MXRTCELLS` (definition recipients),
+  and per-SP `ITMP NP` activations all round-trip; FloPy does **not** apply the
+  parameter value to `Q`. From-scratch authoring / `INSTANCES` →
+  `NotImplementedError`; `MXL`/consistency → `ValueError`; `TRANSIENTQ` still
+  fails. Reuses the shared list-parameter helpers + a factored `_read_sink_rows`.
+  Only `MfUsgQrt` touched in code. Tests: `-k mfusgqrt` **18 passed** (10 new);
+  `-k "mfusgqrt or usgt_list"` **21**; focused **213**, exe **4**, combined
+  **217** (ARM). See `USGT_STAGE4_04_PARAMETERS_QRT.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

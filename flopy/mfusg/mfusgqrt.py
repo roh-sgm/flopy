@@ -23,9 +23,34 @@ File layout (unstructured, free format)::
 
 Internal ``node`` and recipient values are 0-based; the file is 1-based.
 
-Not supported in this version (explicit failure rather than partial write):
+Named parameters (``NPQRT > 0``) are **structurally preserved** (load -> write ->
+reload) as of Stage 4.4E, but **not execution-guaranteed**. QRT is type-consistent
+(definitions and activations both use ``PARTYP='QRT'``: ``UPARLSTRP`` at
+``gwf2QRT8u.f:183`` and ``SGWF2QRT8LS`` at ``gwf2QRT8u.f:1118``), so an active QRT
+parameter is type-valid. However, two USG-T 2.7 Fortran issues mean FloPy can only
+promise faithful round-trip, not guaranteed execution, for activated QRT
+parameters:
 
-* Named parameters (``NPQRT > 0``).
+* **the parameter value scales the wrong field.** ``SGWF2QRT8LS`` uses
+  ``IPVL1=IPVL2=5`` (``gwf2QRT8u.f:1119-1120``), i.e. it scales ``QRTF(5)=NumRT``
+  (the *recipient count*), not ``QRTF(4)=Q``. ``SFAC`` correctly scales ``Q``
+  (``ISCLOC=4``), so this is a Fortran bug: with ``PARVAL != 1.0`` the recipient
+  count is corrupted. FloPy does **not** apply the parameter value to ``Q``.
+* **recipient nodes are not copied on activation.** ``SGWF2QRT8LS`` copies
+  ``QRTF`` but not ``NodQRT``, so an activated parameter's RETURNFLOW recipients
+  are not resolved at run time (same limitation as DRT).
+
+The ``NPQRT``/``MXL`` count is in item 1 (no separate ``PARAMETER`` line); each
+parameter owns ``NLST`` sink rows with their recipient ``U1DINT`` blocks (read
+after the rows, in sink order). Per stress period, ``ITMP NP`` gives the
+non-parametric count and the number of active parameters.
+
+Not supported (explicit failure rather than partial write):
+
+* Parameter ``INSTANCES`` (``NUMINST>0``): the Fortran supports them, FloPy does
+  not yet -> load raises ``NotImplementedError``.
+* From-scratch parameter authoring (active parameters with no loaded
+  definitions) -> ``NotImplementedError``.
 * The ``TRANSIENTQ`` transient-flow time-series option.
 * ``EXTERNAL`` / ``OPEN/CLOSE`` recipient-node lists (see
   :mod:`flopy.mfusg._usgt_returnflow`).
@@ -35,6 +60,12 @@ import numpy as np
 
 from ..pakbase import Package
 from ._usgt_list import begin_list_block
+from ._usgt_parameters import (
+    read_active_list_parameters,
+    read_list_parameter_header,
+    write_active_list_parameters,
+    write_list_parameter_header,
+)
 from ._usgt_returnflow import read_u1dint_list, write_u1dint_list
 from .mfusg import MfUsg
 
@@ -79,6 +110,9 @@ class MfUsgQrt(Package):
         recipient_nodes=None,
         dtype=None,
         options=None,
+        parameters=None,
+        mxl=0,
+        active_params=None,
         extension="qrt",
         unitnumber=None,
         filenames=None,
@@ -129,6 +163,16 @@ class MfUsgQrt(Package):
         }
         self.recipient_nodes = recipient_nodes or {}
 
+        # Preserved QRT list-parameter state (set by load when NPQRT > 0):
+        #   parameters: {name: {"partyp","parval","nlst","data","recipient_nodes"}}
+        #     (rows 0-based; recipient_nodes is one 0-based list per definition row)
+        #   mxl:        MXL from item 1 (max parameter list entries)
+        #   active_params: {kper: [name, ...]} active parameters per stress period
+        # See module docstring: structurally preserved, not execution-guaranteed.
+        self.parameters = parameters
+        self.mxl = mxl
+        self.active_params = active_params if active_params is not None else {}
+
         if add_package:
             self.parent.add_package(self)
 
@@ -167,7 +211,7 @@ class MfUsgQrt(Package):
         return n
 
     def _aux_field_names(self):
-        return list(self.dtype.names[self._base_field_count():])
+        return list(self.dtype.names[self._base_field_count() :])
 
     def _to_recarray(self, data):
         if data is None:
@@ -202,43 +246,160 @@ class MfUsgQrt(Package):
             )
         return recips
 
+    def _validate_parameter_write(self):
+        """Validate preserved QRT parameter state before a parameterized write.
+
+        Raises ``NotImplementedError`` for from-scratch authoring (active
+        parameters with no loaded definitions) and ``ValueError`` for
+        inconsistent definitions, so a parameterized item 1 is never written
+        without a complete, consistent body. Validation runs before the file is
+        opened, so no partial file is produced.
+        """
+        if not self.parameters:
+            raise NotImplementedError(
+                "MfUsgQrt.write_file cannot author QRT parameter definitions "
+                "from scratch (active parameters without loaded definitions). "
+                "Parameter preservation is supported for files read by "
+                "MfUsgQrt.load; for from-scratch input use no parameters."
+            )
+        total = 0
+        for name, pdef in self.parameters.items():
+            missing = [
+                k
+                for k in ("partyp", "parval", "nlst", "data", "recipient_nodes")
+                if k not in pdef
+            ]
+            if missing:
+                raise ValueError(
+                    f"MfUsgQrt.write_file: parameter '{name}' is missing keys "
+                    f"{missing} (needs partyp, parval, nlst, data, "
+                    "recipient_nodes)."
+                )
+            if len(pdef["data"]) != pdef["nlst"]:
+                raise ValueError(
+                    f"MfUsgQrt.write_file: parameter '{name}' declares nlst="
+                    f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
+                )
+            if len(pdef["recipient_nodes"]) != pdef["nlst"]:
+                raise ValueError(
+                    f"MfUsgQrt.write_file: parameter '{name}' has "
+                    f"{len(pdef['recipient_nodes'])} recipient lists but nlst="
+                    f"{pdef['nlst']} (need one per definition row)."
+                )
+            total += pdef["nlst"]
+        if self.mxl <= 0:
+            raise ValueError(
+                "MfUsgQrt.write_file: MXL (item 1) must be > 0 when QRT "
+                f"parameter definitions are present; got mxl={self.mxl}."
+            )
+        if self.mxl < total:
+            raise ValueError(
+                f"MfUsgQrt.write_file: MXL ({self.mxl}) must be >= the total "
+                f"number of parameter list entries ({total})."
+            )
+        defined = {name.lower() for name in self.parameters}
+        for kper, names in self.active_params.items():
+            for nm in names:
+                if nm.lower() not in defined:
+                    raise ValueError(
+                        f"MfUsgQrt.write_file: active parameter '{nm}' (stress "
+                        f"period {kper}) is not defined in parameters."
+                    )
+
+    def _max_active_sinks(self):
+        """Max active sink-return cells in any stress period (the Fortran's
+        NQRTCL, which must not exceed MXAQRT).
+
+        Each active parameter contributes its NLST rows on top of the
+        non-parametric sinks (gwf2QRT8u.f: SGWF2QRT8LS does
+        ``NQRTCL = NQRTCL + NLST`` and aborts if ``NQRTCL > MXAQRT``). ``ITMP<0``
+        reuse carries the previous period's non-parametric count.
+        """
+        mx = 0
+        prev_nonparam = 0
+        for kper in range(self.parent.nper):
+            if kper in self.stress_period_data:
+                prev_nonparam = len(self.stress_period_data[kper])
+            nonparam = prev_nonparam
+            active = 0
+            for name in self.active_params.get(kper, []):
+                pdef = self.parameters.get(name) if self.parameters else None
+                if pdef is not None:
+                    active += pdef["nlst"]
+            mx = max(mx, nonparam + active)
+        return mx
+
+    def _max_rt_cells(self):
+        """Max total recipient nodes (NodQRT): the max non-parametric total per
+        stress period, and the parameter definitions (read into NodQRT in AR)."""
+        mx = 0
+        for kper, recs in self.recipient_nodes.items():
+            if kper in self.stress_period_data:
+                mx = max(mx, sum(len(r) for r in recs))
+        if self.parameters:
+            def_total = sum(
+                len(r)
+                for pdef in self.parameters.values()
+                for r in pdef.get("recipient_nodes", [])
+            )
+            mx = max(mx, def_total)
+        return mx
+
     def write_file(self):
         """Write the package file in MODFLOW-USG-T QRT format."""
+        preserve = bool(self.parameters) or any(self.active_params.values())
+        if preserve:
+            self._validate_parameter_write()
         nper = self.parent.nper
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
 
-        mxaqrt = max((len(v) for v in self.stress_period_data.values()), default=0)
-        mxrtcells = 0
-        for kper, recs in self.recipient_nodes.items():
-            if kper in self.stress_period_data:
-                mxrtcells = max(mxrtcells, sum(len(r) for r in recs))
+        mxaqrt = self._max_active_sinks()
+        mxrtcells = self._max_rt_cells()
+        npqrt = len(self.parameters) if preserve else 0
+        mxl = self.mxl if preserve else 0
 
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
 
             # Item 1: MXAQRT MXRTCELLS IQRTCB NPQRT MXL [options]
-            line = f" {mxaqrt:9d} {mxrtcells:9d} {self.ipakcb} 0 0"
+            line = f" {mxaqrt:9d} {mxrtcells:9d} {self.ipakcb} {npqrt} {mxl}"
             for opt in self.options:
                 line += f" {opt}"
             f.write(line + "\n")
 
+            # Items 2-3: parameter definitions (UPARLSTRP header + NLST sink rows
+            # + their recipient U1DINT blocks).
+            if preserve:
+                for name, pdef in self.parameters.items():
+                    write_list_parameter_header(
+                        f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
+                    )
+                    self._write_sink_block(
+                        f, pdef["data"], pdef["recipient_nodes"], has_aux, aux_names
+                    )
+
             for kper in range(nper):
+                active = self.active_params.get(kper, []) if preserve else []
                 if kper not in self.stress_period_data:
-                    f.write(f" -1    Stress Period {kper + 1}\n")
+                    f.write(f" -1 {len(active)}    Stress Period {kper + 1}\n")
+                    write_active_list_parameters(f, active)
                     continue
                 recarray = self.stress_period_data[kper]
                 recips = self._validated_recipients(kper, len(recarray))
-                f.write(f" {len(recarray)} 0    Stress Period {kper + 1}\n")
-                for i, rec in enumerate(recarray):
-                    rnodes = recips[i]
-                    self._write_sink_line(f, rec, len(rnodes), has_aux, aux_names)
-                # Recipient-node U1DINT blocks, in sink order, skipping NumRT==0
-                if self.returnflow:
-                    for i in range(len(recarray)):
-                        rnodes = recips[i]
-                        if len(rnodes) > 0:
-                            write_u1dint_list(f, [int(n) + 1 for n in rnodes])
+                f.write(f" {len(recarray)} {len(active)}    Stress Period {kper + 1}\n")
+                self._write_sink_block(f, recarray, recips, has_aux, aux_names)
+                # Active-parameter records (SGWF2QRT8LS) follow the non-param rows.
+                write_active_list_parameters(f, active)
+
+    def _write_sink_block(self, f, recarray, recips, has_aux, aux_names):
+        """Write the sink rows then their recipient U1DINT blocks (sink order)."""
+        for i, rec in enumerate(recarray):
+            self._write_sink_line(f, rec, len(recips[i]), has_aux, aux_names)
+        if self.returnflow:
+            for i in range(len(recarray)):
+                if len(recips[i]) > 0:
+                    write_u1dint_list(f, [int(n) + 1 for n in recips[i]])
 
     def _write_sink_line(self, f, rec, numrt, has_aux, aux_names):
         line = f" {int(rec['node']) + 1}  {float(rec['q']):.6e}"
@@ -272,14 +433,43 @@ class MfUsgQrt(Package):
         while line.startswith("#"):
             line = f.readline()
 
-        options, aux_names, ipakcb, returnflow, changec = cls._parse_header(line)
+        options, aux_names, ipakcb, returnflow, changec, npqrt, mxl = cls._parse_header(
+            line
+        )
         dtype = cls.get_default_dtype(
             returnflow=returnflow, changec=changec, aux_names=aux_names
         )
         naux = len(aux_names)
 
+        # Items 2-3: NPQRT parameter definitions (UPARLSTRP header + NLST rows +
+        # recipient blocks). Structurally preserved -- see module docstring.
+        parameters = None
+        if npqrt > 0:
+            parameters = {}
+            for _ in range(npqrt):
+                name, partyp, parval, nlst, numinst = read_list_parameter_header(
+                    f.readline()
+                )
+                if numinst > 0:
+                    raise NotImplementedError(
+                        "MfUsgQrt.load: QRT parameter INSTANCES (NUMINST>0) are "
+                        "supported by the Fortran but not yet by FloPy (instances "
+                        "combined with per-row recipient lists)."
+                    )
+                data, recips = cls._read_sink_rows(
+                    f, nlst, returnflow, changec, naux, dtype, model, ext_unit_dict
+                )
+                parameters[name] = {
+                    "partyp": partyp,
+                    "parval": parval,
+                    "nlst": nlst,
+                    "data": data,
+                    "recipient_nodes": recips,
+                }
+
         spd = {}
         recipient_nodes = {}
+        active_params = {}
         prev_recarray = None
         prev_recips = None
 
@@ -287,51 +477,33 @@ class MfUsgQrt(Package):
             line = f.readline()
             if not line:
                 break
-            itmp = int(line.split()[0])
+            parts = line.split()
+            itmp = int(parts[0])
+            # The per-SP header is "ITMP NP" only when parameters exist; with
+            # NPQRT==0 it is just "ITMP" (parts[1:] may be an inline comment).
+            np_sp = int(parts[1]) if (npqrt > 0 and len(parts) > 1) else 0
 
             if itmp < 0:
                 if prev_recarray is not None:
                     spd[kper] = prev_recarray.copy()
                     recipient_nodes[kper] = [list(r) for r in prev_recips]
-                continue
-
-            # Honor leading SFAC / EXTERNAL / OPEN-CLOSE list controls; rows and
-            # recipient U1DINT blocks are read from the (possibly redirected)
-            # source. SFAC scales Q (Fortran ISCLOC=4).
-            source, sfac, first_line, to_close = (f, 1.0, None, None)
-            if itmp > 0:
-                source, sfac, first_line, to_close = begin_list_block(
-                    f, model, ext_unit_dict, package="QRT"
+            else:
+                recarray, recip_lists = cls._read_sink_rows(
+                    f, itmp, returnflow, changec, naux, dtype, model, ext_unit_dict
                 )
+                spd[kper] = recarray
+                recipient_nodes[kper] = recip_lists
+                prev_recarray = recarray
+                prev_recips = recip_lists
 
-            records = []
-            numrt_list = []
-            for idx in range(itmp):
-                row = first_line if idx == 0 else source.readline()
-                rec, numrt = cls._parse_sink_tokens(
-                    row.split(), returnflow, changec, naux
-                )
-                records.append(rec)
-                numrt_list.append(numrt)
-
-            recip_lists = []
-            for i in range(itmp):
-                if returnflow and numrt_list[i] > 0:
-                    nodes_1based = read_u1dint_list(source, numrt_list[i])
-                    recip_lists.append([n - 1 for n in nodes_1based])
-                else:
-                    recip_lists.append([])
-
-            if to_close is not None:
-                source.close()
-
-            recarray = np.array(records, dtype=dtype).view(np.recarray)
-            if sfac != 1.0 and len(recarray) > 0:
-                recarray["q"] = recarray["q"] * sfac
-            spd[kper] = recarray
-            recipient_nodes[kper] = recip_lists
-            prev_recarray = recarray
-            prev_recips = recip_lists
+            # Active-parameter records (SGWF2QRT8LS) for this stress period.
+            if np_sp > 0:
+                if not parameters:
+                    raise NotImplementedError(
+                        "MfUsgQrt.load: active QRT parameters (NP>0) without "
+                        "NPQRT parameter definitions are not supported."
+                    )
+                active_params[kper] = read_active_list_parameters(f, np_sp)
 
         if openfile:
             f.close()
@@ -354,21 +526,58 @@ class MfUsgQrt(Package):
             recipient_nodes=recipient_nodes,
             dtype=dtype,
             options=options,
+            parameters=parameters,
+            mxl=mxl,
+            active_params=active_params,
             extension="qrt",
             unitnumber=unitnumber,
             filenames=filenames,
         )
 
+    @classmethod
+    def _read_sink_rows(
+        cls, f, count, returnflow, changec, naux, dtype, model, ext_unit_dict
+    ):
+        """Read ``count`` sink rows + their trailing recipient U1DINT blocks into
+        a recarray and a per-row recipient list. Honors leading SFAC / EXTERNAL /
+        OPEN-CLOSE list controls; SFAC scales Q (Fortran ISCLOC=4)."""
+        if count == 0:
+            return np.array([], dtype=dtype).view(np.recarray), []
+        source, sfac, first_line, to_close = begin_list_block(
+            f, model, ext_unit_dict, package="QRT"
+        )
+        records = []
+        numrt_list = []
+        for idx in range(count):
+            row = first_line if idx == 0 else source.readline()
+            rec, numrt = cls._parse_sink_tokens(row.split(), returnflow, changec, naux)
+            records.append(rec)
+            numrt_list.append(numrt)
+        recip_lists = []
+        for i in range(count):
+            if returnflow and numrt_list[i] > 0:
+                nodes_1based = read_u1dint_list(source, numrt_list[i])
+                recip_lists.append([n - 1 for n in nodes_1based])
+            else:
+                recip_lists.append([])
+        if to_close is not None:
+            source.close()
+        recarray = np.array(records, dtype=dtype).view(np.recarray)
+        if sfac != 1.0 and len(recarray) > 0:
+            recarray["q"] = recarray["q"] * sfac
+        return recarray, recip_lists
+
     @staticmethod
     def _parse_header(line):
-        """Parse QRT item 1: MXAQRT MXRTCELLS IQRTCB NPQRT MXL [options]."""
+        """Parse QRT item 1: MXAQRT MXRTCELLS IQRTCB NPQRT MXL [options].
+
+        Returns (options, aux_names, ipakcb, returnflow, changec, npqrt, mxl).
+        NPQRT/MXL come from item 1 directly (QRT has no separate PARAMETER line).
+        """
         tokens = line.split()
-        npqrt = int(tokens[3]) if len(tokens) > 3 else 0
-        if npqrt > 0:
-            raise NotImplementedError(
-                "MfUsgQrt does not support named QRT parameters (NPQRT > 0)."
-            )
         ipakcb = int(tokens[2]) if len(tokens) > 2 else 0
+        npqrt = int(tokens[3]) if len(tokens) > 3 else 0
+        mxl = int(tokens[4]) if len(tokens) > 4 else 0
 
         options = []
         aux_names = []
@@ -408,7 +617,7 @@ class MfUsgQrt(Package):
                 i += 1
 
         changec = changec and returnflow
-        return options, aux_names, ipakcb, returnflow, changec
+        return options, aux_names, ipakcb, returnflow, changec, npqrt, mxl
 
     @staticmethod
     def _parse_sink_tokens(toks, returnflow, changec, naux):

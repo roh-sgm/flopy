@@ -45,11 +45,23 @@ USG-T packages that currently expand parameters or fail explicitly.
   MXADRT`); and an activated SPREAD (`NR<0`) parameter is structural-round-trip
   only, not execution-guaranteed (USG-T copies `DRTF` but not `NodDRT` on
   activation). See `USGT_STAGE4_04_PARAMETERS_DRT.md`.
-- `QRT`: `NPQRT>0` fails explicitly.
+- `QRT`: **parameter structural-preserving (Stage 4.4E, executed) — not
+  execution-guaranteed.** `NPQRT>0` definitions (with recipient blocks) and
+  per-SP activations load → write → reload; `MXAQRT` covers the active total;
+  `MXRTCELLS` reflects definition recipients. QRT is type-consistent
+  (`PARTYP='QRT'` both sides, `gwf2QRT8u.f:183`/`:1118`), but **two Fortran issues
+  block an execution guarantee for activated QRT params**: the parameter value
+  scales `QRTF(5)=NumRT` (recipient count), **not `Q`** (`IPVL=5`; a bug — `SFAC`
+  scales `Q` at `ISCLOC=4`), and `NodQRT` is not copied on activation (like DRT).
+  `INSTANCES`/from-scratch authoring → `NotImplementedError`; `TRANSIENTQ` still
+  fails explicitly; `MXL`/consistency validated. See
+  `USGT_STAGE4_04_PARAMETERS_QRT.md`.
 
-This is honest and safe. ETS (array) and HFB + SGB + DRT (list) parameter
-preservation are implemented; the remaining list-parameter package (QRT) stays
-explicit-fail pending its own preservation (and a `PARTYP` audit like SGB/DRT).
+This is honest and safe. The full list-parameter family is now done: ETS (array)
+preserves; HFB and DRT preserve list parameters; SGB is definition-preserving
+only (active SGB params abort the Fortran); QRT is structural-preserving only
+(the parameter value scales the wrong field in the Fortran). Each carries an
+explicit, audited status with its caveats.
 
 ## Shared abstraction (Stage 4.4A/4.4B/4.4C)
 
@@ -68,13 +80,13 @@ explicit-fail pending its own preservation (and a `PARTYP` audit like SGB/DRT).
   `read_active_list_parameters` / `write_active_list_parameters` (the activation
   names). The per-parameter `NLST` rows are package-specific, so the row
   reader/writer stays in the package (HFB `_read_hfb_rows`/`_write_hfb_rows`; SGB
-  `_read_sgb_rows`/`_write_sgb_rows`; DRT `_read_drain_rows`/`_write_drain_line`,
-  the last carrying per-row RETURNFLOW recipients), each with 0-based↔1-based
-  conversion.
+  `_read_sgb_rows`/`_write_sgb_rows`; DRT `_read_drain_rows`/`_write_drain_line`
+  and QRT `_read_sink_rows`/`_write_sink_block`, the last two carrying their
+  RETURNFLOW recipients — interleaved for DRT, after the rows for QRT), each with
+  0-based↔1-based conversion.
 
-No ad-hoc string preservation, no second parser. The list-parameter helpers are
-reusable by QRT when its preservation lands; until then it keeps its explicit
-`NotImplementedError`.
+No ad-hoc string preservation, no second parser. All four list-parameter
+packages (HFB, SGB, DRT, QRT) now reuse these helpers.
 
 ## Fortran Sources
 
@@ -112,7 +124,8 @@ Package sources:
    active SGB params abort the Fortran).**
 4. DRT list parameters. **DONE (Stage 4.4D; full active-parameter preservation —
    DRT is consistent).**
-5. QRT list parameters.
+5. QRT list parameters. **DONE (Stage 4.4E; structural-preserving only — the
+   Fortran parameter value scales NumRT, not Q).**
 
 ## Required Tests
 
@@ -133,16 +146,18 @@ Update:
 - `USGT_PACKAGE_BACKLOG.md`,
 - `USGT_improvements.md`.
 
-Promote only the package modes that preserve parameter syntax. ETS now
-**preserves** ETSR array parameters (Stage 4.4A); HFB **preserves** list
-parameters (Stage 4.4B); SGB is **definition-preserving only** (Stage 4.4C +
-review follow-up — USG-T 2.7 rejects an SGB activation with a `PARTYP='SGB'` vs
-`'G'` type conflict); DRT **preserves** list parameters including activations
-and recipients (Stage 4.4D — DRT is internally consistent, both `'DRT'`). All
-stay not `Full` because from-scratch parameter authoring is unsupported (and,
-per package: HFB `TRANSIENT_HFB`+`NPHFB>0`; SGB active parameters; DRT/HFB/SGB
-`INSTANCES`). The remaining list-parameter package (QRT) stays explicit-fail
-until its write path lands (and a `PARTYP` audit like SGB/DRT).
+Promote only the package modes that preserve parameter syntax. The full
+list-parameter family is complete: ETS **preserves** ETSR array parameters
+(Stage 4.4A); HFB **preserves** list parameters (Stage 4.4B); SGB is
+**definition-preserving only** (Stage 4.4C + review — USG-T 2.7 rejects an SGB
+activation with a `PARTYP='SGB'` vs `'G'` type conflict); DRT **preserves** list
+parameters incl. activations + recipients (Stage 4.4D — DRT is consistent); QRT
+is **structural-preserving only** (Stage 4.4E — type-consistent, but the Fortran
+parameter value scales `NumRT` not `Q`, and `NodQRT` is not copied on
+activation, so activation is not execution-guaranteed). None is promoted to
+`Full` on the parametric axis: from-scratch parameter authoring is unsupported
+everywhere, plus the per-package caveats above (HFB `TRANSIENT_HFB`+`NPHFB>0`;
+SGB active parameters; QRT execution; all four `INSTANCES`).
 
 ## Validation
 

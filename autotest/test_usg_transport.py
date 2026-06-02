@@ -3533,21 +3533,14 @@ def test_mfusgqrt_nam_registry():
 
 
 def test_mfusgqrt_unsupported_modes_fail_explicitly(function_tmpdir):
-    """NPQRT>0 and TRANSIENTQ raise NotImplementedError rather than partial-write."""
+    """TRANSIENTQ raises NotImplementedError rather than partial-write.
+
+    (NPQRT>0 is now preserved -- see the Stage 4.4E parameter tests below.)
+    """
     from flopy.modflow import ModflowDis
 
     ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-
-    # NPQRT > 0 (named parameters)
-    qrt_param = function_tmpdir / "param.qrt"
-    qrt_param.write_text(
-        "# qrt params\n"
-        "        10        10 0 1 5 RETURNFLOW\n"
-        " 0    Stress Period 1\n"
-    )
-    with pytest.raises(NotImplementedError):
-        MfUsgQrt.load(str(qrt_param), ml, nper=1, ext_unit_dict={})
 
     # TRANSIENTQ option
     qrt_tq = function_tmpdir / "tq.qrt"
@@ -3556,8 +3549,265 @@ def test_mfusgqrt_unsupported_modes_fail_explicitly(function_tmpdir):
         "        10        10 0 0 0 RETURNFLOW TRANSIENTQ 5\n"
         " 0    Stress Period 1\n"
     )
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="TRANSIENTQ"):
         MfUsgQrt.load(str(qrt_tq), ml, nper=1, ext_unit_dict={})
+
+
+# --- Stage 4.4E: QRT MODFLOW list-parameter preservation -------------------
+#
+# QRT is type-consistent (def + activation both PARTYP='QRT': gwf2QRT8u.f:183 /
+# :1118), so active QRT params are type-valid and structurally preserved
+# (load -> write -> reload). But execution is NOT guaranteed: the parameter value
+# scales QRTF(5)=NumRT (recipient count), not Q (a Fortran bug; SFAC scales Q at
+# ISCLOC=4), and NodQRT is not copied on activation. INSTANCES / from-scratch
+# authoring / TRANSIENTQ are unsupported.
+
+
+def _qrt_model(function_tmpdir, name, nper=1):
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(structured=False, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=nper)
+    return ml
+
+
+def test_mfusgqrt_parameterized_roundtrip(function_tmpdir):
+    """QRT NPQRT>0 preserves item-1 NPQRT/MXL, the definition, and the per-SP
+    active record; MXAQRT covers the active total; 0-based / 1-based."""
+    p = function_tmpdir / "param.qrt"
+    p.write_text(
+        "# qrt param\n"
+        "         2         0 0 1 1\n"  # MXAQRT MXRTCELLS IQRTCB NPQRT MXL
+        "qp QRT 2.0 1\n"  # PARNAM PARTYP PARVAL NLST
+        " 5  -5.000000e+01\n"  # sink node 5, Q
+        " 1 1    Stress Period 1\n"  # ITMP NP
+        " 21  -1.000000e+02\n"  # non-parametric sink
+        "qp\n"  # active parameter
+    )
+    ml = _qrt_model(function_tmpdir, "p1")
+    qrt = MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert qrt.mxl == 1
+    pdef = qrt.parameters["qp"]
+    assert pdef["partyp"] == "QRT" and pdef["parval"] == "2.0" and pdef["nlst"] == 1
+    assert list(pdef["data"]["node"]) == [4]  # 0-based internal
+    assert np.isclose(pdef["data"]["q"][0], -50.0)
+    assert qrt.active_params[0] == ["qp"]
+    assert list(qrt.stress_period_data[0]["node"]) == [20]
+
+    out = function_tmpdir / "param_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    # MXAQRT = non-parametric (1) + active rows (1) = 2; NPQRT field = 1
+    assert item1.split()[0] == "2" and item1.split()[3] == "1"
+    assert "qp QRT 2.0 1" in out.read_text()
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "p2"), nper=1)
+    assert re.mxl == 1 and list(re.parameters) == ["qp"]
+    assert list(re.parameters["qp"]["data"]["node"]) == [4]
+    assert re.active_params[0] == ["qp"]
+    assert list(re.stress_period_data[0]["node"]) == [20]
+
+
+def test_mfusgqrt_parameter_returnflow_recipients(function_tmpdir):
+    """A parameter definition row keeps its RETURNFLOW recipients (U1DINT block),
+    plus CHANGEC and AUX, through load -> write -> reload. MXRTCELLS reflects the
+    parameter recipients. Structural round-trip (not execution-guaranteed)."""
+    p = function_tmpdir / "rf.qrt"
+    p.write_text(
+        "# qrt rf param\n"
+        "         1         2 0 1 1 RETURNFLOW CHANGEC AUX C01\n"
+        "qp QRT 1.0 1\n"
+        " 5  -5.000000e+01  2  8.000000e-01  3  9.000000e-01\n"
+        "INTERNAL  1  (FREE)  -1\n"
+        " 11 12\n"
+        " 0 1    Stress Period 1\n"
+        "qp\n"
+    )
+    ml = _qrt_model(function_tmpdir, "rf1")
+    qrt = MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    pdef = qrt.parameters["qp"]
+    assert pdef["recipient_nodes"] == [[10, 11]]  # 0-based
+    assert list(pdef["data"]["iqchngtyp"]) == [3]
+    assert np.isclose(pdef["data"]["C01"][0], 0.9)
+
+    out = function_tmpdir / "rf_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    assert int(item1.split()[1]) >= 2  # MXRTCELLS covers the 2 recipients
+
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "rf2"), nper=1)
+    assert re.parameters["qp"]["recipient_nodes"] == [[10, 11]]
+    assert list(re.parameters["qp"]["data"]["iqchngtyp"]) == [3]
+
+
+def test_mfusgqrt_parameter_mxaqrt_counts_active_rows(function_tmpdir):
+    """MXAQRT must cover NQRTCL = non-parametric + Σ(nlst of active params)
+    (gwf2QRT8u.f: SGWF2QRT8LS aborts if NQRTCL > MXAQRT)."""
+    p = function_tmpdir / "mxaqrt.qrt"
+    p.write_text(
+        "# qrt mxaqrt\n"
+        "         4         0 0 2 3\n"  # MXAQRT=4 NPQRT=2 MXL=3
+        "pa QRT 2.0 2\n"
+        " 5  -1.000000e+01\n"
+        " 6  -1.000000e+01\n"
+        "pb QRT 3.0 1\n"
+        " 7  -1.000000e+01\n"
+        " 1 2    Stress Period 1\n"  # ITMP=1 NP=2
+        " 21  -2.000000e+01\n"
+        "pa\n"
+        "pb\n"
+    )
+    ml = _qrt_model(function_tmpdir, "ma1")
+    qrt = MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert qrt.active_params[0] == ["pa", "pb"]
+
+    out = function_tmpdir / "mxaqrt_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    assert item1.split()[0] == "4"  # 1 non-param + 2 (pa) + 1 (pb)
+
+
+def test_mfusgqrt_parameter_reuse_with_active(function_tmpdir):
+    """ITMP<0 reuses the previous period's non-parametric sinks while a new active
+    parameter applies (NP>0); data round-trips."""
+    p = function_tmpdir / "reuse.qrt"
+    p.write_text(
+        "# qrt reuse\n"
+        "         1         0 0 1 1\n"
+        "qp QRT 1.0 1\n"
+        " 5  -1.000000e+01\n"
+        " 1 1    Stress Period 1\n"
+        " 21  -2.000000e+01\n"
+        "qp\n"
+        " -1 1    Stress Period 2\n"
+        "qp\n"
+    )
+    ml = _qrt_model(function_tmpdir, "r1", nper=2)
+    qrt = MfUsgQrt.load(str(p), ml, nper=2, ext_unit_dict={})
+    assert list(qrt.stress_period_data[1]["node"]) == [20]  # reused
+    assert qrt.active_params[1] == ["qp"]
+
+    out = function_tmpdir / "reuse_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    re = MfUsgQrt.load(str(out), _qrt_model(function_tmpdir, "r2", nper=2), nper=2)
+    assert list(re.stress_period_data[1]["node"]) == [20]
+    assert re.active_params[1] == ["qp"]
+
+
+def test_mfusgqrt_parameter_sfac_scales_q(function_tmpdir):
+    """SFAC in a parameter block scales Q (Fortran ISCLOC=4) -- unlike the
+    parameter value, which the Fortran (buggily) applies to NumRT."""
+    p = function_tmpdir / "sfacp.qrt"
+    p.write_text(
+        "# qrt sfac param\n"
+        "         0         0 0 1 1\n"
+        "qp QRT 1.0 1\n"
+        " SFAC 3.0\n"
+        " 5  -1.000000e+01\n"
+        " 0 1    Stress Period 1\n"
+        "qp\n"
+    )
+    ml = _qrt_model(function_tmpdir, "sf1")
+    qrt = MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    assert np.isclose(qrt.parameters["qp"]["data"]["q"][0], -30.0)  # -10 * SFAC 3
+
+
+def test_mfusgqrt_parameter_instances_unsupported(function_tmpdir):
+    """QRT parameter INSTANCES are Fortran-supported but not yet by FloPy."""
+    p = function_tmpdir / "inst.qrt"
+    p.write_text(
+        "# qrt instances\n"
+        "         0         0 0 1 1\n"
+        "qp QRT 1.0 2 INSTANCES 2\n"
+        "spring\n 5  -1.000000e+01\n"
+        "fall\n 6  -1.000000e+01\n"
+        " 0 1    Stress Period 1\n"
+        "qp spring\n"
+    )
+    ml = _qrt_model(function_tmpdir, "in1")
+    with pytest.raises(NotImplementedError, match="INSTANCES"):
+        MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+
+
+def test_mfusgqrt_parameter_from_scratch_fails(function_tmpdir):
+    """Active parameters with no loaded definitions fail explicitly, no file."""
+    qrt = MfUsgQrt(_qrt_model(function_tmpdir, "fs"), active_params={0: ["p1"]})
+    out = function_tmpdir / "fs.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(NotImplementedError, match="from scratch"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_parameter_mxl_too_small_fails(function_tmpdir):
+    """MXL below the total parameter list entries raises ValueError, no file."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
+               "recipient_nodes": [[]]},
+        "p2": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
+               "recipient_nodes": [[]]},
+    }
+    qrt = MfUsgQrt(_qrt_model(function_tmpdir, "mx"), parameters=params, mxl=1)
+    out = function_tmpdir / "mx.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="MXL"):
+        qrt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgqrt_parameter_inconsistent_fails(function_tmpdir):
+    """A definition whose nlst != len(data), or recipient_nodes != nlst, raises
+    ValueError, no file."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 2, "data": rows,
+               "recipient_nodes": [[]]},  # nlst 2 but 1 row
+    }
+    qrt = MfUsgQrt(_qrt_model(function_tmpdir, "ic"), parameters=params, mxl=5)
+    out = function_tmpdir / "ic.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="nlst"):
+        qrt.write_file()
+    assert not out.exists()
+
+    params2 = {
+        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
+               "recipient_nodes": []},  # recipient lists != nlst
+    }
+    qrt2 = MfUsgQrt(_qrt_model(function_tmpdir, "ic2"), parameters=params2, mxl=5)
+    out2 = function_tmpdir / "ic2.qrt"
+    qrt2.fn_path = str(out2)
+    with pytest.raises(ValueError, match="recipient"):
+        qrt2.write_file()
+    assert not out2.exists()
+
+
+def test_mfusgqrt_parameter_active_undefined_fails(function_tmpdir):
+    """An active parameter name not present in definitions raises ValueError."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
+               "recipient_nodes": [[]]},
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "ud"),
+        parameters=params,
+        mxl=5,
+        active_params={0: ["px"]},  # not defined
+    )
+    out = function_tmpdir / "ud.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="not defined"):
+        qrt.write_file()
+    assert not out.exists()
 
 
 # ---------------------------------------------------------------------------

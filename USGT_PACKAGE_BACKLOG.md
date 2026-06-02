@@ -384,15 +384,29 @@ FloPy class: missing
 
 Fortran: `gwf2QRT8u.f`
 
-Status: not implemented.
+Status: implemented; non-parametric Full (authoring) + parameter
+structural-preserving (`NPQRT`, not execution-guaranteed) as of Stage 4.4E.
 
 Problem:
 
 - **DONE** (2026-05-30): `MfUsgQrt` added (`flopy/mfusg/mfusgqrt.py`) and
   registered as `"qrt"`. Per-sink `(node, q, rfprop)` + recipient-node lists,
-  `CHANGEC`/`IQCHNGTYP`, AUX, reuse; `NPQRT>0` and `TRANSIENTQ` explicit
-  failures; shares `_usgt_returnflow.py` with DRT. Authoring (minimal,
-  return-flow concentration, multi-recipient) + round-trip + registry tests.
+  `CHANGEC`/`IQCHNGTYP`, AUX, reuse; `TRANSIENTQ` explicit failure; shares
+  `_usgt_returnflow.py` with DRT. Authoring (minimal, return-flow concentration,
+  multi-recipient) + round-trip + registry tests.
+- **DONE** (Stage 4.4E): `NPQRT>0` list parameters are **structurally preserved**
+  (load → write → reload of definitions + recipient blocks + per-SP activations;
+  `MXAQRT` = non-parametric + active rows; `MXRTCELLS` reflects definition
+  recipients). Audit: QRT is type-consistent (def + activation both
+  `PARTYP='QRT'`, `gwf2QRT8u.f:183`/`:1118`), so active params are type-valid —
+  **but not execution-guaranteed**: the parameter value scales `QRTF(5)=NumRT`,
+  not `Q` (`IPVL=5`; a Fortran bug, `SFAC` scales `Q` at `ISCLOC=4`), and
+  `NodQRT` is not copied on activation (like DRT). FloPy does not apply the
+  parameter value to `Q`. From-scratch authoring and `INSTANCES` →
+  `NotImplementedError`; `MXL`/consistency → `ValueError`; `TRANSIENTQ` still
+  fails. 10 parameter tests (`-k mfusgqrt` 18 passed). Reuses the shared
+  list-parameter helpers. See `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This
+  completes the Stage 4.4 list-parameter family (HFB/SGB/DRT/QRT).**
 
 Fortran facts to verify:
 
