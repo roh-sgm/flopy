@@ -32,6 +32,7 @@ from ..pakbase import Package
 from ..utils import Transient2d, Util2d
 from ..utils.utils_def import get_pak_vals_shape
 from ._usgt_parameters import (
+    build_array_parameter_bc_parms,
     read_active_array_parameters,
     write_active_array_parameters,
     write_array_parameter_defs,
@@ -86,12 +87,16 @@ class MfUsgEts(Package):
     filenames : str or list of str or None
         Filenames for package and CBC output files.
 
-    parameters : flopy.modflow.ModflowParBc or None
-        Parsed ETS array-parameter definitions (set by :meth:`load` when
-        ``npets > 0`` and parameters are preserved). When present, the writer
-        emits the parameter definition blocks and per-period active-parameter
-        records instead of expanded ETSR arrays. Authoring this from scratch is
-        not supported; see Notes.
+    parameters : flopy.modflow.ModflowParBc or dict or None
+        ETS array-parameter definitions. Set by :meth:`load` as a parsed
+        :class:`~flopy.modflow.ModflowParBc` when ``npets > 0`` and parameters
+        are preserved; may also be supplied to author parameters from scratch,
+        either as a ``ModflowParBc`` or as an ergonomic mapping
+        ``{name: {"parval": ..., "clusters": [(MLTARR, ZONARR[, zones]), ...]}}``
+        (time-varying parameters use ``"instances": {instnam: clusters, ...}``).
+        When present, the writer emits the parameter definition blocks and
+        per-period active-parameter records instead of expanded ETSR arrays.
+        See Notes.
     evtr_parm : dict or None
         Per-stress-period active-parameter records for ETSR, keyed by 0-based
         stress period: ``{kper: [(name, instance_or_None), ...]}``. Set by
@@ -112,8 +117,12 @@ class MfUsgEts(Package):
     ``PARAMETER`` line for back-compatibility.
 
     Parameter *preservation* (load -> write -> reload with parameter syntax
-    intact) is supported for ETSR. Parameter *authoring* from scratch
-    (``npets > 0`` with no loaded definitions) raises ``NotImplementedError``.
+    intact) and *authoring* from scratch are both supported for ETSR. To author
+    from scratch, pass ``parameters`` (a ``ModflowParBc`` or the ergonomic dict
+    above) and ``evtr_parm``; ``npets`` and each definition's ``nclu`` are
+    auto-computed and the first stress period must activate at least one
+    parameter (USG-T cannot reuse an uninitialized ETSR). Supplying ``npets > 0``
+    (or an ``evtr_parm`` activation) with no definitions raises ``ValueError``.
     Loading with ``expand_parameters=True`` keeps the older "Expanded valid
     write" behavior (parameters expanded to arrays, ``NPETS=0`` on output).
 
@@ -233,17 +242,112 @@ class MfUsgEts(Package):
     # write
     # ------------------------------------------------------------------
 
+    def _resolve_parameters(self):
+        """Resolve + validate ETS array parameters for a write.
+
+        Accepts ``self.parameters`` as an ergonomic dict (built into a
+        ``ModflowParBc``, Stage 4.6C-D) or an already-parsed ``ModflowParBc``
+        (preserved from :meth:`load`). Returns ``(ModflowParBc or None, npets)``
+        with ``npets`` auto-computed from the definitions when omitted/0. All
+        validation runs before the file is opened, so no partial file is written.
+        """
+        if self.parameters is None:
+            if any(self.evtr_parm.values()):
+                raise ValueError(
+                    "MfUsgEts.write_file: evtr_parm activates parameters but none "
+                    "are defined. Pass parameters={name: {...}} to author ETS "
+                    "(ETSR) array parameters from scratch."
+                )
+            if self.npets:
+                raise ValueError(
+                    f"MfUsgEts.write_file: npets={self.npets} but no parameters "
+                    "are defined; pass parameters={name: {...}} or npets=0."
+                )
+            return None, 0
+
+        if isinstance(self.parameters, dict):
+            bc_parms = build_array_parameter_bc_parms(
+                self.parameters, "ets", prefix="MfUsgEts.write_file"
+            )
+            params = mfparbc(bc_parms)
+        else:
+            params = self.parameters  # preserved ModflowParBc
+
+        npets = self.npets if self.npets else len(params.bc_parms)
+        if npets != len(params.bc_parms):
+            raise ValueError(
+                f"MfUsgEts.write_file: NPETS ({npets}) must equal the number of "
+                f"parameter definitions ({len(params.bc_parms)})."
+            )
+        self._validate_active_params(params)
+        return params, npets
+
+    def _validate_active_params(self, params):
+        """Validate ``evtr_parm`` activations against the (canonical) definitions.
+
+        The first stress period must activate (USG-T cannot reuse a previous ETSR
+        on period 0); active names must be defined (case-insensitively) with no
+        duplicates per period; a time-varying parameter must name an existing
+        instance and a static one must not name a non-static instance. Raises
+        ``ValueError`` before any file is opened.
+        """
+        nper = self.parent.nrow_ncol_nlay_nper[3]
+        if not self.evtr_parm.get(0):
+            raise ValueError(
+                "MfUsgEts.write_file: the first stress period must activate ETS "
+                "parameters (evtr_parm[0]); USG-T cannot reuse a previous ETSR on "
+                "period 0 (INETSR=-1 is invalid as the first parametric period)."
+            )
+        for kper, recs in self.evtr_parm.items():
+            if not 0 <= kper < nper:
+                raise ValueError(
+                    f"MfUsgEts.write_file: evtr_parm stress period {kper} is out "
+                    f"of range 0..{nper - 1}."
+                )
+            lowered = [name.lower() for name, _ in recs]
+            if len(set(lowered)) != len(lowered):
+                raise ValueError(
+                    f"MfUsgEts.write_file: a parameter is activated more than once "
+                    f"in stress period {kper}: {recs}."
+                )
+            for name, instance in recs:
+                pdef = params.bc_parms.get(name.lower())
+                if pdef is None:
+                    raise ValueError(
+                        f"MfUsgEts.write_file: active parameter '{name}' (stress "
+                        f"period {kper}) is not defined in parameters."
+                    )
+                timevarying = pdef[0]["timevarying"]
+                pinst = pdef[1]
+                if timevarying:
+                    if instance is None:
+                        raise ValueError(
+                            f"MfUsgEts.write_file: parameter '{name}' is "
+                            "time-varying (INSTANCES); activation must name an "
+                            f"instance (stress period {kper})."
+                        )
+                    if str(instance).lower() not in pinst:
+                        raise ValueError(
+                            f"MfUsgEts.write_file: parameter '{name}' has no "
+                            f"instance '{instance}' (stress period {kper}); "
+                            f"defined instances: {sorted(pinst)}."
+                        )
+                elif instance is not None and str(instance).lower() != "static":
+                    raise ValueError(
+                        f"MfUsgEts.write_file: parameter '{name}' is static but is "
+                        f"activated with instance '{instance}' (stress period "
+                        f"{kper}); use None."
+                    )
+
     def write_file(self, f=None):
         """Write the ETS package file."""
-        preserve = self.npets > 0 and self.parameters is not None
-        if self.npets > 0 and self.parameters is None:
-            raise NotImplementedError(
-                "MfUsgEts.write_file cannot author ETS parameter definitions "
-                "from scratch (npets>0 without loaded parameter data). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgEts.load; for from-scratch input use npets=0 (expanded "
-                "arrays)."
-            )
+        # Resolve + validate ETS array parameters before opening the file, so a
+        # parameterized item 2a is never written without a complete, consistent
+        # body and no partial file is produced. ``params`` is a ModflowParBc
+        # (built from an ergonomic dict, or the preserved one from load); ``npets``
+        # is auto-computed from the definitions when omitted.
+        params, npets = self._resolve_parameters()
+        preserve = params is not None
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         close_on_exit = f is None
         if f is None:
@@ -255,7 +359,7 @@ class MfUsgEts(Package):
         # Item 2a – NETSOP IETSCB NPETS NETSEG IESFACTOR
         f.write(
             f"{self.netsop:10d}{self.ipakcb:10d}"
-            f"{self.npets:10d}{self.netseg:10d}{self.iesfactor:10d}\n"
+            f"{npets:10d}{self.netseg:10d}{self.iesfactor:10d}\n"
         )
 
         # Item 2b – MXNDETS (unstructured + NETSOP==2 only)
@@ -276,9 +380,9 @@ class MfUsgEts(Package):
                 f.write(f"{val:10.6f}")
             f.write("\n")
 
-        # Items 3-4: ETS parameter definitions (preserved from load)
+        # Items 3-4: ETS parameter definitions (preserved from load or authored)
         if preserve:
-            write_array_parameter_defs(f, self.parameters)
+            write_array_parameter_defs(f, params)
 
         nseg_int = max(0, self.netseg - 1)
         use_5a = (self.netsop == 2) or (self.netseg > 1)

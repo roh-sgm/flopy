@@ -1472,17 +1472,21 @@ def test_mfusgets_write(function_tmpdir):
     assert "pxdp" in content.lower() and "petm" in content.lower()
 
 
-def test_mfusgets_parameterized_write_fails_explicitly(function_tmpdir):
-    """Programmatic ETS parameters are not silently written as incomplete files."""
+def test_mfusgets_parameterized_write_npets_without_defs_fails(function_tmpdir):
+    """npets>0 with no parameter definitions fails explicitly (ValueError), no
+    incomplete file. (From-scratch authoring *with* definitions is supported as
+    of Stage 4.6C-D -- see the authoring tests below.)"""
     from flopy.mfusg import MfUsgEts
     from flopy.modflow import ModflowDis
 
     ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
     ets = MfUsgEts(ml, netsop=1, evtr=1.2e-4, npets=1)
-
-    with pytest.raises(NotImplementedError, match="parameter"):
+    out = function_tmpdir / "noparam.ets"
+    ets.fn_path = str(out)
+    with pytest.raises(ValueError, match="no parameters"):
         ets.write_file()
+    assert not out.exists()
 
 
 def test_modflow_name_file_preserves_input_external_paths(function_tmpdir):
@@ -6926,6 +6930,195 @@ def test_mfusgets_parameter_instances_roundtrip(function_tmpdir):
 
     re = MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "in2"), nper=1)
     assert re.evtr_parm[0] == [("etsrate", "spring")]
+
+
+# --- Stage 4.6C-D: ETS from-scratch ETSR array-parameter authoring ----------
+#
+# ETS uses MODFLOW *array* parameters (ModflowParBc / UPARARRRP), not the
+# list-parameter family. Author from Python: parameters={name: {parval,
+# clusters | instances}} + evtr_parm={kper: [(name, instance_or_None), ...]}.
+# Only ETSR is parameterized; ETSS/ETSX/IETS/PXDP/PETM stay plain arrays. NPETS
+# goes in item 2a (no PARAMETER line). Validated before open; no partial file.
+
+
+def test_mfusgets_parameter_authoring_from_scratch_static(function_tmpdir):
+    """Author a static ETSR parameter from scratch: NPETS in item 2a (no
+    PARAMETER line), definition + cluster, per-SP active record, reload."""
+    from flopy.mfusg import MfUsgEts
+
+    params = {"etsrate": {"partyp": "ets", "parval": "5e-4",
+                          "clusters": [("NONE", "ALL", [])]}}
+    ets = MfUsgEts(
+        _param_ets_model(function_tmpdir, "as"),
+        netsop=1,
+        parameters=params,
+        evtr_parm={0: [("etsrate", None)]},
+    )
+    out = function_tmpdir / "as.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    text = out.read_text()
+    item2a = next(ln for ln in text.splitlines() if not ln.startswith("#")).split()
+    assert item2a[2] == "1"  # NPETS auto = 1
+    assert "PARAMETER" not in text
+    assert "etsrate ets 5e-4 1" in text and "NONE ALL" in text
+
+    re = MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "as2"), nper=1)
+    assert re.npets == 1 and re.evtr_parm[0] == [("etsrate", None)]
+    assert re.parameters.bc_parms["etsrate"][0]["parval"] == "5e-4"
+    assert np.allclose(re.evtr[0].array, 5.0e-4)
+
+
+def test_mfusgets_parameter_authoring_instances(function_tmpdir):
+    """A time-varying (INSTANCES) ETSR parameter authored from scratch; the
+    active instance round-trips."""
+    from flopy.mfusg import MfUsgEts
+
+    params = {
+        "etsrate": {
+            "parval": "5e-4",
+            "instances": {"spring": [("NONE", "ALL", [])],
+                          "fall": [("NONE", "ALL", [])]},
+        }
+    }
+    ets = MfUsgEts(
+        _param_ets_model(function_tmpdir, "ai"),
+        netsop=1,
+        parameters=params,
+        evtr_parm={0: [("etsrate", "spring")]},
+    )
+    out = function_tmpdir / "ai.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    text = out.read_text()
+    assert "INSTANCES 2" in text and "etsrate spring" in text
+
+    re = MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "ai2"), nper=1)
+    assert re.evtr_parm[0] == [("etsrate", "spring")]
+
+
+def test_mfusgets_parameter_authoring_netseg2_mixed_plain_arrays(function_tmpdir):
+    """A parameterized ETSR mixes with plain ETSS/ETSX and NETSEG>1 PXDP/PETM
+    arrays authored from scratch."""
+    from flopy.mfusg import MfUsgEts
+
+    ets = MfUsgEts(
+        _param_ets_model(function_tmpdir, "ns"),
+        netsop=1,
+        netseg=2,
+        pxdp=[0.5],
+        petm=[0.5],
+        parameters={"etsrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}},
+        evtr_parm={0: [("etsrate", None)]},
+    )
+    out = function_tmpdir / "ns.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    text = out.read_text()
+    assert "etsrate ets 5e-4 1" in text  # parameterized ETSR
+    # PXDP + PETM segment arrays written as plain arrays
+    assert sum(ln.strip().startswith("CONSTANT") for ln in text.splitlines()) >= 4
+    MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "ns2"), nper=1)
+
+
+def test_mfusgets_parameter_authoring_netsop2(function_tmpdir):
+    """A parameterized ETSR with NETSOP=2 (IEVT layer array) authored from
+    scratch round-trips."""
+    from flopy.mfusg import MfUsgEts
+
+    ml = _param_ets_model(function_tmpdir, "n2")
+    ets = MfUsgEts(
+        ml,
+        netsop=2,
+        ievt=1,
+        parameters={"etsrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}},
+        evtr_parm={0: [("etsrate", None)]},
+    )
+    out = function_tmpdir / "n2.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    text = out.read_text()
+    item2a = next(ln for ln in text.splitlines() if not ln.startswith("#")).split()
+    assert item2a[0] == "2" and item2a[2] == "1"  # NETSOP=2, NPETS=1
+    MfUsgEts.load(str(out), _param_ets_model(function_tmpdir, "n22"), nper=1)
+
+
+def test_mfusgets_parameter_authoring_auto_npets(function_tmpdir):
+    """NPETS = len(parameters) when omitted; two static ETSR params."""
+    from flopy.mfusg import MfUsgEts
+
+    params = {
+        "r1": {"parval": "1e-4", "clusters": [("NONE", "ALL", [])]},
+        "r2": {"parval": "2e-4", "clusters": [("NONE", "ALL", [])]},
+    }
+    ets = MfUsgEts(
+        _param_ets_model(function_tmpdir, "an"),
+        netsop=1,
+        parameters=params,
+        evtr_parm={0: [("r1", None), ("r2", None)]},
+    )
+    out = function_tmpdir / "an.ets"
+    ets.fn_path = str(out)
+    ets.write_file()
+    item2a = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert item2a[2] == "2"  # NPETS auto = 2
+
+
+def _ets_neg(function_tmpdir, name, kwargs, match):
+    """Helper: a parameterized-ETS write that must raise ValueError, no file."""
+    from flopy.mfusg import MfUsgEts
+
+    ets = MfUsgEts(_param_ets_model(function_tmpdir, name), netsop=1, **kwargs)
+    out = function_tmpdir / f"{name}.ets"
+    ets.fn_path = str(out)
+    with pytest.raises(ValueError, match=match):
+        ets.write_file()
+    assert not out.exists()
+
+
+def test_mfusgets_parameter_authoring_negatives(function_tmpdir):
+    """The from-scratch ETS authoring validations all fire before any write."""
+    sp = {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
+    inst = {"parval": "5e-4", "instances": {"s": [("NONE", "ALL", [])]}}
+    _ets_neg(function_tmpdir, "e_nodefs",
+             {"evtr_parm": {0: [("p1", None)]}}, "none are defined")
+    _ets_neg(function_tmpdir, "e_first",
+             {"parameters": {"etsrate": sp}, "evtr_parm": {}}, "first stress period")
+    _ets_neg(function_tmpdir, "e_undef",
+             {"parameters": {"etsrate": sp}, "evtr_parm": {0: [("px", None)]}},
+             "not defined")
+    _ets_neg(function_tmpdir, "e_dupdef",
+             {"parameters": {"r1": sp, "R1": dict(sp)},
+              "evtr_parm": {0: [("r1", None)]}}, "duplicate parameter definition")
+    _ets_neg(function_tmpdir, "e_badname",
+             {"parameters": {"r 1": sp}, "evtr_parm": {0: [("r 1", None)]}},
+             "single non-empty")
+    _ets_neg(function_tmpdir, "e_badparval",
+             {"parameters": {"r1": {"parval": "1 2", "clusters": [("NONE", "ALL")]}},
+              "evtr_parm": {0: [("r1", None)]}}, "single token")
+    _ets_neg(function_tmpdir, "e_emptyclu",
+             {"parameters": {"r1": {"parval": "5e-4", "clusters": []}},
+              "evtr_parm": {0: [("r1", None)]}}, "cluster")
+    _ets_neg(function_tmpdir, "e_badzone",
+             {"parameters": {"r1": {"parval": "5e-4", "clusters": [("m1", "z1", [0])]}},
+              "evtr_parm": {0: [("r1", None)]}}, "positive integer")
+    _ets_neg(function_tmpdir, "e_instreq",
+             {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", None)]}},
+             "must name an instance")
+    _ets_neg(function_tmpdir, "e_instunknown",
+             {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", "x")]}},
+             "no instance")
+    _ets_neg(function_tmpdir, "e_staticinst",
+             {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", "spring")]}},
+             "static")
+    _ets_neg(function_tmpdir, "e_dupactive",
+             {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", None), ("R1", None)]}},
+             "more than once")
+    _ets_neg(function_tmpdir, "e_npets",
+             {"parameters": {"r1": sp}, "npets": 2, "evtr_parm": {0: [("r1", None)]}},
+             "NPETS")
 
 
 # --- recipient-node U1DINT controls (INTERNAL/CONSTANT; EXTERNAL/OPEN-CLOSE

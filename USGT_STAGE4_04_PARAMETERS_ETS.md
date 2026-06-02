@@ -77,9 +77,13 @@ their explicit `NotImplementedError`.
     `PARAMETER` line), the definition blocks, and per period `INETSR =
     len(records)` (or `-1` to reuse) with the activation records in place of the
     ETSR array — while `ETSS`/`ETSX`/`IETS`/`PXDP`/`PETM` stay plain arrays.
-  - If `npets>0` and `self.parameters` is `None` (from-scratch authoring):
-    `NotImplementedError` (authoring parameter definitions from Python is out of
-    scope).
+  - **From-scratch authoring (Stage 4.6C-D):** pass `parameters={name: {parval,
+    clusters | instances}}` (an ergonomic dict built into a `ModflowParBc` via
+    `build_array_parameter_bc_parms`) + `evtr_parm={kper: [(name,
+    instance_or_None), ...]}`. `NPETS`/`nclu` are auto-computed, `partyp` defaults
+    to / is validated `ets`, and the first stress period must activate. See
+    `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. `npets>0`/`evtr_parm` with **no**
+    definitions raises `ValueError`.
   - If `npets==0`: unchanged expanded write.
 
 ## Tests (`-k mfusgets`, 10 passed)
@@ -102,8 +106,14 @@ Regression (the legacy fallback, made explicit):
 - `test_mfusgets_parameterized_load_expands_to_npets0` now passes
   `expand_parameters=True` and still asserts `NPETS=0` / no `PARAMETER` /
   expanded array.
-- `test_mfusgets_parameterized_write_fails_explicitly` — from-scratch `npets=1`
-  (no loaded defs) still raises `NotImplementedError`.
+- `test_mfusgets_parameterized_write_npets_without_defs_fails` — `npets=1` with
+  no definitions raises `ValueError` (repurposed from `_write_fails_explicitly`;
+  from-scratch authoring *with* definitions is supported as of Stage 4.6C-D —
+  see `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`).
+
+From-scratch authoring tests (Stage 4.6C-D):
+`test_mfusgets_parameter_authoring_from_scratch_static`, `_instances`,
+`_netseg2_mixed_plain_arrays`, `_netsop2`, `_auto_npets`, `_negatives`.
 
 The four existing non-parameter ETS tests (construction, NETSEG>1 write,
 NETSOP=2 authoring, IESFACTOR) are unchanged.
@@ -116,12 +126,17 @@ the preserved file remains a documented manual tier.
 ## Status decision
 
 ETS stays **⚠️ Partial / not `Full`**, but the parameter dimension is upgraded
-from *Expanded valid write* to **parameter-preserving for the ETSR array
-parameter** (load → write → reload, instances included), with:
+from *Expanded valid write* to **parameter-preserving + from-scratch authoring
+for the ETSR array parameter** (load → write → reload **and** build-from-Python,
+instances included), with:
 
 - an opt-in expanded fallback (`expand_parameters=True`), kept as the honest
   fallback; and
-- an explicit `NotImplementedError` for from-scratch parameter *authoring*.
+- from-scratch ETSR authoring (Stage 4.6C-D, `parameters=`/`evtr_parm=`); a
+  `npets>0`/`evtr_parm` with no definitions raises `ValueError`.
+
+Kept not `Full`: only the ETSR array can be parameterized (Fortran limit) and
+from-scratch parametric *execution* is not USG-T smoke-tested.
 
 Not promoted to `Full` because from-scratch parameter authoring is unsupported.
 (Only ETSR can be parameterized in the Fortran, so that is not a gap; ETS zonal

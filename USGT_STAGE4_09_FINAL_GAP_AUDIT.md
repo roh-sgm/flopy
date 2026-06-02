@@ -74,7 +74,7 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | MDT | FS-exec | Audited authoring; gaps: chained-decay `NTCOMP>MCOMP` unverified, AI1/AI2 binaries not read. |
 | LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` authoring; gaps: sill/connectivity (ds 7/8) + multi-lake not authored from scratch; bathymetry tables external. |
 | GNC | FS-exec (✅) | Ghost-node helper; verified. |
-| ETS | FA (non-param) + **ParamPreserve** (ETSR array) | From-scratch param authoring → `NotImplementedError`; opt-in expand fallback. |
+| ETS | FA (incl. **from-scratch ETSR array-param authoring**, Stage 4.6C-D) + ParamPreserve (ETSR array) | Only ETSR parameterized (Fortran limit); parametric execution not exe-smoke-tested; opt-in expand fallback. |
 | HFB | FA (incl. **from-scratch `NPHFB>0` authoring**, Stage 4.6C-A) + ParamPreserve (list) | Gaps: `TRANSIENT_HFB`+`NPHFB>0`, `INSTANCES`. |
 | DRT | FA (incl. **from-scratch `NPDRT>0` authoring**, Stage 4.6B) + ParamPreserve + Expanded (list/recip controls) | Type-consistent; from-scratch parameter authoring supported; activated SPREAD = structural round-trip only (Fortran copies `DRTF` not `NodDRT`); `INSTANCES` unsupported. Unstructured only. |
 | SGB | FA + **Param-definition preserve + from-scratch authoring** (Stage 4.6C-B; no activations) + **Expanded** | Definitions author/round-trip; active SGB params abort the Fortran (`PARTYP='SGB'` vs `'G'`) so `NP>0`/`active_params`/`INSTANCES` → `NotImplementedError`. |
@@ -92,14 +92,13 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 
 ### 3.1 Authoring-from-scratch gaps (primary objective)
 
-- **A1 — From-scratch list/array *parameter* authoring.** The **list-parameter**
-  family is done: **DRT** (Stage 4.6B, the pilot), **HFB** (Stage 4.6C-A,
-  non-transient), **SGB definitions** (Stage 4.6C-B — active SGB params stay
-  unsupported by Fortran), and **QRT** (Stage 4.6C-C, structural — active params
-  not exec-guaranteed by Fortran). **ETS remains** (the *array*-parameter form;
-  it preserves loaded `NPETS>0` but cannot author from scratch yet) — Stage
-  4.6C-D, a different (array) path. The biggest remaining
-  "author a common feature from zero" gap.
+- **A1 — From-scratch list/array *parameter* authoring — DONE.** The full
+  family is complete: **DRT** (4.6B, pilot), **HFB** (4.6C-A, non-transient),
+  **SGB definitions** (4.6C-B — active SGB params stay unsupported by Fortran),
+  **QRT** (4.6C-C, structural — active params not exec-guaranteed by Fortran),
+  and **ETS** (4.6C-D — the *array*-parameter form for ETSR, via a `ModflowParBc`
+  builder, a different path from the list-parameter helpers). The biggest
+  authoring gap from the audit is now closed.
 - **A2 — LAK multi-lake + sill/connectivity (ds 7/8)** not authored from scratch
   (single-lake + basic transport authored; multi-lake systems only round-trip).
 - **A3 — DPT `A-W_ADSORBIM`** immobile air-water adsorption unsupported (cascade
@@ -182,10 +181,11 @@ Priorities use the review's definitions:
 
 ### P1 — blocks from-scratch authoring of common features
 
-- **A1 — from-scratch list-parameter authoring.** ✅ **DRT (4.6B) + HFB
-  (4.6C-A) + SGB defs (4.6C-B) + QRT (4.6C-C) done** — the list-parameter family
-  is complete. Remaining: ETS (the *array*-parameter form) — Stage 4.6C-D.
-- **A2 — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
+- **A1 — from-scratch parameter authoring.** ✅ **DONE** — DRT (4.6B), HFB
+  (4.6C-A), SGB defs (4.6C-B), QRT (4.6C-C, structural), and ETS array (4.6C-D)
+  all author `NP*>0` from scratch.
+- **A2 — LAK multi-lake + sill/connectivity (ds 7/8) authoring** — now the top
+  P1 remaining.
 
 ### P2 — incomplete preservation / missing tests
 
@@ -252,10 +252,15 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   repurposed test; `-k mfusgqrt` **47**, focused **282**, combined **286** (ARM).
   See `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`. **This completes the
   list-parameter from-scratch family (DRT/HFB/SGB/QRT).**
-- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring** (the remaining
-  array form; ETS preserves `NPETS>0` but cannot author from scratch). A
-  different path from the list-parameter helpers. *Acceptance:* from-scratch
-  authoring tests; honest label kept.
+- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring — EXECUTED.**
+  `MfUsgEts` authors `NPETS>0` ETSR array parameters from Python
+  (`parameters={name: {parval, clusters | instances}}` + `evtr_parm`); a shared
+  `build_array_parameter_bc_parms` turns the ergonomic dict into a `ModflowParBc`
+  (a different path from the list-parameter helpers). Only ETSR is parameterized;
+  first period must activate. Touched `mfusgets.py` + `_usgt_parameters.py`. 6 new
+  + 1 repurposed test; `-k mfusgets` **16**, focused **288**, combined **292**
+  (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. **This completes the
+  parameter from-scratch authoring family (DRT/HFB/SGB/QRT list + ETS array).**
 
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
   *Acceptance:* author a 2-lake system with sill connectivity from scratch →
@@ -277,10 +282,10 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
 
 ## 6. Recommended next card
 
-The **list-parameter from-scratch family is complete**: **Stage 4.6A**
-(STR/SUB/SWT guard; SFR kept), **4.6B** (DRT), **4.6C-A** (HFB), **4.6C-B** (SGB
-definitions), and **4.6C-C** (QRT, structural) are **done**. The recommended
-next card is **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring**
-(the remaining array form; a different path from the list-parameter helpers).
-After that, **Stage 4.6D** (LAK multi-lake + sill/connectivity authoring) is the
-next P1.
+The **parameter from-scratch authoring family is complete** (A1 closed):
+**Stage 4.6A** (STR/SUB/SWT guard; SFR kept), **4.6B** (DRT), **4.6C-A** (HFB),
+**4.6C-B** (SGB definitions), **4.6C-C** (QRT, structural), and **4.6C-D** (ETS
+array) are all **done**. The recommended next card is **Stage 4.6D — LAK
+multi-lake + sill/connectivity (ds 7/8) authoring** (A2, the top remaining P1);
+then the P2 items (DPT `A-W_ADSORBIM`, EVT ETS-zonal/`NPEVT`, OC/MDT exe
+verification) per §4.

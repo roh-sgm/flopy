@@ -1414,9 +1414,20 @@ Prioritized next cards (full criteria in the audit doc):
   `-k mfusgqrt` **47**, focused **282**, combined **286** (ARM). See
   `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`. **This completes the list-parameter
   from-scratch family (DRT/HFB/SGB/QRT).**
-- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring** (remaining
-  array form; different path from the list-parameter helpers). *Recommended next.*
+- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring — DONE
+  (executed).** `MfUsgEts` authors `NPETS>0` ETSR array parameters from Python
+  (`parameters={name: {parval, clusters | instances}}` + `evtr_parm`); a shared
+  `build_array_parameter_bc_parms` (in `_usgt_parameters.py`) turns the ergonomic
+  dict into a `ModflowParBc` — a different path from the list-parameter helpers.
+  `NPETS`/`nclu` auto; `partyp` default/validated `ets`; first period must
+  activate; instance/zone/name/parval/duplicate validations before open. Only
+  ETSR parameterized (Fortran limit). Touched `mfusgets.py`,
+  `_usgt_parameters.py`. 6 new + 1 repurposed test; `-k mfusgets` **16**, focused
+  **288**, combined **292** (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`.
+  **This completes the parameter from-scratch authoring family (DRT/HFB/SGB/QRT
+  list + ETS array).**
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
+  *Recommended next.*
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).

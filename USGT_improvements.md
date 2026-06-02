@@ -673,6 +673,31 @@ honest, upstream-ready USG-T 2.7 story.
   TRANSIENTQ + recipient-control tests stay green. `-k mfusgqrt` **47**, focused
   **282**, exe **4**, combined **286** (ARM). See
   `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C-D — ETS from-scratch *array*-parameter authoring (executed):**
+  completes the parameter from-scratch authoring family by promoting `MfUsgEts`
+  from preserving-only to from-scratch authoring of the ETSR array parameter.
+  ETS uses MODFLOW **array** parameters (`ModflowParBc` / `UPARARRRP`), **not**
+  the list-parameter family, so this deliberately does *not* reuse the
+  `_normalize_param` pattern: a new shared `build_array_parameter_bc_parms`
+  (in `_usgt_parameters.py`, reusing `check_parameter_name`/`check_parval`) turns
+  an ergonomic `parameters={name: {parval, clusters | instances}}` dict into a
+  validated `ModflowParBc.bc_parms` (names, `parval`, partyp=`ets`, per-instance
+  `nclu`, non-empty clusters, positive-integer zones, `ALL`→empty). In
+  `mfusgets.py`, `_resolve_parameters` accepts an ergonomic dict (→ `ModflowParBc`)
+  or a preserved `ModflowParBc`, auto-computes `NPETS=len(defs)`, and
+  `_validate_active_params` checks `evtr_parm` (first period must activate — no
+  `INETSR=-1` first parametric period; names defined case-insensitively; no
+  per-SP duplicates; time-varying→instance required/known; static→no non-static
+  instance; kper range). Validation runs before the file is opened; the old
+  from-scratch `NotImplementedError` is replaced (npets/active without defs →
+  `ValueError`). Only ETSR is parameterized (Fortran limit); `expand_parameters`
+  fallback unchanged. Touched `mfusgets.py`, `_usgt_parameters.py`; QRT/DRT/HFB/
+  SGB/EVT untouched. 6 new tests (static / instances / netseg2-mixed / netsop2 /
+  auto-npets authoring + a 13-case negatives test) + 1 repurposed
+  (`_write_fails_explicitly` → `_write_npets_without_defs_fails`); preservation
+  tests stay green. `-k mfusgets` **16**, focused **288**, exe **4**, combined
+  **292** (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. **This completes
+  the parameter from-scratch authoring family (DRT/HFB/SGB/QRT list + ETS array).**
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

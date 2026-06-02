@@ -103,6 +103,125 @@ def check_parval(parval, name, prefix):
     return parval
 
 
+def _build_array_clusters(name, clusters, prefix):
+    """Validate + canonicalize an array-parameter instance's clusters.
+
+    Each cluster is ``(MLTARR, ZONARR[, zones])`` -- ``ZONARR='ALL'`` means the
+    whole grid (an empty zone list). Returns the
+    ``[[mltarr, zonarr, [izone, ...]], ...]`` form ``ModflowParBc`` uses. Raises
+    ``ValueError`` for an empty cluster list or non-positive-integer zones.
+    """
+    if not clusters:
+        raise ValueError(
+            f"{prefix}: parameter '{name}' needs at least one cluster "
+            "(MLTARR ZONARR [zones...])."
+        )
+    out = []
+    for clu in clusters:
+        if len(clu) < 2:
+            raise ValueError(
+                f"{prefix}: parameter '{name}' cluster {clu!r} needs at least "
+                "MLTARR and ZONARR."
+            )
+        mltarr, zonarr = str(clu[0]), str(clu[1])
+        zones = list(clu[2]) if len(clu) > 2 and clu[2] is not None else []
+        if zonarr.lower() == "all":
+            zones = []
+        else:
+            izones = []
+            for z in zones:
+                if not float(z).is_integer() or int(z) <= 0:
+                    raise ValueError(
+                        f"{prefix}: parameter '{name}' cluster zone {z!r} must be "
+                        "a positive integer (or use ZONARR='ALL' with no zones)."
+                    )
+                izones.append(int(z))
+            zones = izones
+        out.append([mltarr, zonarr, zones])
+    return out
+
+
+def build_array_parameter_bc_parms(parameters, partyp, prefix):
+    """Build a validated ``ModflowParBc.bc_parms`` dict from an ergonomic
+    from-scratch ``parameters`` mapping (UPARARRRP array parameters, e.g. ETS).
+
+    ``parameters`` is ``{name: {"parval": ..., "clusters": [...]}}`` for a static
+    parameter, or ``{name: {"parval": ..., "instances": {inst: [clusters]}}}`` for
+    a time-varying (``INSTANCES``) one. ``partyp`` defaults to / is validated
+    against the expected type (e.g. ``"ets"``). ``nclu`` is computed from the
+    clusters (and validated if given). Names/instances obey the Fortran ``PARNAM``
+    limit (single token, <=10 chars, unique case-insensitively); ``parval`` is a
+    number or single token. Raises ``ValueError`` before any file is written.
+
+    Returns the ``bc_parms`` dict (keys lower-cased) ready for
+    ``ModflowParBc(bc_parms)``.
+    """
+    bc_parms = {}
+    for name, pdef in parameters.items():
+        check_parameter_name(name, "parameter name", prefix)
+        if not isinstance(pdef, dict):
+            raise ValueError(
+                f"{prefix}: parameter '{name}' must be a dict, got "
+                f"{type(pdef).__name__}."
+            )
+        ptyp = pdef.get("partyp", partyp)
+        if str(ptyp).lower() != partyp.lower():
+            raise ValueError(
+                f"{prefix}: parameter '{name}' partyp must be '{partyp}'; got {ptyp!r}."
+            )
+        parval = check_parval(pdef.get("parval"), name, prefix)
+        if "instances" in pdef and pdef["instances"] is not None:
+            timevarying = True
+            insts = pdef["instances"]
+            if not insts:
+                raise ValueError(
+                    f"{prefix}: parameter '{name}' has an empty 'instances' map."
+                )
+            pinst = {}
+            nclu = None
+            for instnam, clusters in insts.items():
+                check_parameter_name(instnam, f"instance name of '{name}'", prefix)
+                bcinst = _build_array_clusters(name, clusters, prefix)
+                if nclu is None:
+                    nclu = len(bcinst)
+                elif len(bcinst) != nclu:
+                    raise ValueError(
+                        f"{prefix}: parameter '{name}' instances must all have the "
+                        f"same number of clusters (nclu={nclu})."
+                    )
+                if instnam.lower() in pinst:
+                    raise ValueError(
+                        f"{prefix}: parameter '{name}' has duplicate instance name "
+                        f"'{instnam}' (case-insensitive)."
+                    )
+                pinst[instnam.lower()] = bcinst
+        else:
+            timevarying = False
+            bcinst = _build_array_clusters(name, pdef.get("clusters"), prefix)
+            nclu = len(bcinst)
+            pinst = {"static": bcinst}
+        if "nclu" in pdef and pdef["nclu"] != nclu:
+            raise ValueError(
+                f"{prefix}: parameter '{name}' declares nclu={pdef['nclu']} but "
+                f"carries {nclu} clusters."
+            )
+        if name.lower() in bc_parms:
+            raise ValueError(
+                f"{prefix}: duplicate parameter definition name '{name}' "
+                "(case-insensitive); the Fortran upper-cases PARNAM."
+            )
+        bc_parms[name.lower()] = [
+            {
+                "partyp": str(ptyp).lower(),
+                "parval": parval,
+                "nclu": nclu,
+                "timevarying": timevarying,
+            },
+            pinst,
+        ]
+    return bc_parms
+
+
 def write_array_parameter_defs(f, pak_parms):
     """Write array-parameter definitions (``UPARARRRP`` grammar) to ``f``.
 
