@@ -1324,3 +1324,31 @@ Deliverables:
 Do not:
 
 - Implement fixes unless explicitly assigned after review.
+
+---
+
+## Stage 4.6 — Final gap audit (2026-06-02, docs only)
+
+A full per-package gap audit was run after Stage 4.5B (base `develop` @
+`e0ea8073`) and recorded in **`USGT_STAGE4_09_FINAL_GAP_AUDIT.md`** (filed `_09_`
+because `_06_`/`_07_`/`_08_` are the DPT/COMPAT/UPSTREAM plans; the audit
+re-sequences those into the cards below). No code changed.
+
+Headlines: ~20 packages are `Full` from-scratch authoring; **no silent-wrong-write
+P0 remains for in-scope packages** (the explicit-failure discipline holds); the
+dead `CUNIT` slots `EVS`/`RTS`/`RES`/`IBS` have no reader in USG-T 2.7 (correctly
+unregistered); the biggest authoring gap is **from-scratch MODFLOW parameters**
+(ETS/HFB/DRT/SGB/QRT preserve but cannot author `NP>0` from scratch).
+
+Prioritized next cards (full criteria in the audit doc):
+
+- **Stage 4.6A — Compatibility-package USG-T guard** (closes the one *latent* P0:
+  SFR/STR/SUB/SWT base classes could silently write a non-USG-T file if used).
+  *Recommended next.*
+- **Stage 4.6B — From-scratch list-parameter authoring: DRT pilot** (top P1).
+- **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT.**
+- **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
+- **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
+- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
+- **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
+- **Stage 4.8 — Upstream infrastructure** stays a separate track.
