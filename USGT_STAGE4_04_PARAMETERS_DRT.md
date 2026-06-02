@@ -119,6 +119,13 @@ recipient_nodes**.
   recipients without `RETURNFLOW`); **`active_params`** → `ValueError` for an
   undefined name, a duplicate activation in a period, or a stress period outside
   `0..nper-1`.
+- **Contract hardening (Stage 4.6B review follow-up)** → `ValueError`, all
+  before the file is opened: a definition/active **name** that is not a single
+  whitespace-free token or exceeds 10 chars (Fortran `CHARACTER*10` PARNAM,
+  upper-cased); a **duplicate definition name** case-insensitively (`dp`/`DP`);
+  a **`parval`** that is a multi-token string (e.g. `"1 2"`); a **negative**
+  parametric `data["node"]` or `recipient_nodes` entry (nodes are 0-based
+  non-negative integers).
 - All validation runs before the file is opened — no partial file.
 
 ## Decision: honest status

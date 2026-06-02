@@ -84,17 +84,27 @@ drt.write_file()                      # valid NPDRT>0 file
 | Condition | Result |
 |---|---|
 | `partyp` not `DRT` | `ValueError` |
-| `parval` missing/blank | `ValueError` |
+| `parval` missing/blank, or a multi-token string (e.g. `"1 2"`) | `ValueError` |
 | `data` missing/empty | `ValueError` |
 | `nlst` given ≠ `len(data)` | `ValueError` |
 | `recipient_nodes` length ≠ `nlst` | `ValueError` |
 | recipients present without `RETURNFLOW` | `ValueError` |
 | `mxl` given `<` total definition rows | `ValueError` |
+| definition/active **name** not a single whitespace-free token | `ValueError` |
+| definition/active **name** > 10 chars (Fortran `CHARACTER*10` PARNAM) | `ValueError` |
+| duplicate **definition** name (case-insensitive) | `ValueError` |
 | `active_params` name not defined (case-insensitive) | `ValueError` |
 | duplicate activation in one period (case-insensitive) | `ValueError` |
 | `active_params` stress period outside `0..nper-1` | `ValueError` |
 | `active_params` but no `parameters` defined | `ValueError` |
+| negative parametric `data["node"]` or `recipient_nodes` entry | `ValueError` |
 | parameter `INSTANCES` | unsupported (load raises; no authoring field) |
+
+The name and `parval` rules come from `parutl7.f` `UPARLSTRP`: `PARNAM` (`PN`)
+is read as one `URWORD` word into a `CHARACTER*10` buffer and upper-cased, and
+`PARVAL` (`PV`) is read as one numeric token — so longer names truncate/collide
+and only a single whitespace-free token is meaningful (Stage 4.6B review
+follow-up; this is contract hardening, not a status change).
 
 ## Tests (`autotest/test_usg_transport.py`)
 
@@ -112,9 +122,16 @@ drt.write_file()                      # valid NPDRT>0 file
   "from-scratch fails" test (now `ValueError`, since authoring *with* definitions
   is supported).
 
+Review follow-up (contract hardening) — 5 more:
+`test_mfusgdrt_parameter_authoring_duplicate_definition_names_fails` (`dp`/`DP`),
+`_bad_name_fails` (blank / whitespace / multi-token / >10 chars),
+`_bad_parval_fails` (`"1 2"` / blank), `_negative_node_fails`,
+`_negative_recipient_fails` — each `ValueError`, no partial file.
+
 The Stage 4.4D preservation tests (`parameterized_roundtrip`, `mxadrt`, `spread`,
 `mixed`, `reuse`, `sfac`, `instances_unsupported`, `mxl_too_small`,
 `inconsistent`, `active_undefined`, `case_insensitive`, `duplicate`) stay green.
+After the follow-up: `-k mfusgdrt` **39**, focused **253**, combined **257** (ARM).
 
 ## Status after Stage 4.6B
 
@@ -127,10 +144,10 @@ structurally but is not execution-guaranteed (USG-T copies `DRTF` but not
 ## Validation
 
 ```bash
-python -m pytest autotest/test_usg_transport.py -k mfusgdrt -q   # 34 passed
-python -m pytest autotest/test_usg_transport.py -q               # 248 passed
+python -m pytest autotest/test_usg_transport.py -k mfusgdrt -q   # 39 passed
+python -m pytest autotest/test_usg_transport.py -q               # 253 passed
 python -m pytest autotest/test_usg_transport_exe.py -q           # 4 passed
-USGT_EXE=.../usgt_270_arm python -m pytest autotest/test_usg_transport.py autotest/test_usg_transport_exe.py -q   # 252 passed
+USGT_EXE=.../usgt_270_arm python -m pytest autotest/test_usg_transport.py autotest/test_usg_transport_exe.py -q   # 257 passed
 git diff --check
 ```
 

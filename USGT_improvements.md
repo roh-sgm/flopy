@@ -586,6 +586,19 @@ honest, upstream-ready USG-T 2.7 story.
   Verified at the FloPy round-trip + Fortran-format level (a from-scratch
   parametric DRT was not exe-run — it needs a full from-scratch DISU model). See
   `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
+- **Stage 4.6B review follow-up — authoring contract hardening (executed):** the
+  review found the from-scratch path could still write definitions/nodes the
+  Fortran would mis-handle. Grounded in `parutl7.f` `UPARLSTRP` (`PARNAM` read as
+  one `URWORD` word into a `CHARACTER*10` buffer and upper-cased; `PARVAL` read
+  as one numeric token), `mfusgdrt.py` now validates, before opening the file:
+  parameter/active **names** are single whitespace-free tokens ≤ 10 chars and
+  **unique case-insensitively** (rejects `dp`/`DP` definition collisions);
+  **`parval`** is a number or a single token (rejects `"1 2"`/blank); and
+  parametric `data["node"]` / `recipient_nodes` are **non-negative** 0-based
+  integers. Helpers `_check_param_name` / `_check_parval`. Only `mfusgdrt.py`
+  touched; no DRT status change (contract hardening). +5 negative tests;
+  `-k mfusgdrt` **39**, focused **253**, exe **4**, combined **257** (ARM). See
+  `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

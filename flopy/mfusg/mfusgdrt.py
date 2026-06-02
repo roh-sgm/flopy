@@ -318,6 +318,59 @@ class MfUsgDrt(ModflowDrt):
             )
         return recips
 
+    @staticmethod
+    def _check_param_name(name, what):
+        """Validate a parameter name (definition key or activation name).
+
+        The Fortran ``UPARLSTRP`` reads ``PARNAM`` as a single ``URWORD`` word
+        into a ``CHARACTER*10`` buffer and upper-cases it, so the name must be a
+        non-empty, whitespace-free token of at most 10 characters. Raises
+        ``ValueError`` otherwise (before any file is opened).
+        """
+        if not isinstance(name, str):
+            raise ValueError(
+                f"MfUsgDrt.write_file: {what} must be a string, got "
+                f"{type(name).__name__}."
+            )
+        if not name or any(c.isspace() for c in name):
+            raise ValueError(
+                f"MfUsgDrt.write_file: {what} {name!r} must be a single non-empty "
+                "token with no whitespace (the Fortran reads PARNAM as one word)."
+            )
+        if len(name) > 10:
+            raise ValueError(
+                f"MfUsgDrt.write_file: {what} {name!r} exceeds the 10-character "
+                "Fortran PARNAM limit (CHARACTER*10), which would truncate or "
+                "collide with another name."
+            )
+
+    @staticmethod
+    def _check_parval(name, parval):
+        """Validate ``parval``: a number, or a single whitespace-free string token
+        (the Fortran reads ``PARVAL`` as one numeric value via ``URWORD``). A
+        missing/blank value or a multi-token string (e.g. ``"1 2"``) raises
+        ``ValueError``."""
+        if parval is None:
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
+            )
+        if isinstance(parval, bool) or not isinstance(parval, (int, float, str)):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' parval must be a number "
+                f"or a single-token string; got {parval!r}."
+            )
+        if isinstance(parval, str):
+            if not parval.strip():
+                raise ValueError(
+                    f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
+                )
+            if any(c.isspace() for c in parval.strip()):
+                raise ValueError(
+                    f"MfUsgDrt.write_file: parameter '{name}' parval {parval!r} "
+                    "must be a single token (the Fortran reads one PARVAL value)."
+                )
+        return parval
+
     def _normalize_param(self, name, pdef):
         """Validate + canonicalize one DRT parameter definition for writing.
 
@@ -329,6 +382,7 @@ class MfUsgDrt(ModflowDrt):
         must be ``DRT`` (the Fortran activates DRT params as ``PARTYP='DRT'``).
         Raises ``ValueError`` for invalid input, before any file is opened.
         """
+        self._check_param_name(name, "parameter name")
         if not isinstance(pdef, dict):
             raise ValueError(
                 f"MfUsgDrt.write_file: parameter '{name}' must be a dict, got "
@@ -340,11 +394,7 @@ class MfUsgDrt(ModflowDrt):
                 f"MfUsgDrt.write_file: parameter '{name}' partyp must be 'DRT'; "
                 f"got {partyp!r}."
             )
-        parval = pdef.get("parval")
-        if parval is None or (isinstance(parval, str) and not parval.strip()):
-            raise ValueError(
-                f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
-            )
+        parval = self._check_parval(name, pdef.get("parval"))
         data = pdef.get("data")
         if data is None or len(data) == 0:
             raise ValueError(
@@ -353,6 +403,11 @@ class MfUsgDrt(ModflowDrt):
             )
         if not isinstance(data, np.recarray):
             data = np.array(data, dtype=self.dtype).view(np.recarray)
+        if np.any(np.asarray(data["node"]) < 0):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' has a negative node; "
+                "drain nodes are 0-based and must be non-negative."
+            )
         nlst = pdef.get("nlst")
         if nlst is None:
             nlst = len(data)
@@ -374,6 +429,14 @@ class MfUsgDrt(ModflowDrt):
                 f"MfUsgDrt.write_file: parameter '{name}' has recipient_nodes but "
                 "the RETURNFLOW option is not enabled."
             )
+        for ri, row in enumerate(recips):
+            for nd in row:
+                if not float(nd).is_integer() or int(nd) < 0:
+                    raise ValueError(
+                        f"MfUsgDrt.write_file: parameter '{name}' recipient_nodes "
+                        f"row {ri} has invalid node {nd!r}; recipients are 0-based "
+                        "non-negative integers."
+                    )
         return {
             "partyp": "DRT",
             "parval": parval,
@@ -404,6 +467,13 @@ class MfUsgDrt(ModflowDrt):
         for name, pdef in self.parameters.items():
             params[name] = self._normalize_param(name, pdef)
             total += params[name]["nlst"]
+        lowered_defs = [name.lower() for name in params]
+        if len(set(lowered_defs)) != len(lowered_defs):
+            raise ValueError(
+                "MfUsgDrt.write_file: duplicate parameter definition name "
+                f"(case-insensitive): {list(params)}. The Fortran upper-cases "
+                "PARNAM, so definition names must be unique ignoring case."
+            )
         mxl = self.mxl if self.mxl else total
         if mxl < total:
             raise ValueError(
@@ -418,6 +488,8 @@ class MfUsgDrt(ModflowDrt):
                     f"MfUsgDrt.write_file: active_params stress period {kper} is "
                     f"out of range 0..{nper - 1}."
                 )
+            for nm in names:
+                self._check_param_name(nm, f"active parameter (stress period {kper})")
             lowered = [nm.lower() for nm in names]
             if len(set(lowered)) != len(lowered):
                 raise ValueError(

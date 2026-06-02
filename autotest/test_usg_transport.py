@@ -4783,6 +4783,103 @@ def test_mfusgdrt_parameter_authoring_recipients_without_returnflow_fails(
     assert not out.exists()
 
 
+# --- Stage 4.6B review follow-up: parameter-authoring contract hardening ----
+#
+# Names (definition keys + activations) must be single whitespace-free tokens
+# <= 10 chars and unique case-insensitively (the Fortran reads PARNAM as one
+# CHARACTER*10 word and upper-cases it); parval must be a number or single
+# token; parametric nodes/recipients must be non-negative 0-based integers.
+
+
+def test_mfusgdrt_parameter_authoring_duplicate_definition_names_fails(function_tmpdir):
+    """Definition names that differ only in case (`dp`/`DP`) collide once the
+    Fortran upper-cases PARNAM -> ValueError, no file."""
+    params = {
+        "dp": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.0)]},
+        "DP": {"parval": "1.0", "data": [(1, 5.0, 10.0, 0.0)]},
+    }
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "dd"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "dd.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="duplicate parameter definition"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_bad_name_fails(function_tmpdir):
+    """A blank, whitespace, multi-token, or over-long parameter name raises
+    ValueError before the file is opened, no file."""
+    for badname in ("", "   ", "d p", "abcdefghijk"):  # "" blank, spaces, >10 chars
+        drt = MfUsgDrt(
+            _drt_model(function_tmpdir, "bn"),
+            options=["RETURNFLOW"],
+            parameters={badname: {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.0)]}},
+            active_params={0: [badname]},
+        )
+        out = function_tmpdir / "bn.drt"
+        if out.exists():
+            out.unlink()
+        drt.fn_path = str(out)
+        with pytest.raises(ValueError):
+            drt.write_file()
+        assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_bad_parval_fails(function_tmpdir):
+    """A multi-token or blank parval raises ValueError, no file (the Fortran
+    reads PARVAL as one numeric token)."""
+    for badparval in ("1 2", "  "):
+        drt = MfUsgDrt(
+            _drt_model(function_tmpdir, "bp"),
+            options=["RETURNFLOW"],
+            parameters={"dp": {"parval": badparval, "data": [(0, 5.0, 10.0, 0.0)]}},
+            active_params={0: ["dp"]},
+        )
+        out = function_tmpdir / "bp.drt"
+        if out.exists():
+            out.unlink()
+        drt.fn_path = str(out)
+        with pytest.raises(ValueError):
+            drt.write_file()
+        assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_negative_node_fails(function_tmpdir):
+    """A negative parametric drain node raises ValueError, no file."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "nn"),
+        options=["RETURNFLOW"],
+        parameters={"dp": {"parval": "1.0", "data": [(-1, 5.0, 10.0, 0.0)]}},
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "nn.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="negative node"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_negative_recipient_fails(function_tmpdir):
+    """A negative parametric recipient node raises ValueError, no file."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "nr"),
+        options=["RETURNFLOW"],
+        parameters={"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.7)],
+                           "recipient_nodes": [[-1]]}},
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "nr.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="recipient"):
+        drt.write_file()
+    assert not out.exists()
+
+
 # ---------------------------------------------------------------------------
 # BCF / LPF TABRICH tests (items 1c IUZONTAB + 1d RETCRVS, gwf2bcf-lpf-u1.f)
 # ---------------------------------------------------------------------------

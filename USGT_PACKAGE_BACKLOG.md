@@ -1373,9 +1373,13 @@ Prioritized next cards (full criteria in the audit doc):
   normalized + validated before open, no partial file) and writes a valid
   `NPDRT>0` file that reloads with the same semantics. `INSTANCES` still
   `NotImplementedError`; activated SPREAD stays structural-only. Only
-  `mfusgdrt.py` touched. 7 new tests + 1 repurposed; `-k mfusgdrt` **34**, focused
-  **248**, combined **252** (ARM). See
-  `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
+  `mfusgdrt.py` touched. 7 new tests + 1 repurposed. **Review follow-up
+  (executed): contract hardening** — validate parameter/active **names** (single
+  whitespace-free token, ≤10-char Fortran `CHARACTER*10` PARNAM, unique
+  case-insensitively), **`parval`** (number or single token; reject `"1 2"`), and
+  **non-negative** parametric nodes/recipients; all `ValueError` before open, no
+  partial file. +5 tests; `-k mfusgdrt` **39**, focused **253**, combined **257**
+  (ARM). See `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
 - **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT** (reuse the
   4.6B path). *Recommended next.*
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
