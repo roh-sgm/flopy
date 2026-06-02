@@ -5811,6 +5811,94 @@ def test_mfusgqrt_recipient_u1dint_external_unresolved_fails(function_tmpdir):
         )
 
 
+# --- Stage 4.5B polish: recipient U1DINT control-tail (ICNSTNT FMTIN IPRN) ----
+#
+# U1DINT (utl7u1.f) reads a LOCAT>0 control record as
+# "<kw> [unit/fname] ICNSTNT FMTIN IPRN"; values are read with FMTIN, list-
+# directed only when FMTIN == (FREE). FloPy parses the tail explicitly: it
+# supports (FREE) (and the abbreviated keyword-only form, treated as (FREE)),
+# applies the ICNSTNT multiplier, and rejects a fixed Fortran FMTIN.
+
+
+def test_mfusgqrt_recipient_u1dint_external_full_control(function_tmpdir):
+    """QRT recipient EXTERNAL with the full control tail `EXTERNAL <u> 1 (FREE) -1`."""
+    from flopy.utils.mfreadnam import NamData
+
+    (function_tmpdir / "qrecip.dat").write_text(" 10 11\n")
+    p = function_tmpdir / "qfull.qrt"
+    p.write_text(
+        "# qrt external full control\n"
+        "        1         2 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -1.000000e+02  2  7.500000e-01\n"
+        "EXTERNAL 81 1 (FREE) -1\n"
+    )
+    eud = {81: NamData("DATA", "qrecip.dat", None, {})}
+    qrt = MfUsgQrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict=eud
+    )
+    assert qrt.recipient_nodes[0][0] == [9, 10]
+
+
+def test_mfusgdrt_recipient_u1dint_open_close_full_control(function_tmpdir):
+    """DRT spreading OPEN/CLOSE with the full control tail `... 1 (FREE) -1`."""
+    (function_tmpdir / "dspread.dat").write_text(" 8 9\n")
+    p = function_tmpdir / "dfull.drt"
+    p.write_text(
+        "# drt open/close full control\n"
+        "         2 0 0 0 RETURNFLOW SPREAD 10\n"
+        " 1 SP1\n"
+        " 1  5.000000e+00  1.000000e+02  -2  7.000000e-01\n"
+        "OPEN/CLOSE dspread.dat 1 (FREE) -1\n"
+    )
+    drt = MfUsgDrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
+    assert drt.recipient_nodes[0][0] == [7, 8]
+
+
+def test_mfusgqrt_recipient_u1dint_multiplier(function_tmpdir):
+    """A non-1 ICNSTNT multiplies the recipient values (utl7u1.f): file 1,2 with
+    ICNSTNT=10 -> 1-based 10,20 -> 0-based 9,19."""
+    from flopy.utils.mfreadnam import NamData
+
+    (function_tmpdir / "qmul.dat").write_text(" 1 2\n")
+    p = function_tmpdir / "qmul.qrt"
+    p.write_text(
+        "# qrt external multiplier\n"
+        "        1         2 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -1.000000e+02  2  7.500000e-01\n"
+        "EXTERNAL 82 10 (FREE) -1\n"
+    )
+    eud = {82: NamData("DATA", "qmul.dat", None, {})}
+    qrt = MfUsgQrt.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict=eud
+    )
+    assert qrt.recipient_nodes[0][0] == [9, 19]
+
+
+def test_mfusgqrt_recipient_u1dint_fixed_format_fails(function_tmpdir):
+    """A non-(FREE) FMTIN on a recipient U1DINT raises NotImplementedError
+    (no silent free-parse)."""
+    from flopy.utils.mfreadnam import NamData
+
+    (function_tmpdir / "qff.dat").write_text(" 10 11\n")
+    p = function_tmpdir / "qff.qrt"
+    p.write_text(
+        "# qrt fixed format\n"
+        "        1         2 0 0 0 RETURNFLOW\n"
+        " 1 SP1\n"
+        " 1  -1.000000e+02  2  7.500000e-01\n"
+        "EXTERNAL 83 1 (10I8) -1\n"
+    )
+    eud = {83: NamData("DATA", "qff.dat", None, {})}
+    with pytest.raises(NotImplementedError, match=r"(?i)free-format|FMTIN"):
+        MfUsgQrt.load(
+            str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict=eud
+        )
+
+
 def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
     """DRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
     ml = _usgt_unstructured_model(function_tmpdir)

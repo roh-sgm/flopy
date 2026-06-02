@@ -524,6 +524,24 @@ honest, upstream-ready USG-T 2.7 story.
   fail); `-k "mfusgdrt or mfusgqrt or usgt_recipient"` **60**, focused **234**,
   exe **4**, combined **238** (ARM). See
   `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`.
+- **Stage 4.5B polish — recipient U1DINT control-tail FMTIN hardening
+  (executed):** the first cut read every recipient list free-format and ignored
+  `FMTIN`. But `U1DINT` (utl7u1.f, `LOCAT>0`) reads `JJ` integers *with* `FMTIN`,
+  list-directed only when `FMTIN == (FREE)`. `read_u1dint_list` now parses the
+  `ICNSTNT FMTIN IPRN` tail explicitly (`_parse_u1dint_tail`) for `INTERNAL` /
+  `EXTERNAL` / `OPEN-CLOSE`: it supports `(FREE)` (the only format FloPy writes),
+  keeps the abbreviated keyword-only form as a `(FREE)` read convenience (decided
+  to keep; docs now say recipient U1DINT is *free-format only*), applies the
+  `ICNSTNT` multiplier when non-zero, and **rejects a fixed Fortran `FMTIN`**
+  (e.g. `(10I8)`) with an actionable `NotImplementedError` instead of
+  free-parsing it silently. `FMTIN` is validated *before* any EXTERNAL/OPEN-CLOSE
+  file is opened, and the opened-file read is wrapped in `try/finally`, so a bad
+  format or an unexpected EOF never leaks a file descriptor. Only
+  `_usgt_returnflow.py` touched in code. Tests: 4 new (EXTERNAL/OPEN-CLOSE with
+  the full `1 (FREE) -1` tail; `ICNSTNT=10` multiplier; `(10I8)` →
+  `NotImplementedError`); abbreviated-form tests stay green. `-k "mfusgdrt or
+  mfusgqrt or usgt_recipient"` **64**, focused **238**, exe **4**, combined
+  **242** (ARM). See `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

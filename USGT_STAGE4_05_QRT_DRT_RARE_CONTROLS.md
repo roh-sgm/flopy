@@ -51,8 +51,29 @@ threading `model`/`ext_unit_dict` through `_parse_drain_tokens` /
 instead) — never a raw `ValueError` or a silent mis-read.
 
 **Write:** unchanged — recipients are always expanded inline as
-`INTERNAL (FREE)` 1-based (`Expanded valid write`); `EXTERNAL`/`OPEN-CLOSE` are
-not preserved on output.
+`INTERNAL (FREE)` 1-based (`Expanded valid write`); `EXTERNAL`/`OPEN-CLOSE` and
+fixed formats are never produced on output.
+
+### Polish — control-tail FMTIN hardening (review follow-up)
+
+The first cut read every list free-format and ignored `FMTIN`. `U1DINT`
+(utl7u1.f, `LOCAT>0`) reads `JJ` integers *with* `FMTIN`, list-directed only
+when `FMTIN == (FREE)`. `read_u1dint_list` now parses the
+`ICNSTNT FMTIN IPRN` tail explicitly (via `_parse_u1dint_tail`) for `INTERNAL`,
+`EXTERNAL`, and `OPEN/CLOSE`, and:
+
+- **supports `(FREE)`** (list-directed), the only format FloPy writes;
+- **keeps the abbreviated keyword-only form** (`EXTERNAL <unit>` /
+  `OPEN/CLOSE <fname>` with no tail) as a read convenience — there is no
+  `FMTIN`, so it is treated as `(FREE)`. (Decision: keep it; the package docs
+  say recipient U1DINT is *free-format only*.)
+- **rejects a fixed Fortran `FMTIN`** (e.g. `(10I8)`) with an actionable
+  `NotImplementedError` rather than free-parsing it silently;
+- applies the `ICNSTNT` multiplier (non-zero) consistently across all three.
+
+`FMTIN` is validated **before** any `EXTERNAL`/`OPEN-CLOSE` file is opened, and
+the read of an opened file is wrapped in `try/finally`, so a bad format or an
+unexpected EOF never leaks a file descriptor.
 
 **Tests (`autotest/test_usg_transport.py`):** `test_mfusgqrt_recipient_u1dint_external`,
 `test_mfusgdrt_recipient_u1dint_external`,
@@ -60,8 +81,14 @@ not preserved on output.
 space), `test_mfusgdrt_recipient_u1dint_open_close`, and
 `test_mfusgqrt_recipient_u1dint_external_unresolved_fails`. The first two also
 assert write_file re-emits the recipients inline 1-based with no
-`EXTERNAL`/`OPEN-CLOSE`. Results: `-k "mfusgdrt or mfusgqrt or usgt_recipient"`
-**60 passed**; focused **234**; exe **4**; combined **238** under the USG-T 2.7
+`EXTERNAL`/`OPEN-CLOSE`. Polish adds four more:
+`test_mfusgqrt_recipient_u1dint_external_full_control` (`EXTERNAL <u> 1 (FREE) -1`),
+`test_mfusgdrt_recipient_u1dint_open_close_full_control` (`... 1 (FREE) -1`),
+`test_mfusgqrt_recipient_u1dint_multiplier` (`ICNSTNT=10` scales file `1,2` ->
+1-based `10,20` -> 0-based `9,19`), and
+`test_mfusgqrt_recipient_u1dint_fixed_format_fails` (`(10I8)` ->
+`NotImplementedError`). Results: `-k "mfusgdrt or mfusgqrt or usgt_recipient"`
+**64 passed**; focused **238**; exe **4**; combined **242** under the USG-T 2.7
 ARM binary.
 
 ## Fortran Sources

@@ -453,6 +453,18 @@ Problem:
   passed**, focused **234**, combined **238** (ARM). Touched `_usgt_returnflow.py`,
   `_usgt_list.py`, `mfusgqrt.py`, `mfusgdrt.py`. See
   `USGT_STAGE4_05_QRT_DRT_RARE_CONTROLS.md`. **This closes Stage 4.5.**
+- **DONE** (Stage 4.5B polish): control-tail FMTIN hardening. The first cut read
+  every list free-format and ignored `FMTIN`; `read_u1dint_list` now parses the
+  `ICNSTNT FMTIN IPRN` tail explicitly and reads **free-format only** — `(FREE)`
+  (and the abbreviated keyword-only form, treated as `(FREE)`) are supported; a
+  fixed Fortran `FMTIN` (e.g. `(10I8)`) raises an actionable
+  `NotImplementedError` instead of being free-parsed silently. `FMTIN` is
+  validated before any EXTERNAL/OPEN-CLOSE file is opened and the read is wrapped
+  in `try/finally`, so no file descriptor leaks on a bad format or EOF. 4 new
+  tests (EXTERNAL/OPEN-CLOSE full `1 (FREE) -1` tails; `ICNSTNT=10` multiplier;
+  `(10I8)` → `NotImplementedError`); `-k "mfusgdrt or mfusgqrt or usgt_recipient"`
+  **64 passed**, focused **238**, combined **242** (ARM). Only
+  `_usgt_returnflow.py` touched in code.
 
 Fortran facts to verify:
 
