@@ -16,6 +16,39 @@ These packages use base FloPy classes or compatibility behavior:
 
 Current project preference is CLN-based coupling, so these are lower priority.
 
+## Outcome — Stage 4.6A (STR/SUB/SWT guard; SFR kept) — executed
+
+The final gap audit (`USGT_STAGE4_09_FINAL_GAP_AUDIT.md`) flagged these six
+base-class packages as the only place a USG-T model could be written silently
+wrong. Stage 4.6A closes that with a **targeted guard**:
+
+- **STR, SUB, SWT — guarded.** `flopy/mfusg/mfusgcompat.py` defines thin
+  subclasses (`MfUsgStr`/`MfUsgSub`/`MfUsgSwt`) registered in
+  `MfUsg.mfnam_packages` in place of the base classes. On an **unstructured**
+  `MfUsg` model (`version == "mfusg"` and `not structured`) both **load** and
+  **authoring/`__init__`** raise `NotImplementedError` before any file is read or
+  written (no partial file). On a *structured* `MfUsg` model they delegate to the
+  base class, and plain `flopy.modflow.Modflow` use is unaffected (it keeps the
+  base classes). Message: compatibility-only; USG-T unstructured/DISU not
+  implemented; use CLN / implement an MfUsg-specific package / keep as raw
+  external.
+- **SFR — NOT guarded (kept as compatibility/base support).** The original
+  "guard all four" plan was too aggressive: `examples/data/freyberg_usg` is a
+  DISU model that uses SFR and is loaded → written → **run** via base
+  `ModflowSfr2` in `autotest/test_usg.py` (`test_freyburg_usg`/`_external`). So
+  unstructured SFR is empirically supported by the base class; guarding it would
+  break passing tests and contradict the repo. SFR is documented as
+  compatibility/base support, **DISU-validated via `freyberg_usg`** — *not* a
+  Full USG-T transport implementation.
+- **FHB, GAGE — unchanged.** They round-trip via their base classes in the `Ex8`
+  real model; left as compatibility.
+
+Tests: `test_mfusg_compat_str_sub_swt_load_guard`,
+`test_mfusg_compat_str_sub_swt_write_guard`,
+`test_mfusg_compat_guard_noop_and_sfr_untouched` (`-k compat`, 3 passed); the
+`freyberg_usg` SFR tests in `test_usg.py` still pass; transport focused **241**,
+combined **245** (ARM).
+
 ## Work Order
 
 Audit one package at a time:

@@ -7206,3 +7206,76 @@ def test_mfusglak_flux_data_rejects_missing_lake(function_tmpdir):
             bdlknc=bdlknc,
             flux_data={0: {0: [1.0, 2.0, 0.0, 0.0]}},  # lake 1 missing
         )
+
+
+# --- Stage 4.6A: STR/SUB/SWT compatibility guard on unstructured MfUsg --------
+#
+# STR/SUB/SWT have no validated USG-T unstructured layout, so MfUsg registers
+# guarded wrappers that fail explicitly on a DISU/unstructured MfUsg model
+# (load *and* authoring), rather than silently reading/writing a non-USG-T file.
+# SFR is intentionally NOT guarded (freyberg_usg = DISU+SFR loads/writes/runs via
+# base ModflowSfr2 in test_usg.py); FHB/GAGE are intentionally NOT guarded
+# (round-trip via base in Ex8).
+
+
+def test_mfusg_compat_str_sub_swt_load_guard(function_tmpdir):
+    """The registered STR/SUB/SWT loaders raise on an unstructured MfUsg model.
+
+    MfUsg.load dispatches each NAM entry to ``<pkg>.load(filehandle, model, ...)``
+    (see MfUsg._ext_unit_d_load); this exercises that exact call. The guard
+    raises before the file is read, so a USG-T NAM that lists STR/SUB/SWT fails
+    explicitly instead of mis-reading it via the structured base class.
+    """
+    from flopy.mfusg import MfUsgStr, MfUsgSub, MfUsgSwt
+
+    ml = _usgt_unstructured_model(function_tmpdir)
+    assert ml.version == "mfusg" and ml.structured is False
+    dummy = function_tmpdir / "dummy.dat"
+    dummy.write_text("# unread by the guard\n")
+    for cls, label in ((MfUsgStr, "STR"), (MfUsgSub, "SUB"), (MfUsgSwt, "SWT")):
+        with open(dummy) as fh:
+            with pytest.raises(NotImplementedError, match=f"{label}.*compatibility"):
+                cls.load(fh, ml)
+
+
+def test_mfusg_compat_str_sub_swt_write_guard(function_tmpdir):
+    """Constructing STR/SUB/SWT on an unstructured MfUsg model raises before any
+    file is written (the guard runs in __init__, before add_package/write_file),
+    so no partial package or file is produced."""
+    from flopy.mfusg import MfUsgStr, MfUsgSub, MfUsgSwt
+
+    ml = _usgt_unstructured_model(function_tmpdir)
+    for cls, label in ((MfUsgStr, "STR"), (MfUsgSub, "SUB"), (MfUsgSwt, "SWT")):
+        with pytest.raises(NotImplementedError, match=f"{label}.*DISU"):
+            cls(ml)
+        # No partial state: the package was never added to the model.
+        assert ml.get_package(label) is None
+
+
+def test_mfusg_compat_guard_noop_and_sfr_untouched(function_tmpdir):
+    """The guard is a no-op for a structured MfUsg model and for plain
+    flopy.modflow.Modflow; and SFR/FHB/GAGE stay on their base classes in the
+    MfUsg registry (only STR/SUB/SWT are guarded)."""
+    from flopy.mfusg import MfUsgStr, MfUsgSub, MfUsgSwt
+    from flopy.mfusg.mfusgcompat import _guard_compat
+    from flopy.modflow import (
+        Modflow,
+        ModflowFhb,
+        ModflowGage,
+        ModflowSfr2,
+    )
+
+    structured_mfusg = MfUsg(structured=True, model_ws=str(function_tmpdir))
+    base_mf = Modflow()  # version mf2005
+    for model in (structured_mfusg, base_mf):
+        for label in ("STR", "SUB", "SWT"):
+            _guard_compat(model, label)  # must not raise
+
+    # Registry: STR/SUB/SWT guarded; SFR/FHB/GAGE untouched (base classes).
+    reg = MfUsg(structured=False, model_ws=str(function_tmpdir)).mfnam_packages
+    assert reg["str"] is MfUsgStr
+    assert reg["sub"] is MfUsgSub
+    assert reg["swt"] is MfUsgSwt
+    assert reg["sfr"] is ModflowSfr2
+    assert reg["fhb"] is ModflowFhb
+    assert reg["gage"] is ModflowGage

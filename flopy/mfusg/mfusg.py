@@ -110,11 +110,16 @@ class MfUsg(Modflow):
             "riv": flopy.mfusg.MfUsgRiv,
             "sgb": flopy.mfusg.MfUsgSgb,
             "qrt": flopy.mfusg.MfUsgQrt,
-            "str": flopy.modflow.ModflowStr,
+            # STR/SUB/SWT: guarded so unstructured-MfUsg use fails explicitly
+            # (Stage 4.6A; the USG-T DISU layouts are unvalidated for these).
+            # SFR/FHB/GAGE stay on the base classes: unstructured SFR is
+            # base-validated by freyberg_usg, and FHB/GAGE round-trip via base
+            # in the Ex8 real model.
+            "str": flopy.mfusg.MfUsgStr,
             "sfr": flopy.modflow.ModflowSfr2,
             "gage": flopy.modflow.ModflowGage,
-            "sub": flopy.modflow.ModflowSub,
-            "swt": flopy.modflow.ModflowSwt,
+            "sub": flopy.mfusg.MfUsgSub,
+            "swt": flopy.mfusg.MfUsgSwt,
             "chd": flopy.mfusg.MfUsgChd,
             "disu": flopy.mfusg.MfUsgDisU,
             "sms": flopy.mfusg.MfUsgSms,

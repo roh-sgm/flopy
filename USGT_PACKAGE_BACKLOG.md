@@ -1342,10 +1342,19 @@ unregistered); the biggest authoring gap is **from-scratch MODFLOW parameters**
 
 Prioritized next cards (full criteria in the audit doc):
 
-- **Stage 4.6A — Compatibility-package USG-T guard** (closes the one *latent* P0:
-  SFR/STR/SUB/SWT base classes could silently write a non-USG-T file if used).
-  *Recommended next.*
+- **Stage 4.6A — Compatibility-package USG-T guard — DONE (executed).** Revised
+  scope: guards **STR/SUB/SWT only** via `flopy/mfusg/mfusgcompat.py` wrappers
+  registered in `MfUsg.mfnam_packages` (unstructured-`MfUsg` load/authoring →
+  `NotImplementedError` before any read/write, no partial file). **SFR kept on
+  the base class** — DISU+SFR is base-validated by `freyberg_usg`
+  (`test_usg.py` loads/writes/runs it), so a blanket SFR guard would have broken
+  passing tests; SFR is compatibility/base support, not a Full USG-T transport
+  claim. FHB/GAGE untouched. Structured `MfUsg` / plain `flopy.modflow.Modflow`
+  unaffected. 3 tests (`-k compat`); freyberg SFR tests still pass; transport
+  focused **241**, combined **245** (ARM). See
+  `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` / `USGT_STAGE4_07_COMPAT_PACKAGES.md`.
 - **Stage 4.6B — From-scratch list-parameter authoring: DRT pilot** (top P1).
+  *Recommended next.*
 - **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT.**
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).

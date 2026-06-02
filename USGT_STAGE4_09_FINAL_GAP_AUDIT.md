@@ -150,11 +150,16 @@ Priorities use the review's definitions:
 
 ### P0 — silent invalid/wrong write
 
-- **(Latent) W1 — compat packages (SFR/STR/SUB/SWT)** via base MODFLOW-2005
-  classes could silently write a non-USG-T file. **In practice P2** because no
-  target/example model uses them, but it is the only place a USG-T model *could*
-  get a silently-wrong file. Closing it is cheap (a guard) and removes the last
-  theoretical P0 — recommended as Stage 4.6A.
+- **W1 — compat packages — RESOLVED (Stage 4.6A, executed).** A revised audit
+  found the original premise was too broad: **SFR is empirically supported on
+  DISU** — `examples/data/freyberg_usg` (DISU+SFR) loads → writes → runs via base
+  `ModflowSfr2` in `autotest/test_usg.py`. So SFR is **kept on the base class**
+  (compatibility, DISU-validated; *not* a Full USG-T transport claim). The real
+  latent risk — **STR/SUB/SWT** (no DISU validation, used by no model) — is now
+  closed: `flopy/mfusg/mfusgcompat.py` registers guarded wrappers
+  (`MfUsgStr`/`MfUsgSub`/`MfUsgSwt`) so unstructured-`MfUsg` load **or** authoring
+  raises `NotImplementedError` before any read/write. FHB/GAGE untouched
+  (Ex8). No remaining P0.
 
   *No other P0s.* The explicit-failure discipline (unsupported modes raise before
   opening the file; writers validate and refuse partial output) has held through
@@ -188,13 +193,15 @@ Priorities use the review's definitions:
 
 Ordered P0-latent first, then by authoring impact. One reviewable card each.
 
-- **Stage 4.6A — Compatibility-package USG-T guard (closes the latent P0).**
-  Make `MfUsgSfr`/`MfUsgStr`/`MfUsgSub`/`MfUsgSwt` *use* on an **unstructured**
-  USG-T model fail or warn explicitly instead of silently using the structured
-  base format. Keep FHB/GAGE working (proven via `Ex8`). Tiny, high-certainty.
-  *Acceptance:* loading/authoring one of these on a DISU model raises a clear
-  `NotImplementedError` (or documented guard warning); `Ex8` still round-trips;
-  one negative test; roadmap "compatibility-only" rows updated to "guarded".
+- **Stage 4.6A — Compatibility-package USG-T guard — EXECUTED (revised scope).**
+  Guards **STR/SUB/SWT only** (`flopy/mfusg/mfusgcompat.py` wrappers registered
+  in `MfUsg.mfnam_packages`): unstructured-`MfUsg` load/authoring →
+  `NotImplementedError` before any read/write. **SFR excluded** — DISU+SFR is
+  base-validated by `freyberg_usg` (`test_usg.py`), so guarding it would break
+  passing tests and contradict reality; SFR stays compatibility/base support.
+  FHB/GAGE untouched. Structured `MfUsg` and plain `flopy.modflow.Modflow`
+  unaffected. 3 negative/regression tests added (`-k compat`); freyberg SFR
+  tests still pass; transport focused **241**, combined **245** (ARM).
 
 - **Stage 4.6B — From-scratch list-parameter authoring: DRT (pilot).**
   Extend `_usgt_parameters.py` + `MfUsgDrt` so a parameterized package can be
@@ -228,12 +235,8 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
 
 ## 6. Recommended next card
 
-**Stage 4.6A — Compatibility-package USG-T guard.** It closes the only latent P0
-(the sole place a USG-T model could be written silently wrong), is small and
-low-risk, needs no Fortran reimplementation, and makes the existing
-"compatibility-only" documentation *enforceable*. It should land before the
-larger P1 authoring work (4.6B+), consistent with "P0 before P1".
-
-If the reviewer prefers to lead with authoring impact instead, **Stage 4.6B**
-(DRT from-scratch parameters) is the highest-value P1 and a clean pilot for the
-shared parameter-authoring path that 4.6C reuses.
+**Stage 4.6A is done** (STR/SUB/SWT guard; SFR kept as DISU-validated base
+support). With the last latent P0 closed, the recommended next card is
+**Stage 4.6B — DRT from-scratch list-parameter authoring**: the highest-value P1
+and a clean pilot for the shared parameter-authoring path that 4.6C reuses
+(HFB / SGB-defs / QRT).
