@@ -404,9 +404,16 @@ Problem:
   `NodQRT` is not copied on activation (like DRT). FloPy does not apply the
   parameter value to `Q`. From-scratch authoring and `INSTANCES` →
   `NotImplementedError`; `MXL`/consistency → `ValueError`; `TRANSIENTQ` still
-  fails. 10 parameter tests (`-k mfusgqrt` 18 passed). Reuses the shared
-  list-parameter helpers. See `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This
-  completes the Stage 4.4 list-parameter family (HFB/SGB/DRT/QRT).**
+  fails. Reuses the shared list-parameter helpers. See
+  `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This completes the Stage 4.4
+  list-parameter family (HFB/SGB/DRT/QRT).**
+- **DONE** (Stage 4.4E review follow-up, applies to QRT and DRT): active
+  parameter names are resolved **case-insensitively** when sizing `MXAQRT`/
+  `MXADRT` (shared `resolve_list_parameter` helper), matching the validation and
+  the Fortran `UPCASE`; previously a `qp`/`QP` (or `dp`/`DP`) case mismatch
+  dropped the active `NLST` from the header. Duplicate activation of a parameter
+  in one stress period now raises `ValueError`. 4 new tests; `-k mfusgqrt` 20,
+  `-k mfusgdrt` 24 passed.
 
 Fortran facts to verify:
 

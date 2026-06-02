@@ -3810,6 +3810,51 @@ def test_mfusgqrt_parameter_active_undefined_fails(function_tmpdir):
     assert not out.exists()
 
 
+def test_mfusgqrt_parameter_active_case_insensitive(function_tmpdir):
+    """An activation name that differs from its definition only in case (the
+    Fortran UPCASEs both) still counts toward MXAQRT (review follow-up)."""
+    p = function_tmpdir / "ci.qrt"
+    p.write_text(
+        "# qrt case-insensitive\n"
+        "         2         0 0 1 1\n"  # MXAQRT MXRTCELLS IQRTCB NPQRT MXL
+        "qp QRT 2.0 1\n"  # definition lower-case
+        " 5  -5.000000e+01\n"
+        " 1 1    Stress Period 1\n"
+        " 21  -1.000000e+02\n"
+        "QP\n"  # activation upper-case
+    )
+    ml = _qrt_model(function_tmpdir, "ci1")
+    qrt = MfUsgQrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    out = function_tmpdir / "ci_out.qrt"
+    qrt.fn_path = str(out)
+    qrt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    # 1 non-parametric + 1 active (resolved case-insensitively) => MXAQRT=2
+    assert item1.split()[0] == "2"
+
+
+def test_mfusgqrt_parameter_duplicate_active_fails(function_tmpdir):
+    """Activating the same parameter twice in a stress period (case-insensitive)
+    raises ValueError (the Fortran aborts 'already activated'), no partial file."""
+    dtype = MfUsgQrt.get_default_dtype(returnflow=False)
+    rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "qp": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
+               "recipient_nodes": [[]]},
+    }
+    qrt = MfUsgQrt(
+        _qrt_model(function_tmpdir, "dup"),
+        parameters=params,
+        mxl=5,
+        active_params={0: ["qp", "QP"]},  # same parameter twice
+    )
+    out = function_tmpdir / "dup.qrt"
+    qrt.fn_path = str(out)
+    with pytest.raises(ValueError, match="more than once"):
+        qrt.write_file()
+    assert not out.exists()
+
+
 # ---------------------------------------------------------------------------
 # MfUsgDrt tests (Drain Return DRT8, gwf2drt8u.f)
 # ---------------------------------------------------------------------------
@@ -4242,6 +4287,54 @@ def test_mfusgdrt_parameter_active_undefined_fails(function_tmpdir):
     out = function_tmpdir / "ud.drt"
     drt.fn_path = str(out)
     with pytest.raises(ValueError, match="not defined"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_active_case_insensitive(function_tmpdir):
+    """An activation name differing from its definition only in case still counts
+    toward MXADRT (review follow-up)."""
+    p = function_tmpdir / "ci.drt"
+    p.write_text(
+        "# drt case-insensitive\n"
+        "         2 0 1 1 RETURNFLOW\n"  # MXADRT IDRTCB NPDRT MXL RETURNFLOW
+        "dp DRT 2.0 1\n"  # definition lower-case
+        " 5  5.000000e+00  1.000000e+01  0\n"
+        " 1 1    Stress Period 1\n"
+        " 21  4.000000e+00  2.000000e+01  0\n"
+        "DP\n"  # activation upper-case
+    )
+    ml = _drt_model(function_tmpdir, "ci1")
+    drt = MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
+    out = function_tmpdir / "ci_out.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    item1 = next(ln for ln in out.read_text().splitlines() if not ln.startswith("#"))
+    # 1 non-parametric + 1 active (resolved case-insensitively) => MXADRT=2
+    assert item1.split()[0] == "2"
+
+
+def test_mfusgdrt_parameter_duplicate_active_fails(function_tmpdir):
+    """Activating the same parameter twice in a stress period (case-insensitive)
+    raises ValueError, no partial file."""
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True, changec=False)
+    rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
+    params = {
+        "dp": {
+            "partyp": "DRT", "parval": "1.0", "nlst": 1,
+            "data": rows, "recipient_nodes": [[]],
+        }
+    }
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "dup"),
+        options=["RETURNFLOW"],
+        parameters=params,
+        mxl=5,
+        active_params={0: ["dp", "DP"]},  # same parameter twice
+    )
+    out = function_tmpdir / "dup.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="more than once"):
         drt.write_file()
     assert not out.exists()
 

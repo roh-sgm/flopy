@@ -153,7 +153,16 @@ Three fixes from review:
 3. **P3 — stale roadmap.** `USGT_roadmap.md` Gap §7 (and the DRT row) no longer
    say `NPDRT>0` fails explicitly.
 
-## Tests (`-k mfusgdrt`, 22 passed)
+Second review follow-up (Stage 4.4E review): active-parameter names are now
+resolved **case-insensitively** in `_max_active_drains` (via the shared
+`resolve_list_parameter` helper), matching the validation and the Fortran
+(`SGWF2DRT8LS` UPCASEs both names). Previously a definition `dp` activated as
+`DP` passed validation but its `NLST` was not added to `MXADRT`, under-sizing the
+header. Also, activating the same parameter more than once in a stress period
+(case-insensitively) now raises `ValueError` ("already activated" in the
+Fortran), before the file is opened.
+
+## Tests (`-k mfusgdrt`, 24 passed)
 
 New (Stage 4.4D + review follow-up):
 
@@ -181,6 +190,13 @@ New (Stage 4.4D + review follow-up):
 - `test_mfusgdrt_parameter_active_undefined_fails` — active name not defined →
   `ValueError`, no partial file.
 
+Second review follow-up:
+
+- `test_mfusgdrt_parameter_active_case_insensitive` — definition `dp`, activation
+  `DP` ⇒ `MXADRT=2`.
+- `test_mfusgdrt_parameter_duplicate_active_fails` — `dp` + `DP` in one period →
+  `ValueError`, no partial file.
+
 Unchanged (non-parametric regression): the existing DRT tests
 (`inline_single_recipient`, `changec_concentration`, `spread_multi_node`,
 `stress_period_reuse`, `nam_registry`, `structured_construction_raises`,
@@ -206,6 +222,6 @@ git diff --check
 git status --short
 ```
 
-Results (after the review follow-up): `-k mfusgdrt` **22 passed**;
-`-k "mfusgdrt or usgt_list"` **25 passed**; focused **203 passed**; exe
-**4 passed**; combined **207 passed** under the USG-T 2.7 ARM binary.
+Results (after the second review follow-up): `-k mfusgdrt` **24 passed**;
+`-k "mfusgqrt or mfusgdrt or usgt_list"` **47 passed**; focused **217 passed**;
+exe **4 passed**; combined **221 passed** under the USG-T 2.7 ARM binary.

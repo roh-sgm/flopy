@@ -99,7 +99,20 @@ not execution-guaranteed) / Expanded valid write (list controls)`**.
 - **`TRANSIENTQ`** → `NotImplementedError`.
 - All validation runs before the file is opened — no partial file.
 
-## Tests (`-k mfusgqrt`, 18 passed)
+## Review follow-up (executed)
+
+Active-parameter names are resolved **case-insensitively** when sizing `MXAQRT`,
+matching the validation and the Fortran (`SGWF2QRT8LS` UPCASEs both names,
+`gwf2QRT8u.f:1137-1143`). Previously `_max_active_sinks` looked up
+`self.parameters.get(name)` case-sensitively, so a definition `qp` activated as
+`QP` passed validation but its `NLST` was not added to `MXAQRT` — under-sizing
+the header and risking a Fortran abort (`NQRTCL > MXAQRT`). The lookup now uses
+the shared `resolve_list_parameter` helper (added to `_usgt_parameters.py`, used
+by both QRT and DRT). Additionally, activating the same parameter more than once
+in a stress period (case-insensitively) now raises `ValueError` before the file
+is opened (the Fortran aborts "already activated").
+
+## Tests (`-k mfusgqrt`, 20 passed)
 
 New (Stage 4.4E):
 
@@ -121,6 +134,13 @@ New (Stage 4.4E):
   `len(recipient_nodes)!=nlst` → `ValueError`, no partial file.
 - `test_mfusgqrt_parameter_active_undefined_fails` — active name not defined →
   `ValueError`.
+
+Review follow-up:
+
+- `test_mfusgqrt_parameter_active_case_insensitive` — definition `qp`, activation
+  `QP` ⇒ `MXAQRT=2` (the active row is counted).
+- `test_mfusgqrt_parameter_duplicate_active_fails` — `qp` + `QP` in one period →
+  `ValueError`, no partial file.
 
 Unchanged (non-parametric regression): `minimal_authoring`,
 `returnflow_concentration`, `multi_recipient_and_pure_sink`, `nam_registry`,
@@ -145,6 +165,6 @@ git diff --check
 git status --short
 ```
 
-Results: `-k mfusgqrt` **18 passed**; `-k "mfusgqrt or usgt_list"` **21 passed**;
-focused **213 passed**; exe **4 passed**; combined **217 passed** under the USG-T
-2.7 ARM binary.
+Results (after the review follow-up): `-k mfusgqrt` **20 passed**;
+`-k "mfusgqrt or mfusgdrt or usgt_list"` **47 passed**; focused **217 passed**;
+exe **4 passed**; combined **221 passed** under the USG-T 2.7 ARM binary.

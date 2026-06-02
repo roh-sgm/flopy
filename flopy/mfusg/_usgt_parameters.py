@@ -188,3 +188,22 @@ def write_active_list_parameters(f, names):
     """Write active list-parameter names, one per line."""
     for name in names:
         f.write(f"{name}\n")
+
+
+def resolve_list_parameter(parameters, name):
+    """Resolve a list-parameter definition by name, case-insensitively.
+
+    The Fortran upper-cases both the defined and the activated parameter name
+    (``UPARLSTSUB`` / ``SGWF2DRT8LS`` / ``SGWF2QRT8LS``), so an activation can
+    differ from its definition only in case. Returns the matching definition
+    (``parameters[key]``) or ``None``.
+    """
+    if not parameters:
+        return None
+    if name in parameters:
+        return parameters[name]
+    lname = name.lower()
+    for key, pdef in parameters.items():
+        if key.lower() == lname:
+            return pdef
+    return None

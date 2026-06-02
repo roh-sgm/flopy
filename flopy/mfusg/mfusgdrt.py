@@ -67,6 +67,7 @@ from ._usgt_list import begin_list_block
 from ._usgt_parameters import (
     read_active_list_parameters,
     read_list_parameter_header,
+    resolve_list_parameter,
     write_active_list_parameters,
     write_list_parameter_header,
 )
@@ -334,6 +335,13 @@ class MfUsgDrt(ModflowDrt):
             )
         defined = {name.lower() for name in self.parameters}
         for kper, names in self.active_params.items():
+            lowered = [nm.lower() for nm in names]
+            if len(set(lowered)) != len(lowered):
+                raise ValueError(
+                    f"MfUsgDrt.write_file: a parameter is activated more than "
+                    f"once in stress period {kper}: {names}. USG-T aborts when a "
+                    "parameter is already active this stress period."
+                )
             for nm in names:
                 if nm.lower() not in defined:
                     raise ValueError(
@@ -413,7 +421,7 @@ class MfUsgDrt(ModflowDrt):
             nonparam = prev_nonparam  # ITMP<0 reuse keeps the previous count
             active = 0
             for name in self.active_params.get(kper, []):
-                pdef = self.parameters.get(name) if self.parameters else None
+                pdef = resolve_list_parameter(self.parameters, name)
                 if pdef is not None:
                     active += pdef["nlst"]
             mx = max(mx, nonparam + active)

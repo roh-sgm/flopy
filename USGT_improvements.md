@@ -430,6 +430,22 @@ honest, upstream-ready USG-T 2.7 story.
   Only `MfUsgQrt` touched in code. Tests: `-k mfusgqrt` **18 passed** (10 new);
   `-k "mfusgqrt or usgt_list"` **21**; focused **213**, exe **4**, combined
   **217** (ARM). See `USGT_STAGE4_04_PARAMETERS_QRT.md`.
+- **Stage 4.4E review follow-up — QRT/DRT active-name case-insensitive sizing
+  (executed):** QRT/DRT validate active parameter names case-insensitively (like
+  the Fortran's `UPCASE`), but the `MXAQRT`/`MXADRT` sizing helpers
+  (`_max_active_sinks`/`_max_active_drains`) looked up `parameters.get(name)`
+  case-sensitively — so a definition `qp`/`dp` activated as `QP`/`DP` passed
+  validation yet its `NLST` was dropped from the header, risking a Fortran abort
+  (`NQRTCL > MXAQRT` / `NDRTCL > MXADRT`). Both now resolve the definition via a
+  shared `resolve_list_parameter` helper (added to `_usgt_parameters.py`).
+  Additionally, activating the same parameter more than once in a stress period
+  (case-insensitively) now raises `ValueError` up front (the Fortran aborts
+  "already activated"). Only `MfUsgQrt`/`MfUsgDrt` and the shared helper touched.
+  Tests: 4 new (QRT/DRT case-insensitive `MXAQRT/MXADRT=2`; QRT/DRT duplicate
+  activation → `ValueError`); `-k mfusgqrt` **20**, `-k mfusgdrt` **24**,
+  `-k "mfusgqrt or mfusgdrt or usgt_list"` **47**; focused **217**, exe **4**,
+  combined **221** (ARM). See `USGT_STAGE4_04_PARAMETERS_QRT.md` /
+  `USGT_STAGE4_04_PARAMETERS_DRT.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
