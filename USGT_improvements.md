@@ -562,6 +562,30 @@ honest, upstream-ready USG-T 2.7 story.
   guard, and a no-op + SFR/FHB/GAGE-registry-untouched check; `freyberg_usg` SFR
   tests still pass; focused **241**, combined **245** (ARM). See
   `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` / `USGT_STAGE4_07_COMPAT_PACKAGES.md`.
+- **Stage 4.6B — DRT from-scratch `NPDRT>0` parameter authoring (executed):**
+  promotes DRT from *parameter-preserving only* to **from-scratch authoring** (the
+  pilot for the shared parameter path that 4.6C reuses). The on-file format is
+  identical to the preservation path (same `UPARLSTRP`/activation/row writers, all
+  Fortran-audited and round-tripped in Stage 4.4D), so this is purely a FloPy-side
+  ergonomics + validation change in `mfusgdrt.py`. A new `_normalize_param`
+  canonicalizes each definition (accepts `data` as a recarray *or* any array-like
+  the active dtype can build; computes `nlst` and defaults `recipient_nodes` when
+  omitted; `partyp` defaults to / is validated `DRT`); `_validate_parameter_write`
+  now resolves `MXL` (`= Σ nlst` when omitted, else validated `≥` total) and
+  validates `active_params` (stress period `0..nper-1`, names defined
+  case-insensitively, no duplicate activation) — all before the file is opened, so
+  no partial file. The old `NotImplementedError` "cannot author from scratch" is
+  replaced; `active_params` with no definitions now raises `ValueError`.
+  `INSTANCES` stays unsupported; activated `SPREAD` (`NR<0`) stays
+  structural-round-trip-only (`NodDRT` not copied on activation). Only
+  `mfusgdrt.py` touched. Tests: 7 new authoring tests (simple, RETURNFLOW+CHANGEC+
+  AUX+recipients, mixed non-param+active, MXL-auto, partyp/kper/recipients-without-
+  RETURNFLOW negatives) + 1 repurposed (`_from_scratch_fails` →
+  `_active_without_defs_fails`); the Stage 4.4D preservation tests stay green.
+  `-k mfusgdrt` **34**, focused **248**, exe **4**, combined **252** (ARM).
+  Verified at the FloPy round-trip + Fortran-format level (a from-scratch
+  parametric DRT was not exe-run — it needs a full from-scratch DISU model). See
+  `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

@@ -104,26 +104,33 @@ recipient_nodes**.
 
 ### Validation / explicit failures
 
-- **From-scratch authoring** (active parameters with no loaded definitions) →
-  `NotImplementedError`.
+- **From-scratch parameter authoring is now supported (Stage 4.6B)** — pass
+  `parameters={name: {...}}` + `active_params={kper: [...]}`; see
+  `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`. (Previously this raised
+  `NotImplementedError`.)
+- **`active_params` with no `parameters` defined** → `ValueError`.
 - **`INSTANCES` (`NUMINST>0`)** → `NotImplementedError` on load (instances
-  combined with per-row recipient lists are not implemented yet).
-- **`MXL` hardening** → `ValueError` when definitions are present and `MXL<=0` or
-  `MXL <` the total definition rows.
-- **Inconsistent definitions** → `ValueError` (missing keys, `len(data)!=nlst`,
-  `len(recipient_nodes)!=nlst`, or an active name not defined).
+  combined with per-row recipient lists are not implemented yet); the authoring
+  API has no instance field.
+- **`MXL`** → auto-computed as the total definition rows when omitted;
+  `ValueError` when given and `<` that total.
+- **Inconsistent definitions** → `ValueError` (`partyp` not `DRT`, missing
+  `parval`, empty `data`, `nlst != len(data)`, `recipient_nodes` length, or
+  recipients without `RETURNFLOW`); **`active_params`** → `ValueError` for an
+  undefined name, a duplicate activation in a period, or a stress period outside
+  `0..nper-1`.
 - All validation runs before the file is opened — no partial file.
 
 ## Decision: honest status
 
-DRT stays **`✅ Full (authoring)`** for the non-parametric package and is now
-**parameter-preserving for `NPDRT` (definitions + activations + recipients)** —
-DRT is internally consistent in the Fortran, so active parameters are real. It is
-**not** "Full" on the parametric axis because:
+DRT is **`✅ Full (authoring)`** for the non-parametric package, is
+**parameter-preserving for `NPDRT` (definitions + activations + recipients)**,
+and (Stage 4.6B) supports **from-scratch `NPDRT>0` parameter authoring** — DRT is
+internally consistent in the Fortran, so active parameters are real. Remaining
+caveats on the parametric axis:
 
-- from-scratch parameter authoring is unsupported (`NotImplementedError`);
 - parameter `INSTANCES` are unsupported (`NotImplementedError`), although the
-  Fortran supports them;
+  Fortran supports them; the from-scratch authoring API has no instance field;
 - the `ITMP<0` reuse of non-parametric drains is written **expanded** (rows
   re-emitted, not re-written as `-1`), matching the existing non-parametric DRT
   behavior; data round-trips, the `-1` syntax does not;
@@ -181,8 +188,10 @@ New (Stage 4.4D + review follow-up):
   COND.
 - `test_mfusgdrt_parameter_instances_unsupported` — `INSTANCES` →
   `NotImplementedError`.
-- `test_mfusgdrt_parameter_from_scratch_fails` — active params without
-  definitions → `NotImplementedError`, no partial file.
+- `test_mfusgdrt_parameter_active_without_defs_fails` — active params without
+  definitions → `ValueError`, no partial file. (Repurposed from the old
+  `_from_scratch_fails`: from-scratch authoring *with* definitions is now
+  supported — Stage 4.6B; see `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.)
 - `test_mfusgdrt_parameter_mxl_too_small_fails` — `MXL <` total →
   `ValueError`, no partial file.
 - `test_mfusgdrt_parameter_inconsistent_fails` — `len(data) != nlst` →

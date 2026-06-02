@@ -1366,9 +1366,18 @@ Prioritized next cards (full criteria in the audit doc):
   unaffected. 3 tests (`-k compat`); freyberg SFR tests still pass; transport
   focused **241**, combined **245** (ARM). See
   `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` / `USGT_STAGE4_07_COMPAT_PACKAGES.md`.
-- **Stage 4.6B — From-scratch list-parameter authoring: DRT pilot** (top P1).
-  *Recommended next.*
-- **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT.**
+- **Stage 4.6B — From-scratch list-parameter authoring: DRT pilot — DONE
+  (executed).** `MfUsgDrt` builds a parameterized package from Python
+  (`parameters=`/`active_params=`; ergonomic input — `data` array-like,
+  `nlst`/`MXL`/`recipient_nodes` auto, `partyp` default/validated `DRT` —
+  normalized + validated before open, no partial file) and writes a valid
+  `NPDRT>0` file that reloads with the same semantics. `INSTANCES` still
+  `NotImplementedError`; activated SPREAD stays structural-only. Only
+  `mfusgdrt.py` touched. 7 new tests + 1 repurposed; `-k mfusgdrt` **34**, focused
+  **248**, combined **252** (ARM). See
+  `USGT_STAGE4_10_DRT_PARAMETER_AUTHORING.md`.
+- **Stage 4.6C — Extend param authoring to HFB / SGB(defs) / QRT** (reuse the
+  4.6B path). *Recommended next.*
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**

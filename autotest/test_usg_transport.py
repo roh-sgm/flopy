@@ -4483,8 +4483,10 @@ def test_mfusgdrt_parameter_instances_unsupported(function_tmpdir):
         MfUsgDrt.load(str(p), ml, nper=1, ext_unit_dict={})
 
 
-def test_mfusgdrt_parameter_from_scratch_fails(function_tmpdir):
-    """Active parameters with no loaded definitions fail explicitly, no file."""
+def test_mfusgdrt_parameter_active_without_defs_fails(function_tmpdir):
+    """active_params referencing parameters with no definitions fails explicitly
+    (ValueError), no file. (From-scratch authoring with definitions is supported
+    as of Stage 4.6B — see the authoring tests below.)"""
     drt = MfUsgDrt(
         _drt_model(function_tmpdir, "fs"),
         options=["RETURNFLOW"],
@@ -4492,7 +4494,7 @@ def test_mfusgdrt_parameter_from_scratch_fails(function_tmpdir):
     )
     out = function_tmpdir / "fs.drt"
     drt.fn_path = str(out)
-    with pytest.raises(NotImplementedError, match="from scratch"):
+    with pytest.raises(ValueError, match="none are defined"):
         drt.write_file()
     assert not out.exists()
 
@@ -4615,6 +4617,168 @@ def test_mfusgdrt_parameter_duplicate_active_fails(function_tmpdir):
     out = function_tmpdir / "dup.drt"
     drt.fn_path = str(out)
     with pytest.raises(ValueError, match="more than once"):
+        drt.write_file()
+    assert not out.exists()
+
+
+# --- Stage 4.6B: DRT from-scratch NPDRT parameter authoring -----------------
+#
+# A parameterized DRT can be built entirely in Python (no prior load): pass
+# parameters={name: {...}} + active_params={kper: [...]}. Ergonomic input — data
+# as plain tuples, nlst/mxl/recipient_nodes computed when omitted — is normalized
+# and validated before the file is opened; write -> reload preserves it.
+
+
+def test_mfusgdrt_parameter_authoring_from_scratch(function_tmpdir):
+    """Build a parameterized DRT from scratch (ergonomic input): NPDRT, auto MXL,
+    definition rows, per-SP activation, 0-based internal / 1-based file."""
+    ml = _drt_model(function_tmpdir, "auth")
+    # data as plain tuples (node 0-based); nlst/mxl/recipient_nodes omitted.
+    params = {"dp": {"parval": "2.0", "data": [(4, 5.0, 10.0, 0.0)]}}
+    drt = MfUsgDrt(
+        ml, options=["RETURNFLOW"], parameters=params, active_params={0: ["dp"]}
+    )
+    out = function_tmpdir / "auth.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    text = out.read_text()
+    item1 = next(ln for ln in text.splitlines() if not ln.startswith("#")).split()
+    assert item1[2] == "1" and item1[3] == "1"  # NPDRT=1, MXL auto = sum(nlst)=1
+    assert "dp DRT 2.0 1" in text  # UPARLSTRP header
+    assert "\n 5  5.000000e+00  1.000000e+01  0\n" in text  # node 4 -> 5 (1-based)
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "auth2"), nper=1,
+                       ext_unit_dict={})
+    pd = re.parameters["dp"]
+    assert pd["partyp"].upper() == "DRT" and pd["nlst"] == 1
+    assert abs(float(pd["parval"]) - 2.0) < 1e-9
+    assert list(pd["data"]["node"]) == [4]  # back to 0-based
+    assert re.active_params == {0: ["dp"]}
+
+
+def test_mfusgdrt_parameter_authoring_returnflow_changec_aux(function_tmpdir):
+    """From-scratch parameter with RETURNFLOW + CHANGEC + AUX + per-row
+    recipient_nodes round-trips (recipients 0-based internal / 1-based file)."""
+    ml = _drt_model(function_tmpdir, "rfa")
+    params = {
+        "dp": {
+            "parval": "1.5",
+            "data": [(0, 5.0, 10.0, 0.7, 2, 0.15), (3, 4.0, 20.0, 0.5, 1, 0.25)],
+            "recipient_nodes": [[8, 9], [7]],  # 0-based
+        }
+    }
+    drt = MfUsgDrt(
+        ml,
+        options=["RETURNFLOW", "CHANGEC", "AUX C01"],
+        parameters=params,
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "rfa.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "rfa2"), nper=1,
+                       ext_unit_dict={})
+    pd = re.parameters["dp"]
+    assert pd["nlst"] == 2
+    assert pd["recipient_nodes"][0] == [8, 9] and pd["recipient_nodes"][1] == [7]
+    assert list(pd["data"]["idchngtyp"]) == [2, 1]
+    assert np.allclose(pd["data"]["C01"], [0.15, 0.25])
+
+
+def test_mfusgdrt_parameter_authoring_mixed_nonparam_active(function_tmpdir):
+    """A non-parametric drain and an active parameter in the same SP: MXADRT
+    counts both (NDRTNP + active NLST)."""
+    ml = _drt_model(function_tmpdir, "mix")
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
+    spd = {0: np.array([(2, 6.0, 30.0, 0.0)], dtype=dtype).view(np.recarray)}
+    params = {"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.0)]}}
+    drt = MfUsgDrt(
+        ml,
+        options=["RETURNFLOW"],
+        stress_period_data=spd,
+        parameters=params,
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "mix.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    item1 = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert item1[0] == "2"  # MXADRT = 1 non-param + 1 active param row
+
+    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "mix2"), nper=1,
+                       ext_unit_dict={})
+    assert list(re.stress_period_data[0]["node"]) == [2]
+    assert re.active_params == {0: ["dp"]}
+
+
+def test_mfusgdrt_parameter_authoring_mxl_auto(function_tmpdir):
+    """MXL is computed as the total definition rows when omitted."""
+    ml = _drt_model(function_tmpdir, "mxa")
+    params = {
+        "a": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.0), (1, 5.0, 10.0, 0.0)]},
+        "b": {"parval": "1.0", "data": [(2, 5.0, 10.0, 0.0)]},
+    }
+    drt = MfUsgDrt(
+        ml, options=["RETURNFLOW"], parameters=params, active_params={0: ["a"]}
+    )  # mxl omitted
+    out = function_tmpdir / "mxa.drt"
+    drt.fn_path = str(out)
+    drt.write_file()
+    item1 = next(
+        ln for ln in out.read_text().splitlines() if not ln.startswith("#")
+    ).split()
+    assert item1[3] == "3"  # MXL auto = 2 + 1
+
+
+def test_mfusgdrt_parameter_authoring_partyp_invalid_fails(function_tmpdir):
+    """A non-DRT partyp raises ValueError before the file is opened, no file."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "pt"),
+        options=["RETURNFLOW"],
+        parameters={"dp": {"partyp": "GHB", "parval": "1.0",
+                           "data": [(0, 5.0, 10.0, 0.0)]}},
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "pt.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="partyp"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_kper_out_of_range_fails(function_tmpdir):
+    """An active_params stress period outside 0..nper-1 raises ValueError,
+    no file."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "kp", nper=1),
+        options=["RETURNFLOW"],
+        parameters={"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.0)]}},
+        active_params={2: ["dp"]},  # nper=1, so kper 2 is invalid
+    )
+    out = function_tmpdir / "kp.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="out of range"):
+        drt.write_file()
+    assert not out.exists()
+
+
+def test_mfusgdrt_parameter_authoring_recipients_without_returnflow_fails(
+    function_tmpdir,
+):
+    """recipient_nodes on a parameter without RETURNFLOW raises ValueError."""
+    drt = MfUsgDrt(
+        _drt_model(function_tmpdir, "rw"),
+        options=[],  # no RETURNFLOW
+        parameters={"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0)],
+                           "recipient_nodes": [[7]]}},
+        active_params={0: ["dp"]},
+    )
+    out = function_tmpdir / "rw.drt"
+    drt.fn_path = str(out)
+    with pytest.raises(ValueError, match="RETURNFLOW"):
         drt.write_file()
     assert not out.exists()
 

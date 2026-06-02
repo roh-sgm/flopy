@@ -60,11 +60,16 @@ Not supported (explicit failure rather than partial write):
 
 * Parameter ``INSTANCES`` (``NUMINST>0``): the Fortran supports them, but FloPy
   does not yet (instances combined with per-row recipient lists) -> load raises
-  ``NotImplementedError``.
-* From-scratch parameter authoring (active parameters with no loaded
-  definitions) -> ``NotImplementedError``.
+  ``NotImplementedError``; the from-scratch authoring API has no instance field.
 * An ``EXTERNAL`` spreading-node unit that cannot be resolved via
   ``ext_unit_dict`` -> ``NotImplementedError`` (inline the nodes instead).
+
+From-scratch ``NPDRT>0`` parameter **authoring** is supported (Stage 4.6B): pass
+``parameters={name: {...}}`` and ``active_params={kper: [name, ...]}`` (see the
+``parameters`` argument). ``active_params`` that reference an undefined name (or
+no ``parameters`` at all) raise ``ValueError``. Activated ``SPREAD`` (``NR<0``)
+recipients still round-trip structurally but are not execution-guaranteed (USG-T
+copies ``DRTF`` but not ``NodDRT`` on activation).
 """
 
 import numpy as np
@@ -106,6 +111,29 @@ class MfUsgDrt(ModflowDrt):
     options : list of str, optional
         Package options, e.g. ``["RETURNFLOW", "CHANGEC", "AUX C01"]``. A
         ``SPREAD`` token is added automatically on write when needed.
+    parameters : dict, optional
+        Named ``NPDRT`` list-parameter definitions, keyed by parameter name.
+        Each value is a dict (Stage 4.6B from-scratch authoring; also the form
+        ``load`` preserves):
+
+        * ``parval`` (required) — the parameter value (scales ``COND``);
+        * ``data`` (required) — the parameter's drain rows: a recarray matching
+          the active ``dtype``, or any array-like the dtype can build (e.g. a
+          list of tuples), nodes 0-based;
+        * ``partyp`` (optional) — defaults to ``"DRT"`` and must be ``"DRT"``;
+        * ``nlst`` (optional) — number of rows; computed from ``data`` if
+          omitted, validated if given;
+        * ``recipient_nodes`` (optional, ``RETURNFLOW`` only) — one 0-based
+          recipient list per row; defaults to empty lists if omitted.
+    mxl : int, optional
+        ``MXL`` (item 1): max parameter list entries. Computed as the total of
+        all definition ``nlst`` when omitted/0; validated to be >= that total if
+        given.
+    active_params : dict, optional
+        ``{kper: [name, ...]}`` — parameters activated per zero-based stress
+        period (``ITMP NP`` records). Names must be defined in ``parameters``
+        (case-insensitive); duplicates within a period and out-of-range ``kper``
+        raise ``ValueError``.
     extension : str
         Filename extension (default ``"drt"``).
     unitnumber : int, optional
@@ -290,59 +318,106 @@ class MfUsgDrt(ModflowDrt):
             )
         return recips
 
-    def _validate_parameter_write(self):
-        """Validate preserved DRT parameter state before a parameterized write.
+    def _normalize_param(self, name, pdef):
+        """Validate + canonicalize one DRT parameter definition for writing.
 
-        Raises ``NotImplementedError`` for from-scratch authoring (active
-        parameters with no loaded definitions) and ``ValueError`` for
-        inconsistent definitions, so a parameterized item 1 is never written
-        without a complete, consistent body. Validation runs before the file is
-        opened, so no partial file is produced.
+        Accepts an ergonomic from-scratch dict *or* an already-canonical loaded
+        one and returns ``{partyp, parval, nlst, data (recarray),
+        recipient_nodes}``. ``data`` may be a recarray or any array-like the
+        active ``dtype`` can build; ``nlst`` and ``recipient_nodes`` are computed
+        when omitted and validated when given. ``partyp`` defaults to ``DRT`` and
+        must be ``DRT`` (the Fortran activates DRT params as ``PARTYP='DRT'``).
+        Raises ``ValueError`` for invalid input, before any file is opened.
+        """
+        if not isinstance(pdef, dict):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' must be a dict, got "
+                f"{type(pdef).__name__}."
+            )
+        partyp = pdef.get("partyp", "DRT")
+        if str(partyp).upper() != "DRT":
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' partyp must be 'DRT'; "
+                f"got {partyp!r}."
+            )
+        parval = pdef.get("parval")
+        if parval is None or (isinstance(parval, str) and not parval.strip()):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' is missing 'parval'."
+            )
+        data = pdef.get("data")
+        if data is None or len(data) == 0:
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' needs non-empty 'data' "
+                "drain rows."
+            )
+        if not isinstance(data, np.recarray):
+            data = np.array(data, dtype=self.dtype).view(np.recarray)
+        nlst = pdef.get("nlst")
+        if nlst is None:
+            nlst = len(data)
+        elif nlst != len(data):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' declares nlst={nlst} "
+                f"but carries {len(data)} rows."
+            )
+        recips = pdef.get("recipient_nodes")
+        if recips is None:
+            recips = [[] for _ in range(nlst)]
+        if len(recips) != nlst:
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' has {len(recips)} "
+                f"recipient lists but nlst={nlst} (need one per definition row)."
+            )
+        if not self.returnflow and any(len(r) > 0 for r in recips):
+            raise ValueError(
+                f"MfUsgDrt.write_file: parameter '{name}' has recipient_nodes but "
+                "the RETURNFLOW option is not enabled."
+            )
+        return {
+            "partyp": "DRT",
+            "parval": parval,
+            "nlst": nlst,
+            "data": data,
+            "recipient_nodes": [list(r) for r in recips],
+        }
+
+    def _validate_parameter_write(self):
+        """Normalize + validate DRT parameter state for a parameterized write.
+
+        Supports both preserved (loaded) and **from-scratch** parameter dicts
+        (Stage 4.6B). Returns ``(params, mxl)`` with canonical definitions and the
+        resolved ``MXL`` (``= sum(nlst)`` when ``mxl`` is omitted). All validation
+        runs before the file is opened, so a parameterized item 1 is never written
+        without a complete, consistent body and no partial file is produced.
+        ``INSTANCES`` remains unsupported (load raises; the authoring API has no
+        instance field).
         """
         if not self.parameters:
-            raise NotImplementedError(
-                "MfUsgDrt.write_file cannot author DRT parameter definitions "
-                "from scratch (active parameters without loaded definitions). "
-                "Parameter preservation is supported for files read by "
-                "MfUsgDrt.load; for from-scratch input use no parameters."
+            raise ValueError(
+                "MfUsgDrt.write_file: active_params reference parameters but none "
+                "are defined. Pass parameters={name: {...}} to author DRT "
+                "parameter definitions from scratch."
             )
+        params = {}
         total = 0
         for name, pdef in self.parameters.items():
-            missing = [
-                k
-                for k in ("partyp", "parval", "nlst", "data", "recipient_nodes")
-                if k not in pdef
-            ]
-            if missing:
-                raise ValueError(
-                    f"MfUsgDrt.write_file: parameter '{name}' is missing keys "
-                    f"{missing} (needs partyp, parval, nlst, data, "
-                    "recipient_nodes)."
-                )
-            if len(pdef["data"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgDrt.write_file: parameter '{name}' declares nlst="
-                    f"{pdef['nlst']} but carries {len(pdef['data'])} rows."
-                )
-            if len(pdef["recipient_nodes"]) != pdef["nlst"]:
-                raise ValueError(
-                    f"MfUsgDrt.write_file: parameter '{name}' has "
-                    f"{len(pdef['recipient_nodes'])} recipient lists but nlst="
-                    f"{pdef['nlst']} (need one per definition row)."
-                )
-            total += pdef["nlst"]
-        if self.mxl <= 0:
+            params[name] = self._normalize_param(name, pdef)
+            total += params[name]["nlst"]
+        mxl = self.mxl if self.mxl else total
+        if mxl < total:
             raise ValueError(
-                "MfUsgDrt.write_file: MXL (item 1) must be > 0 when DRT "
-                f"parameter definitions are present; got mxl={self.mxl}."
+                f"MfUsgDrt.write_file: MXL ({mxl}) must be >= the total number of "
+                f"parameter list entries ({total})."
             )
-        if self.mxl < total:
-            raise ValueError(
-                f"MfUsgDrt.write_file: MXL ({self.mxl}) must be >= the total "
-                f"number of parameter list entries ({total})."
-            )
-        defined = {name.lower() for name in self.parameters}
+        defined = {name.lower() for name in params}
+        nper = self.parent.nper
         for kper, names in self.active_params.items():
+            if not 0 <= kper < nper:
+                raise ValueError(
+                    f"MfUsgDrt.write_file: active_params stress period {kper} is "
+                    f"out of range 0..{nper - 1}."
+                )
             lowered = [nm.lower() for nm in names]
             if len(set(lowered)) != len(lowered):
                 raise ValueError(
@@ -356,6 +431,7 @@ class MfUsgDrt(ModflowDrt):
                         f"MfUsgDrt.write_file: active parameter '{nm}' (stress "
                         f"period {kper}) is not defined in parameters."
                     )
+        return params, mxl
 
     def write_file(self):
         """Write the package file in MODFLOW-USG-T DRT8 format.
@@ -364,16 +440,18 @@ class MfUsgDrt(ModflowDrt):
         no structured-delegation path here.
         """
         preserve = bool(self.parameters) or any(self.active_params.values())
+        params, mxl = ({}, 0)
         if preserve:
-            self._validate_parameter_write()
+            # Normalizes from-scratch / preserved definitions and validates the
+            # whole parameterized state before the file is opened.
+            params, mxl = self._validate_parameter_write()
         nper = self.parent.nper
         aux_names = self._aux_field_names()
         has_aux = len(aux_names) > 0
 
-        mxadrt = self._max_active_drains()
-        mxspread = self._max_spread_nodes()
-        npdrt = len(self.parameters) if preserve else 0
-        mxl = self.mxl if preserve else 0
+        mxadrt = self._max_active_drains(params)
+        mxspread = self._max_spread_nodes(params)
+        npdrt = len(params)
 
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
@@ -388,14 +466,13 @@ class MfUsgDrt(ModflowDrt):
 
             # Items 2-3: parameter definitions (UPARLSTRP header + NLST rows,
             # each with its RETURNFLOW recipients / spreading block).
-            if preserve:
-                for name, pdef in self.parameters.items():
-                    write_list_parameter_header(
-                        f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
-                    )
-                    recips = pdef["recipient_nodes"]
-                    for i, rec in enumerate(pdef["data"]):
-                        self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
+            for name, pdef in params.items():
+                write_list_parameter_header(
+                    f, name, pdef["partyp"], pdef["parval"], pdef["nlst"]
+                )
+                recips = pdef["recipient_nodes"]
+                for i, rec in enumerate(pdef["data"]):
+                    self._write_drain_line(f, rec, recips[i], has_aux, aux_names)
 
             for kper in range(nper):
                 active = self.active_params.get(kper, []) if preserve else []
@@ -411,7 +488,7 @@ class MfUsgDrt(ModflowDrt):
                 # Active-parameter records (SGWF2DRT8LS) follow the non-param rows.
                 write_active_list_parameters(f, active)
 
-    def _max_active_drains(self):
+    def _max_active_drains(self, params):
         """Max active drain-return cells in any stress period (the Fortran's
         NDRTCL, which must not exceed MXADRT).
 
@@ -419,7 +496,8 @@ class MfUsgDrt(ModflowDrt):
         non-parametric drains: ``NDRTCL = NDRTNP + sum(nlst of active params)``
         (gwf2drt8u.f: SGWF2DRT8LS does ``NDRTCL = NDRTCL + NLST`` and aborts if
         ``NDRTCL > MXADRT``). ``ITMP<0`` reuses the previous period's
-        non-parametric count.
+        non-parametric count. ``params`` is the canonical (normalized) parameter
+        dict from ``_validate_parameter_write`` (empty when not parameterized).
         """
         mx = 0
         prev_nonparam = 0
@@ -429,24 +507,25 @@ class MfUsgDrt(ModflowDrt):
             nonparam = prev_nonparam  # ITMP<0 reuse keeps the previous count
             active = 0
             for name in self.active_params.get(kper, []):
-                pdef = resolve_list_parameter(self.parameters, name)
+                pdef = resolve_list_parameter(params, name)
                 if pdef is not None:
                     active += pdef["nlst"]
             mx = max(mx, nonparam + active)
         return mx
 
-    def _max_spread_nodes(self):
+    def _max_spread_nodes(self, params):
         """Max total spreading-recipient nodes (non-parametric per SP, and the
-        parameter definitions, which the Fortran also stores in NodDRT)."""
+        canonical parameter definitions, which the Fortran also stores in
+        NodDRT)."""
         mx = 0
         for kper, recarray in self.stress_period_data.items():
             recips = self.recipient_nodes.get(kper, [])
             total = sum(len(r) for r in recips if len(r) > 1)
             mx = max(mx, total)
-        if self.parameters:
+        if params:
             def_total = sum(
                 len(r)
-                for pdef in self.parameters.values()
+                for pdef in params.values()
                 for r in pdef.get("recipient_nodes", [])
                 if len(r) > 1
             )
