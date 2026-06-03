@@ -745,13 +745,35 @@ honest, upstream-ready USG-T 2.7 story.
   multi-lake-with-sill from-scratch *execution* (not exe-smoke-tested — manual
   tier; `Ex8_Lake` covers LAK execution). See
   `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
-- **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
-  (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
-  option triggers a cascade of conditional arrays (zone map, tabular area
-  functions, Langmuir isotherm arrays); too large and rare to model in v1.
-  `MfUsgDpt.load` raises `NotImplementedError` at the option line before any
-  extra read; test covers both the bare keyword and the `IAREA_FNIM IKAWI_FNIM`
-  form. Spec recorded in roadmap Gap §6.
+- **Stage 4.6E — DPT `A-W_ADSORBIM` immobile air-water adsorption (executed):**
+  promotes `MfUsgDpt` from explicit-failure to from-scratch authoring + load +
+  write for the **array-only** function-index branches: `IAREA_FNIM ∈ {1 (AMAX),
+  4 (X2/X1/X0)}` × `IKAWI_FNIM ∈ {1, 2}` (Langmuir A/B per species). Fortran
+  audit (`gwt2dptu1.f`, `dpt2aw_adsorb.f`): the option line carries
+  `A-W_ADSORBIM IAREA_FNIM IKAWI_FNIM`; `AW_ADSORBIM1AL` only reads a zone
+  map/scalars/area table for the tabular/scalar branches; `AW_ADSORBIM1RP1` reads
+  the area arrays after the heat block; `AW_ADSORBIM1RP2` reads ALANG/BLANG per
+  mobile species at the top of the species loop, before `ADSORBIM`. The chosen
+  subset reads **only plain arrays** (no zone map/scalar/table), so I/O is exact
+  and no later read shifts. `write_file`/`load` place the indices on the option
+  line and the arrays in the matching RP1/RP2 positions; a shared
+  `_check_aw_adsorbim_supported` rejects `IAREA_FNIM ∈ {2,3,5}` and `IKAWI_FNIM ∈
+  {3,4}` (zone map + `ROG_SIGMA`/`SIGMA_RT` + tables) with a specific
+  `NotImplementedError` on authoring **and** load (the latter before any array is
+  read); `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. 3 new tests
+  replace the old explicit-fail test (two round-trips + a negatives test);
+  `-k mfusgdpt` **3**, focused **294**, exe **4**, combined **298** (ARM). DPT
+  stays ⚠️ Partial — the scalar/tabular branches remain deferred. See
+  `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
+- **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
+  unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)
+  shows the option triggers a cascade of conditional arrays (zone map, tabular
+  area functions, Langmuir isotherm arrays); too large and rare to model in v1.
+  `MfUsgDpt.load` raised `NotImplementedError` at the option line before any
+  extra read. → **Superseded by Stage 4.6E** (the array-only branches
+  `IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}` are now authored/loaded/written;
+  only the scalar/tabular branches stay `NotImplementedError`). Spec in roadmap
+  Gap §6 / `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 - **Card 4 — TIB:** decision is **keep raw/text round-trip for v1** (no semantic
   constructor). Fortran grammar (`GWF2TIB1RP`: `NIB0/NIB1/NIBM1
   [NICB0/NICB1/NICBM1]` + `U1DINT` node lists + node/head + transport blocks)

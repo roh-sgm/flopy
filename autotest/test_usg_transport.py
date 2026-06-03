@@ -6101,29 +6101,133 @@ def test_mfusghfb_parameter_authoring_negative_index_fails(function_tmpdir):
     assert not out.exists()
 
 
-def test_mfusgdpt_aw_adsorbim_fails_explicitly(function_tmpdir):
-    """DPT immobile-domain air-water adsorption (A-W_ADSORBIM) fails explicitly.
-
-    The sub-mode reads extra function indices and arrays; without support it
-    would silently shift all later reads, so load raises instead.
-    """
-    from flopy.mfusg import MfUsgDpt
+def _dpt_aw_model(function_tmpdir, name, mcomp=1, idpf=0):
+    """A minimal transport-enabled MfUsg for DPT A-W_ADSORBIM authoring tests."""
     from flopy.modflow import ModflowDis
 
-    # Two option-line forms: the bare keyword and the form with function
-    # indices (IAREA_FNIM=5, IKAWI_FNIM=4 = tabular, which would otherwise read
-    # a zone map + tabular area arrays). Both must raise at the option line,
-    # before any extra array read, so nothing downstream shifts.
-    for header in (
-        " 0 0 0 0 0 0 0 A-W_ADSORBIM\n",
-        " 0 0 0 0 0 0 0 A-W_ADSORBIM 5 4\n",
-    ):
-        dpt_file = function_tmpdir / "aw.dpt"
-        dpt_file.write_text("# DPT immobile air-water adsorption\n" + header)
-        ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
-        ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-        with pytest.raises(NotImplementedError, match="A-W_ADSORBIM"):
-            MfUsgDpt.load(str(dpt_file), ml, ext_unit_dict={})
+    m = MfUsg(structured=True, model_ws=str(function_tmpdir), modelname=name)
+    ModflowDis(m, nlay=1, nrow=2, ncol=2, nper=1)
+    m.itrnsp = 1
+    m.mcomp = mcomp
+    m.idpf = idpf
+    m.iheat = 0
+    return m
+
+
+def test_mfusgdpt_aw_adsorbim_authoring_roundtrip(function_tmpdir):
+    """A-W_ADSORBIM IAREA_FNIM=1 (AMAX) + IKAWI_FNIM=1 (Langmuir A/B) authors
+    from scratch, writes the option-line indices + RP1/RP2 arrays, and reloads
+    with the indices and arrays intact."""
+    from flopy.mfusg import MfUsgDpt
+
+    m = _dpt_aw_model(function_tmpdir, "aw1")
+    dpt = MfUsgDpt(
+        m,
+        aw_adsorbim=True,
+        iarea_fnim=1,
+        ikawi_fnim=1,
+        prsityim=0.3,
+        ddtr=0.6,
+        phif=0.4,
+        concim=1.2,
+        awamaxim=2.5,
+        alangawim=3.5,
+        blangawim=4.5,
+    )
+    dpt.fn_path = str(function_tmpdir / "aw1.dpt")
+    dpt.write_file()
+    assert "A-W_ADSORBIM 1 1" in Path(dpt.fn_path).read_text()
+
+    re = MfUsgDpt.load(dpt.fn_path, _dpt_aw_model(function_tmpdir, "aw1b"))
+    assert re.aw_adsorbim and re.iarea_fnim == 1 and re.ikawi_fnim == 1
+    assert abs(float(re.awamaxim.array.mean()) - 2.5) < 1e-5
+    assert abs(float(re.alangawim[0].array.mean()) - 3.5) < 1e-5
+    assert abs(float(re.blangawim[0].array.mean()) - 4.5) < 1e-5
+
+
+def test_mfusgdpt_aw_adsorbim_iarea4_roundtrip(function_tmpdir):
+    """A-W_ADSORBIM IAREA_FNIM=4 (X2/X1/X0) + IKAWI_FNIM=2, two species:
+    all three area arrays and the per-species Langmuir A/B round-trip."""
+    from flopy.mfusg import MfUsgDpt
+
+    m = _dpt_aw_model(function_tmpdir, "aw4", mcomp=2)
+    dpt = MfUsgDpt(
+        m,
+        aw_adsorbim=True,
+        iarea_fnim=4,
+        ikawi_fnim=2,
+        prsityim=0.3,
+        ddtr=0.6,
+        phif=0.4,
+        concim=1.0,
+        awarea_x2im=1.1,
+        awarea_x1im=2.2,
+        awarea_x0im=3.3,
+        alangawim=[5.0, 6.0],
+        blangawim=[7.0, 8.0],
+    )
+    dpt.fn_path = str(function_tmpdir / "aw4.dpt")
+    dpt.write_file()
+    assert "A-W_ADSORBIM 4 2" in Path(dpt.fn_path).read_text()
+
+    re = MfUsgDpt.load(dpt.fn_path, _dpt_aw_model(function_tmpdir, "aw4b", mcomp=2))
+    assert re.iarea_fnim == 4 and re.ikawi_fnim == 2
+    assert abs(float(re.awarea_x2im.array.mean()) - 1.1) < 1e-5
+    assert abs(float(re.awarea_x1im.array.mean()) - 2.2) < 1e-5
+    assert abs(float(re.awarea_x0im.array.mean()) - 3.3) < 1e-5
+    assert abs(float(re.alangawim[1].array.mean()) - 6.0) < 1e-5
+    assert abs(float(re.blangawim[1].array.mean()) - 8.0) < 1e-5
+
+
+def test_mfusgdpt_aw_adsorbim_rejects_unsupported(function_tmpdir):
+    """Unsupported A-W_ADSORBIM branches fail explicitly: authoring with
+    IAREA_FNIM in {2,3,5} or IKAWI_FNIM in {3,4} -> NotImplementedError (in
+    __init__, so no file is written); mcomp=0 -> ValueError; on load the
+    tabular forms (IAREA_FNIM=5, IKAWI_FNIM=4) raise before any array read so
+    nothing downstream shifts; a bare keyword (missing indices) -> ValueError."""
+    from flopy.mfusg import MfUsgDpt
+
+    for iarea in (2, 3, 5):  # grain / ROG_SIGMA / tabular area
+        with pytest.raises(NotImplementedError, match="IAREA_FNIM"):
+            MfUsgDpt(
+                _dpt_aw_model(function_tmpdir, f"a{iarea}"),
+                aw_adsorbim=True,
+                iarea_fnim=iarea,
+                ikawi_fnim=1,
+            )
+    for ikawi in (3, 4):  # Brusseau scalar / tabular K_AWI
+        with pytest.raises(NotImplementedError, match="IKAWI_FNIM"):
+            MfUsgDpt(
+                _dpt_aw_model(function_tmpdir, f"k{ikawi}"),
+                aw_adsorbim=True,
+                iarea_fnim=1,
+                ikawi_fnim=ikawi,
+            )
+    with pytest.raises(ValueError, match="mcomp>0"):  # needs active transport
+        MfUsgDpt(
+            _dpt_aw_model(function_tmpdir, "az", mcomp=0),
+            aw_adsorbim=True,
+            iarea_fnim=1,
+            ikawi_fnim=1,
+        )
+
+    # load: tabular (5 4) raises on the area index before any array read
+    f54 = function_tmpdir / "aw54.dpt"
+    f54.write_text("# x\n 0 0 1 0 0 0 0 A-W_ADSORBIM 5 4\n")
+    with pytest.raises(NotImplementedError, match="IAREA_FNIM=5"):
+        MfUsgDpt.load(str(f54), _dpt_aw_model(function_tmpdir, "l54"))
+
+    # load: supported area, tabular K_AWI (1 4) raises on the K_AWI index
+    f14 = function_tmpdir / "aw14.dpt"
+    f14.write_text("# x\n 0 0 1 0 0 0 0 A-W_ADSORBIM 1 4\n")
+    with pytest.raises(NotImplementedError, match="IKAWI_FNIM=4"):
+        MfUsgDpt.load(str(f14), _dpt_aw_model(function_tmpdir, "l14"))
+
+    # load: bare keyword without the two indices is malformed
+    fbare = function_tmpdir / "awbare.dpt"
+    fbare.write_text("# x\n 0 0 1 0 0 0 0 A-W_ADSORBIM\n")
+    with pytest.raises(ValueError, match="two integers"):
+        MfUsgDpt.load(str(fbare), _dpt_aw_model(function_tmpdir, "lbare"))
 
 
 # ---------------------------------------------------------------------------

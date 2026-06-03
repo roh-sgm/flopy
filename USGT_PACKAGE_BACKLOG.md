@@ -32,7 +32,8 @@ All priority tiers below have been worked through. Commits on `develop`:
 - **P2 — partial packages:** ETS (NETSEG/NETSOP/IESFACTOR authoring; params
   expand or fail explicitly), HFB (static/transient/IHFBRD; `NPHFB>0` preserve +
   from-scratch author, Stage 4.6C-A),
-  BAS (`RICHARDS_HP`, `IHM` implemented), DPT (`A-W_ADSORBIM` explicit fail),
+  BAS (`RICHARDS_HP`, `IHM` implemented), DPT (`A-W_ADSORBIM` array-only branches
+  authored, Stage 4.6E; scalar/tabular deferred),
   TIB (raw/text in P2; promoted to **Full (authoring)** in Stage 4.1).
 - **P3 — review:** BCT (1-species/IDISP=2/multi-species) and DDF (NONLINEAR
   table) from-scratch authoring tests added; other Full packages reviewed.
@@ -1477,8 +1478,18 @@ Prioritized next cards (full criteria in the audit doc):
   Full)` — remaining gaps: `TABLEINPUT` table contents external, GAGE separate,
   multi-lake-with-sill from-scratch execution not exe-smoke-tested (manual
   tier). See `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
-- **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
-  *Recommended next.*
-- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
+- **Stage 4.6E — DPT `A-W_ADSORBIM` — DONE (executed).** Implemented the
+  array-only function-index branches: `IAREA_FNIM ∈ {1 (AMAX), 4 (X2/X1/X0)}` ×
+  `IKAWI_FNIM ∈ {1, 2}` (Langmuir A/B per species). `MfUsgDpt` authors from
+  scratch / writes / loads / reloads — option-line `A-W_ADSORBIM <iarea> <ikawi>`,
+  RP1 area arrays (after heat), RP2 ALANG/BLANG per species (before ADSORBIM),
+  matching `dpt2aw_adsorb.f`. Scalar/tabular branches (`IAREA_FNIM ∈ {2,3,5}`,
+  `IKAWI_FNIM ∈ {3,4}` — zone map + `ROG_SIGMA`/`SIGMA_RT` + tables) raise a
+  specific `NotImplementedError` (authoring **and** load, before any array read).
+  `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. 3 new tests (replacing
+  the old explicit-fail test); `-k mfusgdpt` **3**, focused **294**, exe **4**,
+  combined **298** (ARM). DPT stays ⚠️ Partial (scalar/tabular branches deferred).
+  See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
+- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.** *Recommended next.*
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 - **Stage 4.8 — Upstream infrastructure** stays a separate track.

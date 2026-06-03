@@ -82,7 +82,7 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | DRT | FA (incl. **from-scratch `NPDRT>0` authoring**, Stage 4.6B) + ParamPreserve + Expanded (list/recip controls) | Type-consistent; from-scratch parameter authoring supported; activated SPREAD = structural round-trip only (Fortran copies `DRTF` not `NodDRT`); `INSTANCES` unsupported. Unstructured only. |
 | SGB | FA + **Param-definition preserve + from-scratch authoring** (Stage 4.6C-B; no activations) + **Expanded** | Definitions author/round-trip; active SGB params abort the Fortran (`PARTYP='SGB'` vs `'G'`) so `NP>0`/`active_params`/`INSTANCES` → `NotImplementedError`. |
 | QRT | FA (incl. **from-scratch `NPQRT>0` authoring**, Stage 4.6C-C; structural) + ParamPreserve + Expanded + `TRANSIENTQ` | Active param value scales `NumRT` not `Q` (Fortran bug); `NodQRT` not copied → structural, not exec-guaranteed. `INSTANCES`/`TRANSIENTQ`+`NPQRT>0` → `NotImplementedError`. |
-| DPT | FS-exec **except** `A-W_ADSORBIM` (explicit fail) | Immobile air-water adsorption unsupported (rare PFAS sub-mode). |
+| DPT | FS-exec; `A-W_ADSORBIM` **array-only branches** (Stage 4.6E) | `IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}` authored/loaded/written; scalar/tabular branches (`{2,3,5}` / `{3,4}`) → specific `NotImplementedError`. |
 | SFR | **Compat (DISU-validated)** | Base `ModflowSfr2`, kept enabled: `freyberg_usg` (DISU+SFR) loads → writes → runs via the base class in `test_usg.py`. *Not* a Full USG-T transport claim; not guarded. |
 | FHB, GAGE | **Compat** | Base classes; round-trip via base in the `Ex8` real model. Untouched by Stage 4.6A. |
 | STR, SUB, SWT | **Compat (guarded, Stage 4.6A)** | Base layout unvalidated for USG-T unstructured; `mfusgcompat.py` wrappers raise `NotImplementedError` on load/authoring for an unstructured `MfUsg` model. Used by no target model. |
@@ -108,8 +108,10 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
   `Ex8` still round-trips/runs. Remaining (keeps LAK not-`Full`): `TABLEINPUT`
   table contents external, GAGE separate, multi-lake-with-sill from-scratch
   *execution* not exe-smoke-tested (manual tier).
-- **A3 — DPT `A-W_ADSORBIM`** immobile air-water adsorption unsupported (cascade
-  of conditional arrays; rare PFAS use). Planned as old Stage 4.6.
+- **A3 — DPT `A-W_ADSORBIM`** — ✅ **DONE** (Stage 4.6E): the array-only branches
+  (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}`) are authored/loaded/written; the
+  scalar/tabular branches (`{2,3,5}` / `{3,4}`, which add a zone map +
+  `ROG_SIGMA`/`SIGMA_RT` + tables) stay a specific `NotImplementedError`.
 - **A4 — EVT ETS-zonal time series** (`ETS MXZNEVT`/`IZNEVT`) `NotImplementedError`;
   **`NPEVT` parameters** Expanded-only (no param authoring).
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`** and **`INSTANCES`** (all param packages)
@@ -196,7 +198,8 @@ Priorities use the review's definitions:
 
 ### P2 — incomplete preservation / missing tests
 
-- **A3 — DPT `A-W_ADSORBIM`** (implement or formally keep deferred — old 4.6).
+- **A3 — DPT `A-W_ADSORBIM`** — ✅ **DONE** (Stage 4.6E): array-only branches
+  implemented; scalar/tabular branches kept as explicit `NotImplementedError`.
 - **A4 — EVT ETS-zonal time series + `NPEVT` param authoring.**
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`; `INSTANCES` (all param packages).**
 - ~~**L2 — compat-package load validation.**~~ Addressed by Stage 4.6A
@@ -279,12 +282,16 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   external; GAGE separate; from-scratch multi-lake execution = manual tier). See
   `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
 
-- **Stage 4.6E — DPT `A-W_ADSORBIM` decision (old Stage 4.6). *Recommended
-  next.***
-  Either implement the immobile air-water adsorption cascade with from-scratch
-  authoring, or ratify the explicit-deferral with a tighter Fortran-derived spec.
+- **Stage 4.6E — DPT `A-W_ADSORBIM` decision (old Stage 4.6) — EXECUTED.**
+  Implemented the array-only branches (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈
+  {1,2}`): option-line indices + RP1 area arrays + RP2 Langmuir A/B per species,
+  with from-scratch authoring, write, load, and reload; scalar/tabular branches
+  (`{2,3,5}` / `{3,4}`) raise a specific `NotImplementedError` (authoring + load,
+  before any array read). 3 new tests; `-k mfusgdpt` **3**, focused **294**, exe
+  **4**, combined **298** (ARM). See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 
-- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring (old EVT gaps).**
+- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring (old EVT gaps). *Recommended
+  next.***
 
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 
@@ -301,6 +308,7 @@ The **parameter from-scratch authoring family is complete** (A1 closed):
 **4.6C-B** (SGB definitions), **4.6C-C** (QRT, structural), and **4.6C-D** (ETS
 array) are all **done**; **A2 — Stage 4.6D — LAK multi-lake + sill/connectivity
 (ds 7/8) authoring** is now **done** too (authoring + validation + tests;
-execution stays manual tier). The recommended next card is **Stage 4.6E — DPT
-`A-W_ADSORBIM`** decision; then the remaining P2 items (EVT ETS-zonal/`NPEVT`,
-OC/MDT exe verification) per §4.
+execution stays manual tier), and **A3 — Stage 4.6E — DPT `A-W_ADSORBIM`** is
+done (array-only branches authored; scalar/tabular branches explicit
+`NotImplementedError`). The recommended next card is **Stage 4.6F — EVT
+ETS-zonal + `NPEVT` authoring**; then OC/MDT exe verification per §4.

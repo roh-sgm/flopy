@@ -137,6 +137,15 @@ class MfUsgDpt(Package):
         fodrwim=0.0,
         fodrsim=0.0,
         concim=0.0,
+        aw_adsorbim=False,
+        iarea_fnim=1,
+        ikawi_fnim=1,
+        awamaxim=0.0,
+        awarea_x2im=0.0,
+        awarea_x1im=0.0,
+        awarea_x0im=0.0,
+        alangawim=0.0,
+        blangawim=0.0,
         extension="dpt",
         unitnumber=None,
         filenames=None,
@@ -297,8 +306,98 @@ class MfUsgDpt(Package):
                 model, (nlay, nrow, ncol), np.float32, concim[icomp], name="concim"
             )
 
+        # Immobile-domain air-water interface adsorption (A-W_ADSORBIM).
+        self.aw_adsorbim = bool(aw_adsorbim)
+        self.iarea_fnim = iarea_fnim
+        self.ikawi_fnim = ikawi_fnim
+        if self.aw_adsorbim:
+            self._check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim)
+            if mcomp <= 0:
+                raise ValueError(
+                    "MfUsgDpt: A-W_ADSORBIM is a per-species (Langmuir) option "
+                    "and requires active transport (mcomp>0)."
+                )
+            # RP1 area arrays: IAREA_FNIM==1 reads AMAX; ==4 reads X2/X1/X0.
+            if iarea_fnim == 1:
+                self.awamaxim = Util3d(
+                    model, (nlay, nrow, ncol), np.float32, awamaxim, name="awamaxim"
+                )
+            elif iarea_fnim == 4:
+                self.awarea_x2im = Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    awarea_x2im,
+                    name="awarea_x2im",
+                )
+                self.awarea_x1im = Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    awarea_x1im,
+                    name="awarea_x1im",
+                )
+                self.awarea_x0im = Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    awarea_x0im,
+                    name="awarea_x0im",
+                )
+            # RP2 Langmuir A/B arrays, one pair per mobile species.
+            if isinstance(alangawim, (int, float)):
+                alangawim = [alangawim] * mcomp
+            if isinstance(blangawim, (int, float)):
+                blangawim = [blangawim] * mcomp
+            self.alangawim = [0] * mcomp
+            self.blangawim = [0] * mcomp
+            for icomp in range(mcomp):
+                self.alangawim[icomp] = Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    alangawim[icomp],
+                    name="alangawim",
+                )
+                self.blangawim[icomp] = Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    blangawim[icomp],
+                    name="blangawim",
+                )
+
         if add_package:
             self.parent.add_package(self)
+
+    @staticmethod
+    def _check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim):
+        """Reject A-W_ADSORBIM branches that FloPy does not model, with an
+        actionable ``NotImplementedError`` (before any array is written or read,
+        so later items are never silently shifted).
+
+        Implemented (array-only, no zone map / scalar constants / tables):
+        ``IAREA_FNIM`` in {1 (AMAX), 4 (X2/X1/X0)} and ``IKAWI_FNIM`` in {1, 2}
+        (Langmuir A/B arrays per species). The deferred branches read extra
+        scalars (``ROG_SIGMA``/``SIGMA_RT``) or a zone map plus tabular functions
+        (``IAREA_FNIM==5``, ``IKAWI_FNIM==4``); see ``dpt2aw_adsorb.f``.
+        """
+        if iarea_fnim not in (1, 4):
+            raise NotImplementedError(
+                f"MfUsgDpt A-W_ADSORBIM IAREA_FNIM={iarea_fnim} is not supported. "
+                "Supported: 1 (AMAX array) and 4 (X2/X1/X0 arrays). IAREA_FNIM=2 "
+                "(grain diameter), 3 (ROG_SIGMA*porosity), and 5 (tabular "
+                "area-vs-saturation with a zone map) read extra scalars/tables "
+                "and are not modeled."
+            )
+        if ikawi_fnim not in (1, 2):
+            raise NotImplementedError(
+                f"MfUsgDpt A-W_ADSORBIM IKAWI_FNIM={ikawi_fnim} is not supported. "
+                "Supported: 1 and 2 (Langmuir A/B arrays per species). "
+                "IKAWI_FNIM=3 (Brusseau, needs the SIGMA_RT scalar) and 4 "
+                "(tabular K_AWI-vs-concentration with a zone map) are not "
+                "modeled."
+            )
 
     def write_file(self, f=None):
         """
@@ -335,6 +434,9 @@ class MfUsgDpt(Package):
         if self.inputsat:
             f_obj.write(" INPUTSAT")
 
+        if self.aw_adsorbim:
+            f_obj.write(f" A-W_ADSORBIM {self.iarea_fnim} {self.ikawi_fnim}")
+
         f_obj.write("\n")
 
         # Item 1: ICBUNDIM
@@ -367,9 +469,24 @@ class MfUsgDpt(Package):
             f_obj.write(self.htcapsim.get_file_entry())
             f_obj.write(self.htcondsim.get_file_entry())
 
+        # A-W_ADSORBIM RP1: area arrays (read after heat, before the species
+        # loop). IAREA_FNIM==1 -> AMAX; ==4 -> X2, X1, X0.
+        if self.aw_adsorbim:
+            if self.iarea_fnim == 1:
+                f_obj.write(self.awamaxim.get_file_entry())
+            elif self.iarea_fnim == 4:
+                f_obj.write(self.awarea_x2im.get_file_entry())
+                f_obj.write(self.awarea_x1im.get_file_entry())
+                f_obj.write(self.awarea_x0im.get_file_entry())
+
         # Item 9: ADSORBIM, FLICHIM, ZODRWIM, ZODRSIM, FODRWIM, FODRSIM, CONCIM
         mcomp = self.parent.mcomp
         for icomp in range(mcomp):
+            # A-W_ADSORBIM RP2: Langmuir A/B per species, before ADSORBIM.
+            if self.aw_adsorbim:
+                f_obj.write(self.alangawim[icomp].get_file_entry())
+                f_obj.write(self.blangawim[icomp].get_file_entry())
+
             if self.iadsorbim:
                 f_obj.write(self.adsorbim[icomp].get_file_entry())
 
@@ -481,15 +598,25 @@ class MfUsgDpt(Package):
         else:
             kwargs["inputsat"] = 0
 
-        # Immobile-domain air-water interface adsorption (A-W_ADSORBIM) reads
-        # additional function-index values and arrays (gwt2dptu1.f / dpt2aw_adsorb.f)
-        # that are not modeled here. Fail explicitly rather than silently shift
-        # all subsequent item reads.
+        # Immobile-domain air-water interface adsorption (A-W_ADSORBIM): the
+        # keyword is followed by IAREA_FNIM and IKAWI_FNIM on the option line
+        # (gwt2dptu1.f). Supported array-only branches are read below; the others
+        # fail explicitly (before any array) rather than silently shifting reads.
+        kwargs["aw_adsorbim"] = False
         if "A-W_ADSORBIM" in t:
-            raise NotImplementedError(
-                "MfUsgDpt does not support the immobile-domain air-water "
-                "interface adsorption option (A-W_ADSORBIM)."
-            )
+            idx = t.index("A-W_ADSORBIM")
+            try:
+                iarea_fnim = int(t[idx + 1])
+                ikawi_fnim = int(t[idx + 2])
+            except (IndexError, ValueError):
+                raise ValueError(
+                    "MfUsgDpt: A-W_ADSORBIM must be followed by two integers "
+                    "IAREA_FNIM IKAWI_FNIM on the option line."
+                )
+            cls._check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim)
+            kwargs["aw_adsorbim"] = True
+            kwargs["iarea_fnim"] = iarea_fnim
+            kwargs["ikawi_fnim"] = ikawi_fnim
 
         # item 1b
         if kwargs["icbndimflg"] == 0:
@@ -540,6 +667,23 @@ class MfUsgDpt(Package):
                 f_obj, model, nlay, np.float32, "htcondsim", ext_unit_dict
             )
 
+        # A-W_ADSORBIM RP1: area arrays (after heat, before the species loop).
+        if kwargs["aw_adsorbim"]:
+            if kwargs["iarea_fnim"] == 1:
+                kwargs["awamaxim"] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "awamaxim", ext_unit_dict
+                )
+            elif kwargs["iarea_fnim"] == 4:
+                kwargs["awarea_x2im"] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "awarea_x2im", ext_unit_dict
+                )
+                kwargs["awarea_x1im"] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "awarea_x1im", ext_unit_dict
+                )
+                kwargs["awarea_x0im"] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "awarea_x0im", ext_unit_dict
+                )
+
         # item 9
         mcomp = model.mcomp
         adsorbim = [0] * mcomp
@@ -549,8 +693,19 @@ class MfUsgDpt(Package):
         fodrwim = [0] * mcomp
         fodrsim = [0] * mcomp
         concim = [0] * mcomp
+        alangawim = [0] * mcomp
+        blangawim = [0] * mcomp
 
         for icomp in range(mcomp):
+            # A-W_ADSORBIM RP2: Langmuir A/B per species, before ADSORBIM.
+            if kwargs["aw_adsorbim"]:
+                alangawim[icomp] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "alangawim", ext_unit_dict
+                )
+                blangawim[icomp] = cls._load_prop_arrays(
+                    f_obj, model, nlay, np.float32, "blangawim", ext_unit_dict
+                )
+
             if kwargs["iadsorbim"]:
                 adsorbim[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "adsorbim", ext_unit_dict
@@ -596,6 +751,9 @@ class MfUsgDpt(Package):
         kwargs["fodrwim"] = fodrwim
         kwargs["fodrsim"] = fodrsim
         kwargs["concim"] = concim
+        if kwargs["aw_adsorbim"]:
+            kwargs["alangawim"] = alangawim
+            kwargs["blangawim"] = blangawim
 
         f_obj.close()
         # set package unit number

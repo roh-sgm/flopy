@@ -55,7 +55,7 @@ All packages are listed in USG-T CUNIT array order from `mfusg.f`.
 | PCB | `PCB` | `MfUsgPcb` | ✅ Full | `gwt2bndsu1.f` | Prescribed Concentration Boundary. Node-based `(node, iSpec, conc)`; 0-based internal / 1-based file. Field order verified vs Fortran; from-scratch authoring + round-trip tested (Stage 3 Card 8); exercised via the Ex transport models. **Verified** |
 | MDT | `MDT` | `MfUsgMdt` | ✅ | `gwt2mdtu1.for` | Matrix Diffusion Transport. MDT Fullness Card C (Stage 4): field order Fortran-audited and from-scratch authoring + round-trip tested for the header options (`FRAHK`/`FRADARCY`/`TSHIFTMD`/`SEPARATE_AI2`/`MULTIFILE_MD`, only when `IDPF==0`), base arrays (`MDFLAG`/`VOLFRACMD`/`PORMD`/`RHOBMD`/`DIFFLENMD`/`TORTMD`; `VOLFRACMD` skipped when `IDPF!=0`), per-species `KDMD`/`DECAYMD`/`YIELDMD`/`DIFFMD`, and `AIOLD1MD`/`AIOLD2MD` under `TSHIFTMD > 1e-10` (the Fortran threshold, applied consistently; TSHIFTMD written in general format so small valid values are not rounded to 0). Fixed real bugs (`load` dropped `FRAHK`/`FRADARCY` via a case mismatch; `write_file(f=handle)` crashed; stray debug print) and added validation (FRAHK⊕FRADARCY, IDPF-options, MULTIFILE needs `imdtcf>0`, per-`MCOMP` list lengths). Still **round-trip-run via the three Ex7 real models**. Kept `✅` not `Full` — gaps: species loop uses `MCOMP` (chained-decay `NTCOMP>MCOMP` not independently verified); AI1/AI2 output binaries authored but not read. See `USGT_STAGE4_MDT_FULLNESS.md`. |
 | DPF | `DPF` | `MfUsgDpf` | ✅ Full | `gwf2dpf1u1.f` | From-scratch authoring + round-trip tested: `FRAHK`, `IUZONTABIM`, conditional `SC2IM` by layer, immobile Richards arrays, and the programmatic `model.idpf` flag. f_obj bug fixed 2026-05-20. Promoted to Full (Stage 3 Card 8). **Verified** |
-| DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition checks both IDPF and IDISPIM. Immobile-domain air-water adsorption (`A-W_ADSORBIM`) now fails explicitly on load instead of silently shifting reads (Gap §6). **Verified** |
+| DPT | `DPT` | `MfUsgDpt` | ⚠️ Partial | `gwt2dptu1.f` | DLIM condition checks both IDPF and IDISPIM. **Stage 4.6E: immobile-domain air-water adsorption (`A-W_ADSORBIM`) is now authored/loaded/written** for the array-only function-index branches — `IAREA_FNIM ∈ {1 (AMAX), 4 (X2/X1/X0)}` × `IKAWI_FNIM ∈ {1, 2}` (Langmuir A/B per species). Reads the option-line indices, RP1 area arrays (after heat), and RP2 ALANG/BLANG per species (before ADSORBIM), matching `dpt2aw_adsorb.f`. The scalar/tabular branches `IAREA_FNIM ∈ {2,3,5}` and `IKAWI_FNIM ∈ {3,4}` (zone map + `ROG_SIGMA`/`SIGMA_RT` + tables) raise a specific `NotImplementedError` (authoring + load, before any array read). See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`. **Verified** |
 | TIB | `TIB` | `MfUsgTib` | ✅ Full (authoring) | `glo2basu1.f` | Transient Ibound. Semantic `stress_period_data` authoring + `parse=True` load covering the full `GWF2TIB1RP` grammar: flow blocks (`NIB0` inactivate / `NIB1` activate / `NIBM1` prescribed-head, with `HEAD`/`AVHEAD`/bare-reuse) and transport blocks (`NICB0`/`NICB1`/`NICBM1`, with multi-component `CONC`/`AVCONC`/bare); `NIB0`/`NICB0` node lists via `U1DINT`; 3- vs 6-int header keyed to BCT presence; 0-based internal / 1-based file. From-scratch authoring, semantic write/reload, multi-node `U1DINT`, transport-conc, and explicit-rejection tests. `MfUsgTib.load` defaults to byte-exact raw round-trip (what `MfUsg.load` uses); `load(parse=True)` returns semantic data and falls back to raw on `U1DINT` `EXTERNAL`/`OPEN-CLOSE` rather than writing partial data. **Verified (Stage 4.1)** |
 | TVM | `TVM` | `MfUsgTvm` | ✅ Full | `tvmu2.f` | Full semantic implementation (2026-05-20). HK/VKA/SS/SY/DDFTR/POR; transport-aware field counts; nper+1 boundaries; 20 autotests pass. **Verified** |
 | GSF | `GSF` | `MfUsgGsf` | ✅ Full (authoring) | — | Grid Specification File (not solver input — consumed by post-processors / `UnstructuredGrid.from_gridspec`, so no Fortran reader). Stage 4.2: semantic `vertices` + `node_data` authoring and `parse=True` load — header (`UNSTRUCTURED`/`UNSTRUCTURED GWF`, validated), `nnodes`/`nlay`, vertex `(x,y,z)`, per-node `(node, xc, yc, zc, layer, vertices)`; 0-based internal nodes/vertices/layers, 1-based file ids; trailing line-2 gridgen flags preserved (default `(1,1)`). `from_grid(model, grid, top_zverts, bot_zverts)` writes the USG-T top/bottom doubled-vertex convention (single-surface `zverts` kept as legacy; per-vertex z required — the grid does not retain it); `from_disv_gridprops(model, disv_gridprops, top, botm, skip_degenerate=)` maps a MF6 DISV 2D template to a single-layer GSF (closing-vertex removal, degenerate-cell skip). Both accept `vertex_mode="shared"`/`"parsimonious"` (default; neighbours reuse vertex ids) or `"cell"`/`"nonparsimonious"` (unique top/bottom vertices per cell, 8 per quad) — the two GRIDGEN2GSF layouts (`gridgen2gsf.f90`, secondary ref; primary spec gwutil_a 2.17, line 2 = `NNODES NLAY IZ IC`). `to_grid()` delegates to `from_gridspec` (which now correctly accepts `UNSTRUCTURED GWF`). `load` defaults to byte-faithful raw round-trip; `parse=True` is strict (header exactly `UNSTRUCTURED`/`UNSTRUCTURED GWF`; `IZ IC` omitted or `1 1`; `inode` = `1..nnode` in order; trailing content) → raw fallback otherwise. Constructor validates header / `IZ IC`=`(1,1)` / contiguous-ordered node ids `0..nnodes-1` / `nlay >= max(layer)+1`. From-scratch authoring, write/reload, 0-based↔1-based, `to_grid`, invalid-ref, mode-exclusivity, top/bottom, DISV, vertex-mode, strict-header, IZ-IC, and inode tests. Companion utility `gridgen_to_gsf` (`flopy/mfusg/gridgen2gsf.py`, Stage 4.3) builds a GSF from a flopy `Gridgen` / `disv_gridprops` / `UnstructuredGrid` source (a non-interactive helper inspired by `GRIDGEN2GSF`; parsimonious mode compacts unused vertices; delegates to `MfUsgGsf`). **Verified (Stage 4.2 + follow-ups; Stage 4.3 utility)** |
@@ -93,7 +93,7 @@ landed), consistent with the coverage table above.
 | GSF | ✅ Full (authoring) | Promoted in Stage 4.2: semantic `vertices`+`node_data` authoring + `parse=True` load (0-based internal / 1-based file), `from_grid` (requires per-vertex z), `to_grid()` via `from_gridspec`; `load` default stays raw round-trip. GSF is not solver input. |
 | ETS | Parameter-preserving + from-scratch authoring (ETSR array) | Stage 4.4A: ETSR array parameters load → write → reload with syntax intact (`NPETS>0`, defs, per-period activation records, `INSTANCES`). **Stage 4.6C-D: from-scratch ETSR array-parameter authoring** (`parameters={name: {parval, clusters \| instances}}`/`evtr_parm`, auto `NPETS`/`nclu`, partyp validated `ets`, first period must activate; validated before opening, no partial file). Opt-in expanded fallback (`expand_parameters=True` → `NPETS=0`). `npets>0`/`evtr_parm` with no defs raises `ValueError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md` / `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. |
 | HFB | Parameter-preserving + from-scratch authoring (list) | Stage 4.4B: `NPHFB>0` list parameters load → write → reload with syntax intact (defs + `NLST` barrier rows + `NACTHFB` + active names). **Stage 4.6C-A: from-scratch `NPHFB>0` authoring** (`parameters=`/`acthfb_names`, auto counts, normalized + validated; structured + unstructured). `TRANSIENT_HFB`+`NPHFB>0` and `INSTANCES` still fail explicitly. See `USGT_STAGE4_04_PARAMETERS_HFB.md` / `USGT_STAGE4_11_HFB_PARAMETER_AUTHORING.md`. |
-| DPT | Partial | `A-W_ADSORBIM` immobile air-water adsorption explicitly unsupported (fails before any shifted read); `DLIM` conditional correct. |
+| DPT | Partial | **Stage 4.6E:** `A-W_ADSORBIM` immobile air-water adsorption authored/loaded/written for the array-only branches (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}`); scalar/tabular branches (`IAREA_FNIM ∈ {2,3,5}`, `IKAWI_FNIM ∈ {3,4}`) raise a specific `NotImplementedError` before any shifted read. `DLIM` conditional correct. |
 | SFR / STR / GAGE / FHB / SUB / SWT | Compatibility (SFR/FHB/GAGE) · guarded (STR/SUB/SWT) | Base MODFLOW-2005 classes; CLN is the project coupling. **SFR** kept enabled — DISU+SFR loads/writes/runs via base in `freyberg_usg` (`test_usg.py`). **FHB/GAGE** load via base in Ex8. **STR/SUB/SWT** guarded (Stage 4.6A): unstructured-`MfUsg` use raises `NotImplementedError`. |
 
 Rule applied throughout: a package is labeled `✅ Full` only with a
@@ -212,27 +212,31 @@ Focused tests cover from-scratch authoring, file output, and reload.
 
 ### Gap §6 — DPT: air-water interface adsorption immobile domain (Stage 3 Card 3)
 
-**Decision: explicitly unsupported (deferred); rare PFAS-type sub-mode.**
+**Decision (Stage 4.6E): array-only branches implemented; scalar/tabular
+branches kept as explicit `NotImplementedError`.**
 
 Fortran-derived spec (`gwt2dptu1.f` option block + `dpt2aw_adsorb.f`
 `AW_ADSORBIM1AL/RP1/RP2`): the DPT option line carries
 `A-W_ADSORBIM IAREA_FNIM IKAWI_FNIM`, then a cascade of conditional reads:
 
 - If `IAREA_FNIM==5` or `IKAWI_FNIM==4` (tabular): `NAZONESIM NATABROWSIM`, a
-  per-node zone map `IAWIZONMAPIM` (`U1DINT`, NODES), and a tabular area array
-  `AWI_AREA_TABIM(2, NATABROWSIM, NAZONESIM)`.
-- `IAREA_FNIM==1/3`: `AWAMAXIM(NODES)`; `==4`: `AWAREA_X2IM/X1IM/X0IM(NODES)`;
-  else a `ROG_SIGMAIM` constant.
-- Langmuir isotherm arrays `ALANGAWIM(NODES,MCOMP)`, `BLANGAWIM(NODES,MCOMP)`,
-  plus per-stress-period reads (`AW_ADSORBIM1RP1/RP2`).
+  per-node zone map `IAWIZONMAPIM` (`U1DINT`, NODES), and tabular area / K_AWI
+  arrays. **Deferred** — `NotImplementedError`.
+- `IAREA_FNIM==1`: `AWAMAXIM(NODES)`; `==4`: `AWAREA_X2IM/X1IM/X0IM(NODES)`
+  (**implemented**, RP1, after heat); `==2` grain diameter / `==3` `ROG_SIGMA`
+  constant (**deferred**).
+- Langmuir isotherm arrays `ALANGAWIM(NODES,MCOMP)`, `BLANGAWIM(NODES,MCOMP)`
+  (RP2, per species before `ADSORBIM`) for `IKAWI_FNIM ∈ {1,2}` (**implemented**;
+  `==1`/`==2` share the file layout). `==3` (Brusseau, `SIGMA_RT` scalar) and
+  `==4` (tabular K_AWI) are **deferred**.
 
-This many conditional arrays make it a substantial, rarely-used sub-mode, so it
-is **not** modeled in v1. To prevent silently shifting every subsequent read,
-`MfUsgDpt.load` **fails explicitly** with `NotImplementedError` the moment the
-`A-W_ADSORBIM` token is seen on the option line — before any of the extra reads
-above — for both the bare keyword and the `IAREA_FNIM IKAWI_FNIM` form (tested).
-The DLIM conditional read correctly requires both `IDPF/=0` and `IDISPIM/=0`,
-and is independent of this option.
+The implemented subset (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}`) reads only
+plain arrays — no zone map, scalar, or table — so authoring/load/write is exact.
+The deferred branches raise a specific `NotImplementedError` naming the index
+(authoring **and** load, the latter before any array is read, so subsequent
+reads never shift). The DLIM conditional read correctly requires both `IDPF/=0`
+and `IDISPIM/=0`, and is independent of this option. See
+`USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 
 ### Gap §7 — DRT: USG-T 2.7 transport extensions — RESOLVED
 
