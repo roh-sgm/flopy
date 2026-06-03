@@ -774,7 +774,10 @@ honest, upstream-ready USG-T 2.7 story.
   nlakes×mcomp; transport needs conc_data). `Ex8_Lake` real-model round-trip/run
   kept. Stays `✅` not Full — gaps: sill/connectivity (ds 7/8) + multi-lake
   systems round-trip but aren't authored from scratch; TABLEINPUT bathymetry
-  table contents are external; GAGE coupling separate. See
+  table contents are external; GAGE coupling separate. **(Superseded by Stage
+  4.6D: sill/connectivity + multi-lake are now authored from scratch and
+  validated; the remaining gaps are TABLEINPUT contents, GAGE, and
+  multi-lake-with-sill from-scratch execution.)** See
   `USGT_STAGE4_LAK_FULLNESS.md`. **Review follow-up:** hardened three authoring
   inputs that `__init__` accepted but `write_file()` then crashed on with a raw
   `IndexError`/`KeyError`/`TypeError` — TABLEINPUT now requires exactly one
@@ -896,8 +899,8 @@ explicitly rather than producing incomplete or mis-parsed files.
   sufficient (tested). `LAK` now carries from-scratch `TABLEINPUT` /
   `TRANSPORTBOUNDARY` / classic-transport authoring + round-trip tests (Stage 4
   Card D; six bugs fixed) plus the `Ex8_Lake` round-trip, but stays `✅` not Full
-  (sill/connectivity + multi-lake authoring, TABLEINPUT table contents, and GAGE
-  remain out of scope). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility** base
+  (TABLEINPUT table contents and GAGE remain out of scope; **sill/connectivity +
+  multi-lake authoring is now done and validated — Stage 4.6D**). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility** base
   MODFLOW-2005 classes; CLN is the preferred coupling. (Refined by Stage 4.6A:
   STR/SUB/SWT guarded on unstructured `MfUsg`; SFR kept — DISU-validated via
   `freyberg_usg`; FHB/GAGE retained via Ex8.)

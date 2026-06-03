@@ -8333,7 +8333,8 @@ def test_mfusglak_multilake_sill_transport_roundtrip(function_tmpdir):
 def test_mfusglak_sill_rejects_invalid(function_tmpdir):
     """Datasets 7/8 authoring fails with an actionable ValueError, no partial
     file: bad lake ids, IC/list mismatch, IC<2, wrong sill count, duplicate
-    lake, kper out of range, and sill for a period with ITMP<=0."""
+    lake, kper out of range, sill for a period with ITMP<=0, empty ds8a, a
+    non-integral IC / lake id, and a non-numeric sill elevation."""
     from flopy.mfusg import MfUsgLak
     from flopy.modflow import ModflowDis
 
@@ -8373,8 +8374,53 @@ def test_mfusglak_sill_rejects_invalid(function_tmpdir):
         build("b6", {5: [([2, 1, 2], [95.0])]})
     with pytest.raises(ValueError, match="ITMP<=0"):  # sill where lakarr reused
         build("b7", {1: [([2, 1, 2], [95.0])]}, nper=2)
-    # the failing constructor never opened the file
-    assert not (function_tmpdir / "b7.lak").exists()
+    # --- review hardening: ambiguous / non-canonical values rejected up front
+    with pytest.raises(ValueError, match="ds8a is empty"):  # ds8a=[]
+        build("b8", {0: [([], [])]})
+    with pytest.raises(ValueError, match="whole number"):  # IC=2.5 (no truncation)
+        build("b9", {0: [([2.5, 1, 2], [95.0])]})
+    with pytest.raises(ValueError, match="whole number"):  # lake id 1.5
+        build("b10", {0: [([2, 1.5, 2], [95.0])]})
+    with pytest.raises(ValueError, match="must be numeric"):  # sill "abc"
+        build("b11", {0: [([2, 1, 2], ["abc"])]})
+    with pytest.raises(ValueError, match="must be numeric"):  # sill None
+        build("b12", {0: [([2, 1, 2], [None])]})
+    # the failing constructors never opened a file
+    for nm in ("b7", "b8", "b9", "b10", "b11", "b12"):
+        assert not (function_tmpdir / f"{nm}.lak").exists()
+
+
+def test_mfusglak_sill_normalizes_numeric_input(function_tmpdir):
+    """Numeric strings and integer-valued floats in sill_data are canonicalized
+    to int IC/lake numbers and float sills, so write_file emits canonical values
+    (no "2.0"/"95.0" artifacts in dataset 8a) and the system round-trips."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids_2lakes()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "norm"),
+        nlakes=2,
+        stages=[100.0, 100.0],
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0], 1: [1.0, 2.0, 0.0, 0.0]}},
+        sill_data={0: [(["2", 1.0, "2"], ["95.0"])]},  # numeric strings + floats
+    )
+    # canonicalized in __init__: ints for ds8a, floats for sillvt
+    ds8a, sillvt = lak.sill_data[0][0]
+    assert ds8a == [2, 1, 2] and all(isinstance(x, int) for x in ds8a)
+    assert sillvt == [95.0] and all(isinstance(x, float) for x in sillvt)
+
+    lak.fn_path = str(function_tmpdir / "norm.lak")
+    lak.write_file()
+    text = Path(lak.fn_path).read_text()
+    assert any(
+        ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines()
+    )
+
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "normb"))
+    assert re.sill_data[0][0][0] == [2, 1, 2]
+    assert re.sill_data[0][0][1] == [95.0]
 
 
 # --- Stage 4.6A: STR/SUB/SWT compatibility guard on unstructured MfUsg --------

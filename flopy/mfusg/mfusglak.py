@@ -419,7 +419,9 @@ class MfUsgLak(Package):
             if not isinstance(sill_data, dict):
                 # a bare list of systems is taken as stress period 0
                 sill_data = {0: sill_data}
-            self._validate_sill_data(sill_data, nper)
+            # validate + canonicalize (IC/lake numbers -> int, sills -> float) so
+            # write_file always emits canonical values, never a raw 2.5 / "abc".
+            sill_data = self._validate_sill_data(sill_data, nper)
 
         if flux_data is None:
             raise ValueError(
@@ -596,10 +598,56 @@ class MfUsgLak(Package):
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         return nlay * nrow * ncol
 
+    @staticmethod
+    def _canon_int(value, what):
+        """Return ``value`` as a canonical ``int`` (for IC / lake numbers), or
+        raise ``ValueError``. Integer-valued floats (``2.0``) and numeric strings
+        (``"2"``) are normalized; ``bool``, ``None``, non-integral floats
+        (``2.5``), and non-integer strings (``"abc"``, ``"2.5"``) are rejected.
+        """
+        if isinstance(value, bool):
+            raise ValueError(f"{what} must be an integer, not a bool ({value!r}).")
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+        if isinstance(value, (float, np.floating)):
+            if float(value).is_integer():
+                return int(value)
+            raise ValueError(f"{what} must be a whole number; got {value!r}.")
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                raise ValueError(f"{what} must be an integer; got {value!r}.")
+        raise ValueError(
+            f"{what} must be an integer; got {type(value).__name__} {value!r}."
+        )
+
+    @staticmethod
+    def _canon_float(value, what):
+        """Return ``value`` as a canonical ``float`` (for sill elevations), or
+        raise ``ValueError``. Numeric strings are normalized; ``bool``, ``None``,
+        and non-numeric strings are rejected.
+        """
+        if isinstance(value, bool):
+            raise ValueError(f"{what} must be numeric, not a bool ({value!r}).")
+        if isinstance(value, (int, np.integer, float, np.floating)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                raise ValueError(f"{what} must be numeric; got {value!r}.")
+        raise ValueError(
+            f"{what} must be numeric; got {type(value).__name__} {value!r}."
+        )
+
     def _validate_sill_data(self, sill_data, nper):
-        """Validate datasets 7/8 (connected-lake / sill systems) before any file
-        is opened, so authoring fails with an actionable ``ValueError`` instead
-        of a raw error inside :meth:`write_file`.
+        """Validate **and canonicalize** datasets 7/8 (connected-lake / sill
+        systems) before any file is opened, so authoring fails with an actionable
+        ``ValueError`` instead of a raw error -- or a silently truncated /
+        non-numeric value -- inside :meth:`write_file`. Returns a canonical copy
+        ``{kper: [([IC:int, lake1:int, ...], [sill1:float, ...]), ...]}`` so the
+        writer always emits integer ``IC``/lake numbers and float sills.
 
         USG-T (``gwf2lak7u1.f``) reads ``NSLMS`` (dataset 7) and, per connected
         system, dataset 8a ``IC ISUB(1..IC)`` (the center lake first, then its
@@ -610,6 +658,7 @@ class MfUsgLak(Package):
         the file. ``IC<=0`` is the Fortran end-of-list sentinel, so a system
         needs the center lake plus at least one sublake (``IC>=2``).
         """
+        canon = {}
         for kper, systems in sill_data.items():
             if not isinstance(kper, (int, np.integer)) or not 0 <= kper < nper:
                 raise ValueError(
@@ -631,6 +680,7 @@ class MfUsgLak(Package):
                     "(ds8a, sillvt) systems; got "
                     f"{type(systems).__name__}."
                 )
+            canon_systems = []
             for isys, system in enumerate(systems):
                 try:
                     ds8a, sillvt = system
@@ -642,39 +692,52 @@ class MfUsgLak(Package):
                         "(ds8a, sillvt) pair where ds8a=[IC, lake1, ... lakeIC] "
                         "and sillvt=[sill1, ... sill_(IC-1)]."
                     )
-                ic = int(ds8a[0])
-                lakes = ds8a[1:]
+                if len(ds8a) < 1:
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} ds8a is "
+                        "empty; it must be [IC, lake1, ... lakeIC]."
+                    )
+                where = f"sill_data[{kper}] system {isys}"
+                ic = self._canon_int(ds8a[0], f"MfUsgLak: {where} IC")
+                lakes = [
+                    self._canon_int(x, f"MfUsgLak: {where} lake number")
+                    for x in ds8a[1:]
+                ]
                 if ic < 2:
                     raise ValueError(
-                        f"MfUsgLak: sill_data[{kper}] system {isys} has IC={ic}; "
-                        "a connected-lake system needs the center lake plus at "
-                        "least one sublake (IC>=2)."
+                        f"MfUsgLak: {where} has IC={ic}; a connected-lake system "
+                        "needs the center lake plus at least one sublake (IC>=2)."
                     )
                 if ic != len(lakes):
                     raise ValueError(
-                        f"MfUsgLak: sill_data[{kper}] system {isys} declares "
-                        f"IC={ic} but lists {len(lakes)} lake numbers "
-                        "(dataset 8a is IC followed by IC lake numbers)."
+                        f"MfUsgLak: {where} declares IC={ic} but lists "
+                        f"{len(lakes)} lake numbers (dataset 8a is IC followed "
+                        "by IC lake numbers)."
                     )
                 for lake in lakes:
-                    if not 1 <= int(lake) <= self.nlakes:
+                    if not 1 <= lake <= self.nlakes:
                         raise ValueError(
-                            f"MfUsgLak: sill_data[{kper}] system {isys} lake "
-                            f"number {lake} is out of range [1, {self.nlakes}] "
-                            "(lake numbers are 1-based)."
+                            f"MfUsgLak: {where} lake number {lake} is out of "
+                            f"range [1, {self.nlakes}] (lake numbers are "
+                            "1-based)."
                         )
-                if len({int(x) for x in lakes}) != len(lakes):
+                if len(set(lakes)) != len(lakes):
                     raise ValueError(
-                        f"MfUsgLak: sill_data[{kper}] system {isys} repeats a "
-                        f"lake number ({lakes}); each lake appears once per "
-                        "system."
+                        f"MfUsgLak: {where} repeats a lake number ({lakes}); "
+                        "each lake appears once per system."
                     )
                 if len(sillvt) != ic - 1:
                     raise ValueError(
-                        f"MfUsgLak: sill_data[{kper}] system {isys} has "
-                        f"{len(sillvt)} sill elevations but dataset 8b needs "
-                        f"IC-1={ic - 1} (one per sublake)."
+                        f"MfUsgLak: {where} has {len(sillvt)} sill elevations "
+                        f"but dataset 8b needs IC-1={ic - 1} (one per sublake)."
                     )
+                sills = [
+                    self._canon_float(x, f"MfUsgLak: {where} sill elevation")
+                    for x in sillvt
+                ]
+                canon_systems.append(([ic, *lakes], sills))
+            canon[kper] = canon_systems
+        return canon
 
     def write_file(self):
         """

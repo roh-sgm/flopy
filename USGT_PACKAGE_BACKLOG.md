@@ -976,11 +976,15 @@ requires one dataset-9a entry per lake — all now clear `ValueError`s. Five tes
 added (`-k mfusglak` 10 passed; `-k "mfusglak or Ex8"` 11; focused 165; exe 4;
 combined 169 ARM). Decision unchanged.
 
-Why still not `Full`: sill/connectivity (datasets 7/8) and multi-lake sublake
-systems round-trip (and run via Ex8) but aren't authored from scratch in the
-tests; `TABLEINPUT` bathymetry table *contents* are external (FloPy only
-registers the per-lake tab unit / external file); GAGE coupling is a separate
-package.
+Why still not `Full` (updated after Stage 4.6D): sill/connectivity (datasets
+7/8) and multi-lake sublake systems are now **authored from scratch and
+validated** (Stage 4.6D — `sill_data` + `_validate_sill_data`, hardened to
+canonicalize IC/lake ints and float sills). The remaining gaps are `TABLEINPUT`
+bathymetry table *contents* (external — FloPy only registers the per-lake tab
+unit / external file), GAGE coupling (a separate package), and
+multi-lake-with-sill from-scratch *execution* (not exe-smoke-tested; manual tier
+— `Ex8_Lake` covers LAK execution). See
+`USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
 
 Tasks:
 
