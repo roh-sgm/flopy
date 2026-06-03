@@ -298,7 +298,10 @@ honest, upstream-ready USG-T 2.7 story.
   barrier-row reader/writer. Not promoted to `Full`: from-scratch parameter
   authoring, `TRANSIENT_HFB`+`NPHFB>0` (the Fortran would redefine params each SP
   under `ITERP=1`), and parameter `INSTANCES` (the Fortran aborts) all raise
-  `NotImplementedError`; non-parametric HFB is unchanged. Tests: `-k mfusghfb`
+  `NotImplementedError`; non-parametric HFB is unchanged. **(Superseded by Stage
+  4.6C-A: from-scratch `NPHFB>0` authoring is now supported — `parameters=`/
+  `acthfb_names`, no-defs → `ValueError`; only `TRANSIENT_HFB`+`NPHFB>0` and
+  `INSTANCES` remain `NotImplementedError`.)** Tests: `-k mfusghfb`
   **8 passed** (5 new: unstructured/structured round-trip, params+non-param mix,
   from-scratch fail, transient+params fail; 3 non-parametric regressions kept);
   focused **173**, exe **4**, combined **177** (ARM). See
@@ -347,7 +350,11 @@ honest, upstream-ready USG-T 2.7 story.
   unchanged; SGB keeps its own `_read_sgb_rows`/`_write_sgb_rows`. Not promoted to
   `Full` on the parametric axis: parameter `INSTANCES` (Fortran-supported) and
   from-scratch parameter authoring raise `NotImplementedError`; inconsistent
-  state raises `ValueError` (no partial file). Non-parametric SGB unchanged.
+  state raises `ValueError` (no partial file). **(Superseded by Stage 4.6C-B:
+  from-scratch *definition* authoring is now supported — `parameters=`, no-defs
+  → `ValueError`; active SGB params — per-SP `NP>0`/`active_params`/`INSTANCES`
+  — stay `NotImplementedError` due to the Fortran `SGB`/`G` type conflict.)**
+  Non-parametric SGB unchanged.
   Tests: `-k mfusgsgb` **14 passed** (9 new: round-trip, mixed non-param+active,
   reuse+active, AUX, SFAC-inert, OPEN/CLOSE, INSTANCES fail, from-scratch fail,
   inconsistent fail; the old parameters-fail test superseded); `-k "mfusgsgb or
@@ -831,8 +838,8 @@ all in `autotest/test_usg_transport.py`):
 
 | Package | File | What it does |
 |---|---|---|
-| `MfUsgSgb` | `flopy/mfusg/mfusgsgb.py` | **New.** Specified Gradient Boundary (`glo2sgbu1.f`). Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse. Registered as `"sgb"`, so `MfUsg.load()` no longer silently skips SGB. `NPSGB>0` fails explicitly. |
-| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` structurally preserved (Stage 4.4E); inline `TRANSIENTQ` supported (Stage 4.5A); recipient `U1DINT` `EXTERNAL`/`OPEN-CLOSE` read + expanded inline on write (Stage 4.5B). `TRANSIENTQ`+`NPQRT>0`, external-unit `TRANSIENTQ`, unresolvable `EXTERNAL` recipients, from-scratch parameter authoring and `INSTANCES` fail explicitly. Registered as `"qrt"`. |
+| `MfUsgSgb` | `flopy/mfusg/mfusgsgb.py` | **New.** Specified Gradient Boundary (`glo2sgbu1.f`). Node-based `(node, gradient)` list, AUX transport concentrations, `ITMP/-1` reuse. Registered as `"sgb"`, so `MfUsg.load()` no longer silently skips SGB. `NPSGB>0` parameter *definitions* preserve + from-scratch definition authoring (Stage 4.6C-B); active SGB params (per-SP `NP>0`/`active_params`/`INSTANCES`) fail explicitly — the USG-T 2.7 `PARTYP='SGB'` vs `'G'` Fortran type conflict aborts the run. |
+| `MfUsgQrt` | `flopy/mfusg/mfusgqrt.py` | **New.** Sink with Return Flow (`gwf2QRT8u.f`). Per-sink `(node, q, rfprop)` plus variable-length recipient-node lists (`NodQRT` via `U1DINT`), `CHANGEC`/`IQCHNGTYP` transport, AUX, reuse. `AUTOFLOWREDUCE` preserved; `NPQRT>0` structurally preserved (Stage 4.4E); inline `TRANSIENTQ` supported (Stage 4.5A); recipient `U1DINT` `EXTERNAL`/`OPEN-CLOSE` read + expanded inline on write (Stage 4.5B). from-scratch `NPQRT>0` parameter authoring supported (Stage 4.6C-C, structural-only — an activated parameter is not execution-guaranteed). `TRANSIENTQ`+`NPQRT>0`, external-unit `TRANSIENTQ`, unresolvable `EXTERNAL` recipients, and parameter `INSTANCES` fail explicitly. Registered as `"qrt"`. |
 | `MfUsgDrt` | `flopy/mfusg/mfusgdrt.py` | **New** (replaces base `ModflowDrt` in the registry). DRT8 (`gwf2drt8u.f`): EL+COND, `RETURNFLOW` single recipient (`NR>0`) or `SPREAD` multi-node (`NR<0`, `U1DINT` block), `CHANGEC`/`IDCHNGTYP` transport, AUX, reuse. The spreading `U1DINT` block reads `EXTERNAL`/`OPEN-CLOSE` + expanded inline on write (Stage 4.5B). `NPDRT>0` list parameters preserved (Stage 4.4D); structured grids delegate to base `ModflowDrt`. |
 | `MfUsgBcf` / `MfUsgLpf` TABRICH | `flopy/mfusg/mfusgbcf.py`, `mfusglpf.py`, `_tabrich.py` | TABRICH items 1c (`IUZONTAB` zone map) and 1d (`RETCRVS`, shape `(nuzones, nutabrows, 3)` = capillary head / saturation / relative permeability) are now authored/loaded/written via a shared helper. For LPF the per-layer Richards arrays are skipped under TABRICH (matching `ITABRICH/=0`) and a token-index/`int` parse bug was fixed. Incomplete TABRICH writes fail explicitly. |
 

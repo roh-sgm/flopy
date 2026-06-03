@@ -248,8 +248,10 @@ DRT8 unstructured format with the USG-T extensions:
 
 `NPDRT>0` (named parameters) are **preserved** (Stage 4.4D): definitions +
 activations + per-row recipients round-trip; `MXADRT` is sized to the active
-total per period; from-scratch authoring and `INSTANCES` raise
-`NotImplementedError`. Activated SPREAD (`NR<0`) recipients are
+total per period. From-scratch `NPDRT>0` authoring is supported (Stage 4.6B;
+`parameters=`/`active_params=`, auto counts; no-defs → `ValueError`); parameter
+`INSTANCES` still raises `NotImplementedError`. Activated SPREAD (`NR<0`)
+recipients are
 structural-round-trip only, not execution-guaranteed (USG-T copies `DRTF` but
 not `NodDRT` on activation). Structured (DIS) models delegate to the base
 `ModflowDrt`. Return-flow node lists with `EXTERNAL`/`OPEN/CLOSE` control
@@ -291,10 +293,12 @@ list-parameter definitions (`self.parameters`), the non-parametric barriers
 `NACTHFB` + active-name records. Barrier rows are 0-based internally / 1-based on
 file. Uses the shared list-parameter helpers (`UPARLSTRP`/`UPARLSTSUB`).
 
-Remaining (keeps HFB not `Full`): from-scratch parameter authoring,
-`TRANSIENT_HFB` combined with `NPHFB>0` (the Fortran would redefine parameters
-each stress period under `ITERP=1`), and parameter `INSTANCES` (the Fortran
-aborts) all raise `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_HFB.md`.
+From-scratch `NPHFB>0` parameter authoring is supported (Stage 4.6C-A;
+`parameters=`/`acthfb_names`, auto counts; no-defs → `ValueError`). Remaining
+(keeps HFB not `Full`): `TRANSIENT_HFB` combined with `NPHFB>0` (the Fortran
+would redefine parameters each stress period under `ITERP=1`) and parameter
+`INSTANCES` (the Fortran aborts) still raise `NotImplementedError`. See
+`USGT_STAGE4_04_PARAMETERS_HFB.md`.
 
 ---
 
@@ -307,7 +311,10 @@ from GHB, which specifies a head-to-head conductance). Node-based
 `(node, gradient)` list with AUX transport concentrations and `ITMP/-1`
 reuse; internal nodes 0-based, file 1-based. Registered as `"sgb"` in
 `MfUsg.load()`, so SGB models are no longer silently skipped. `NPSGB>0`
-(named parameters) fails explicitly.
+parameter *definitions* are preserved and authorable from scratch (Stage
+4.6C-B); active SGB parameters stay unsupported (the USG-T 2.7 `PARTYP='SGB'`
+vs `'G'` Fortran type conflict aborts the run), so per-SP `NP>0`/`INSTANCES`
+fail explicitly.
 
 ### QRT — Sink with Return Flow (`gwf2QRT8u.f`) — IMPLEMENTED
 
@@ -319,9 +326,11 @@ variable-length recipient-node lists (`NodQRT`, read/written via `U1DINT`),
 parameters are structurally preserved (Stage 4.4E). **Stage 4.5A: the inline
 `TRANSIENTQ` transient extraction-flow time series is now supported** — loaded,
 written, and authorable from scratch via the `transientq_*` attributes (it
-overrides `QRTF(4)=Q` each step; recipients are untouched). `TRANSIENTQ`
-combined with `NPQRT>0` and external-unit `TRANSIENTQ` data fail explicitly, as
-do from-scratch parameter authoring and `INSTANCES`. Registered as `"qrt"` in
+overrides `QRTF(4)=Q` each step; recipients are untouched). **Stage 4.6C-C:
+from-scratch `NPQRT>0` parameter authoring is supported** (structural-only — an
+activated parameter is not execution-guaranteed, see the QRT row above).
+`TRANSIENTQ` combined with `NPQRT>0`, external-unit `TRANSIENTQ` data, and
+parameter `INSTANCES` still fail explicitly. Registered as `"qrt"` in
 `MfUsg.load()`. See `USGT_STAGE4_05_QRT_TRANSIENTQ.md`.
 
 ---

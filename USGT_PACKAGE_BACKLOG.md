@@ -30,7 +30,8 @@ All priority tiers below have been worked through. Commits on `develop`:
   (new/registered), and BCF/LPF `TABRICH` 1c/1d. Each: parser + writer +
   authoring + round-trip tests, verified against Fortran.
 - **P2 — partial packages:** ETS (NETSEG/NETSOP/IESFACTOR authoring; params
-  expand or fail explicitly), HFB (static/transient/IHFBRD; `NPHFB>0` fails),
+  expand or fail explicitly), HFB (static/transient/IHFBRD; `NPHFB>0` preserve +
+  from-scratch author, Stage 4.6C-A),
   BAS (`RICHARDS_HP`, `IHM` implemented), DPT (`A-W_ADSORBIM` explicit fail),
   TIB (raw/text in P2; promoted to **Full (authoring)** in Stage 4.1).
 - **P3 — review:** BCT (1-species/IDISP=2/multi-species) and DDF (NONLINEAR
@@ -404,9 +405,11 @@ Problem:
   **but not execution-guaranteed**: the parameter value scales `QRTF(5)=NumRT`,
   not `Q` (`IPVL=5`; a Fortran bug, `SFAC` scales `Q` at `ISCLOC=4`), and
   `NodQRT` is not copied on activation (like DRT). FloPy does not apply the
-  parameter value to `Q`. From-scratch parameter authoring and `INSTANCES` →
-  `NotImplementedError`; `MXL`/consistency → `ValueError`. Reuses the shared
-  list-parameter helpers. See `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This
+  parameter value to `Q`. At Stage 4.4E from-scratch parameter authoring raised
+  `NotImplementedError`; **Stage 4.6C-C superseded this** — from-scratch
+  `NPQRT>0` authoring is now supported (structural-only, same caveat). `INSTANCES`
+  still → `NotImplementedError`; `MXL`/consistency → `ValueError`. Reuses the
+  shared list-parameter helpers. See `USGT_STAGE4_04_PARAMETERS_QRT.md`. **This
   completes the Stage 4.4 list-parameter family (HFB/SGB/DRT/QRT).**
 - **DONE** (Stage 4.4E review follow-up, applies to QRT and DRT): active
   parameter names are resolved **case-insensitively** when sizing `MXAQRT`/
@@ -580,9 +583,12 @@ non-parametric barriers, and `NACTHFB` + the active names. Shared list-parameter
 helpers live in `flopy/mfusg/_usgt_parameters.py`. See
 `USGT_STAGE4_04_PARAMETERS_HFB.md`.
 
-Not `Full`: from-scratch parameter authoring (`NPHFB>0` without loaded defs),
-`TRANSIENT_HFB`+`NPHFB>0` (the Fortran redefines params each SP under `ITERP=1`),
-and parameter `INSTANCES` (the Fortran aborts) all raise `NotImplementedError`.
+From-scratch `NPHFB>0` parameter authoring is supported (Stage 4.6C-A): pass
+`parameters=`/`acthfb_names` and the counts auto-compute. What keeps HFB not
+`Full` is `TRANSIENT_HFB`+`NPHFB>0` (the Fortran redefines params each SP under
+`ITERP=1`) and parameter `INSTANCES` (the Fortran aborts), which still raise
+`NotImplementedError`. A `NPHFB>0`/`acthfb_names` header with **no** definitions
+raises `ValueError` (no longer `NotImplementedError`).
 
 List-control follow-up (executed): re-audit of `SGWF2HFB7RL`/`SGWF2HFB7RLU`
 showed barrier lists may begin with `SFAC`/`OPEN/CLOSE`/`EXTERNAL` (both the
@@ -592,12 +598,13 @@ consumes these via the shared `_usgt_list.begin_list_block` (reused unchanged):
 names supported), `EXTERNAL` resolves via `ext_unit_dict` (unresolvable →
 `NotImplementedError`). The writer still emits expanded inline rows.
 
-Writer-validation polish (executed): `write_file` validates the preserved
-parameter state before opening the file, so a `NPHFB>0` header is never written
-without a complete, consistent body. From-scratch authoring (`parameters` `None`
-or empty `{}`) raises `NotImplementedError`; inconsistent definitions raise
-`ValueError` — `len(parameters) != NPHFB`, a def missing
-`partyp`/`parval`/`nlst`/`data`, `len(data) != nlst`, `nacthfb !=
+Writer-validation polish (executed): `write_file` validates the parameter state
+before opening the file, so a `NPHFB>0` header is never written without a
+complete, consistent body. A `NPHFB>0`/`acthfb_names` header with no definitions
+(`parameters` `None` or empty `{}`) raises `ValueError` (since Stage 4.6C-A,
+which added from-scratch authoring; previously `NotImplementedError`);
+inconsistent definitions raise `ValueError` — `len(parameters) != NPHFB`, a def
+missing `partyp`/`parval`/`nlst`/`data`, `len(data) != nlst`, `nacthfb !=
 len(acthfb_names)`, or an active name not defined (case-insensitive). Files read
 by `load` satisfy these invariants, so valid round-trips are unaffected.
 
@@ -615,7 +622,8 @@ Required tests (all green, `-k mfusghfb` 20 passed):
 - Parameterized load → write → reload preserves defs + activations. (Done.)
 - Parameters mixed with non-parametric barriers. (Done.)
 - 0-based internal / 1-based file for parameter barrier rows. (Done.)
-- From-scratch parametric authoring → `NotImplementedError`. (Done.)
+- From-scratch `NPHFB>0` authoring (`parameters=`/`acthfb_names`, auto counts).
+  (Done — Stage 4.6C-A; `NPHFB>0` with no defs → `ValueError`.)
 - `TRANSIENT_HFB`+`NPHFB>0` → `NotImplementedError`. (Done.)
 
 Acceptance:
