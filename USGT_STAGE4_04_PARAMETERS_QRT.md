@@ -94,13 +94,21 @@ not execution-guaranteed) / Expanded valid write (list controls)`**.
 
 ### Validation / explicit failures
 
-- **From-scratch authoring** (active parameters with no loaded definitions) →
-  `NotImplementedError`.
+- **From-scratch authoring** is **supported** (Stage 4.6C-C, structural-only):
+  pass `parameters={name: {parval, data, ...}}` + `active_params={kper: [...]}`;
+  `MXL`/`recipient_nodes` auto-compute. An activated parameter is **not
+  execution-guaranteed** — the Fortran bug above (`IPVL=5` scales `QRTF(5)=NumRT`,
+  not `Q`, and `NodQRT` is not copied on activation).
+- **`active_params` referencing parameters with no definitions** → `ValueError`.
 - **`INSTANCES` (`NUMINST>0`)** → `NotImplementedError` on load.
-- **`MXL<=0` or `MXL <` total definition rows** → `ValueError`.
+- **`MXL` given explicitly and `<` the total definition rows** → `ValueError`;
+  `MXL=0`/omitted auto-computes to that total.
 - **Inconsistent definitions** → `ValueError` (missing keys, `len(data)!=nlst`,
   `len(recipient_nodes)!=nlst`, or an active name not defined).
-- **`TRANSIENTQ`** → `NotImplementedError`.
+- **`TRANSIENTQ`**: the inline non-parametric transient extraction-flow series is
+  **supported** (Stage 4.5A). `TRANSIENTQ`+`NPQRT>0` and external-unit
+  `TRANSIENTQ` data → `NotImplementedError`; a `TRANSIENTQ` option that is not
+  last on item 1 → `ValueError`.
 - All validation runs before the file is opened — no partial file.
 
 ## Review follow-up (executed)
@@ -131,8 +139,11 @@ New (Stage 4.4E):
   the parameter value.
 - `test_mfusgqrt_parameter_instances_unsupported` — `INSTANCES` →
   `NotImplementedError`.
-- `test_mfusgqrt_parameter_from_scratch_fails` — active params without defs →
-  `NotImplementedError`, no partial file.
+- `test_mfusgqrt_parameter_active_without_defs_fails` — active params with no
+  definitions → `ValueError`, no partial file. (Repurposed from the old
+  `_from_scratch_fails`: from-scratch authoring *with* definitions is supported
+  as of Stage 4.6C-C — its `test_mfusgqrt_parameter_authoring_*` suite lives in
+  `USGT_STAGE4_13_QRT_PARAMETER_AUTHORING.md`.)
 - `test_mfusgqrt_parameter_mxl_too_small_fails` — `MXL <` total → `ValueError`.
 - `test_mfusgqrt_parameter_inconsistent_fails` — `len(data)!=nlst` and
   `len(recipient_nodes)!=nlst` → `ValueError`, no partial file.

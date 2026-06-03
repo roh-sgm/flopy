@@ -166,12 +166,15 @@ stay green (the helper was reused, not modified).
 
 The earlier writer only guarded `parameters is None`, so a parameterized header
 (`NPHFB>0`) could still be written with no body from `parameters={}` or an
-inconsistent dict. `write_file` now validates the preserved parameter state up
-front (in `_validate_parameter_write`, before the file is opened, so no partial
-file is produced):
+inconsistent dict. `write_file` now validates the parameter state up front (in
+`_validate_parameter_write`, before the file is opened, so no partial file is
+produced). From-scratch `NPHFB>0` authoring (pass `parameters=` + `acthfb_names`;
+`nphfb`/`mxfb`/`nlst`/`nacthfb` auto-compute) is supported as of Stage 4.6C-A:
 
-- **`NotImplementedError`** when there are no loaded definitions — `parameters`
-  is `None` **or** empty `{}` (from-scratch parameter authoring).
+- **`ValueError`** when a `NPHFB>0` / `acthfb_names` header references parameters
+  but there are **no** definitions — `parameters` is `None` **or** empty `{}`.
+  (Since Stage 4.6C-A, which added from-scratch authoring; previously
+  `NotImplementedError`.)
 - **`ValueError`** when definitions are present but inconsistent:
   `len(parameters) != NPHFB`; a definition missing any of
   `partyp`/`parval`/`nlst`/`data`; `len(pdef["data"]) != pdef["nlst"]`;
@@ -180,6 +183,10 @@ file is produced):
   **a parameter activated more than once** in the active list (case-insensitive)
   — the Fortran `SGWF2HFB7SUB` aborts "already activated" when `IACTIVE(IP)>0`
   (Stage 4.4 final polish).
+
+Separately (outside `_validate_parameter_write`), `TRANSIENT_HFB`+`NPHFB>0`
+(in `write_file`) and parameter `INSTANCES` (on `load`) still raise
+`NotImplementedError`.
 
 Files read by `MfUsgHfb.load` always satisfy these invariants, so valid
 round-trips are unaffected. Negative tests:
