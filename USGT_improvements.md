@@ -232,7 +232,9 @@ can be built from Python/numpy without first loading an existing model.
   from-scratch MDT exe smoke — the Ex7 runs already exercise MDT execution).
   **Decision: kept `✅ (intentionally not Full)`** — gaps: the species loop uses
   `MCOMP` (chained-decay `NTCOMP>MCOMP` unverified) and the AI1/AI2 output
-  binaries are authored but not read. OC/EVT/LAK untouched. See
+  binaries are authored but not read. **(Qualified by Stage 4.7B: MDT execution
+  is covered by the three real Ex7 models; `NTCOMP>MCOMP` and the AI1/AI2 binary
+  outputs stay manual tier.)** OC/EVT/LAK untouched. See
   `USGT_STAGE4_MDT_FULLNESS.md`. `-k mfusgmdt` **8 passed**, focused suite
   **154 passed**, exe **4 passed**, combined **158 passed** under the USG-T 2.7
   ARM binary.

@@ -1211,7 +1211,11 @@ real-model round-trip/run tests kept.
 Decision: **kept `✅ (intentionally not Full)`** — gaps: the per-species loop
 uses `MCOMP` (chained-decay `NTCOMP>MCOMP` not independently verified) and the
 AI1/AI2 output binaries (`MULTIFILE_MD`/`SEPARATE_AI2`) are authored but not
-read. See `USGT_STAGE4_MDT_FULLNESS.md`. (OC / EVT / LAK untouched beyond docs.)
+read. **Qualified by Stage 4.7B:** MDT execution is covered by the three real
+Ex7 matrix-diffusion models (round-trip/run); `NTCOMP>MCOMP` chained decay (a
+tailored BCT setup) and the AI1/AI2 per-component binary outputs stay **manual
+tier**. See `USGT_STAGE4_MDT_FULLNESS.md` / `USGT_STAGE4_18_EXE_VERIFICATION.md`.
+(OC / EVT / LAK untouched beyond docs.)
 
 Review follow-up: fixed a TSHIFTMD misalignment — USG-T reads AIOLD only when
 `TSHIFTMD > 1e-10`, but the writer used `> 0` for AIOLD and a `{:9.2f}` format

@@ -75,7 +75,9 @@ decision are recorded in **`USGT_STAGE4_OC_FULLNESS.md`**: implemented the
 `BOOTSTRAPPING` header (first-line placement + round-trip) and fixed
 layer-qualified / `DDREFERENCE` round-trip; added six `-k mfusgoc` tests; kept
 OC `✅ (intentionally not Full)` with explicit gaps (`SAVE IBOUND`
-solver-rejected, FASTFORWARD/BOOTSTRAPPING execution not exe-verified). A polish
+solver-rejected, FASTFORWARD/BOOTSTRAPPING execution not exe-verified).
+**(Qualified by Stage 4.7B: `ATSA` is now exe-verified; FASTFORWARD/FASTFORWARDC/
+BOOTSTRAPPING stay manual tier — external prior-run head/conc file.)** A polish
 follow-up then fixed the DDREFERENCE-only period write, taught `check()` the
 USG-T OC actions (single-word toggles vs keyword-value params that require a
 value), and added a specific `check()` warning for `SAVE IBOUND` (4 more tests;

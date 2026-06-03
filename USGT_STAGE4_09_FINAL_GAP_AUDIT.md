@@ -374,7 +374,12 @@ authored; **4.6F-B** ETS-zonal deferred as an ATS-coupled dynamic mode, explicit
 per-branch failure + full spec). **A5 — Stage 4.7A** is done too (HFB
 `TRANSIENT_HFB`+`NPHFB>0` and `INSTANCES` across the list-parameter packages:
 none implementable execution-safe, so each fails explicitly with the Fortran
-reason + a test). **The whole A1–A5 authoring-gap inventory is now closed.** The
-recommended next work is **executable verification** (OC/MDT exe smokes; the
-parametric / multi-lake-with-sill exe tiers that stay manual) and the separate
-**Stage 4.8 upstream-infrastructure** track per §4 — not new authoring gaps.
+reason + a test). **The whole A1–A5 authoring-gap inventory is now closed**, and
+the OC/MDT **executable verification** is addressed too (**Stage 4.7B**: OC
+`ATSA` exe-smoked; OC FASTFORWARD/FASTFORWARDC/BOOTSTRAPPING + `SAVE IBOUND` and
+MDT `NTCOMP>MCOMP` chained-decay / `SEPARATE_AI2`·`MULTIFILE_MD` binaries
+documented as **manual tier**; MDT execution covered by the three real Ex7
+models). The recommended next track is **Stage 4.8 — upstream infrastructure**
+(`USGT_STAGE4_08_UPSTREAM_INFRA.md`); the only open items are the documented
+manual tiers (external-prior-run OC modes, parametric / multi-lake-with-sill exe,
+MDT binaries) — not new authoring gaps.
