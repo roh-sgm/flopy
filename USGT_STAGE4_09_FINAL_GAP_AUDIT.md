@@ -46,10 +46,13 @@ array and `utl7u1.f`).
    FloPy not registering them is correct — there is no load-skip data-loss gap
    there. All *functional* USG-T 2.7 packages are registered in
    `mfnam_packages`.
-4. **The largest authoring gap is from-scratch MODFLOW *parameters*.** ETS, HFB,
-   DRT, SGB, QRT all *preserve* loaded `NP>0` definitions but raise
-   `NotImplementedError` when asked to author parameter definitions from
-   scratch. This is the main remaining "author a common feature from zero" gap.
+4. **The largest authoring gap was from-scratch MODFLOW *parameters* — now
+   closed (A1 DONE).** As of this audit, ETS, HFB, DRT, SGB, QRT all only
+   *preserved* loaded `NP>0` definitions and raised `NotImplementedError` when
+   asked to author parameter definitions from scratch. That gap has since been
+   closed across Stages 4.6B–4.6C-D: from-scratch authoring is supported for the
+   DRT/HFB/QRT list parameters, SGB definitions (active SGB params stay
+   Fortran-blocked), and the ETS ETSR array parameter. See §3.1 A1.
 
 ---
 

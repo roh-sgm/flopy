@@ -9,8 +9,10 @@ USG-T packages that currently expand parameters or fail explicitly.
   the ETSR rate now load → write → reload with their parameter syntax intact
   (`NPETS>0` in item 2a, definition blocks, per-period activation records,
   including `INSTANCES`). An opt-in expanded fallback (`expand_parameters=True`)
-  keeps the old `NPETS=0` behavior; from-scratch parameter *authoring* still
-  raises `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md`.
+  keeps the old `NPETS=0` behavior. From-scratch parameter *authoring* raised
+  `NotImplementedError` at Stage 4.4A but is now **supported (Stage 4.6C-D)** —
+  `npets>0` without defs raises `ValueError` instead. See
+  `USGT_STAGE4_04_PARAMETERS_ETS.md` / `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`.
 - `HFB`: **parameter-preserving (Stage 4.4B, executed)** — list parameters
   (`UPARLSTRP`/`UPARLSTSUB`) now load → write → reload with their syntax intact
   (`NPHFB>0`, definition blocks with `NLST` barrier rows, `NACTHFB` + active
@@ -162,10 +164,14 @@ activation with a `PARTYP='SGB'` vs `'G'` type conflict); DRT **preserves** list
 parameters incl. activations + recipients (Stage 4.4D — DRT is consistent); QRT
 is **structural-preserving only** (Stage 4.4E — type-consistent, but the Fortran
 parameter value scales `NumRT` not `Q`, and `NodQRT` is not copied on
-activation, so activation is not execution-guaranteed). None is promoted to
-`Full` on the parametric axis: from-scratch parameter authoring is unsupported
-everywhere, plus the per-package caveats above (HFB `TRANSIENT_HFB`+`NPHFB>0`;
-SGB active parameters; QRT execution; all four `INSTANCES`).
+activation, so activation is not execution-guaranteed). At the time of this
+Stage 4.4x note, from-scratch parameter authoring was unsupported everywhere;
+**this was superseded by Stages 4.6B–4.6C-D**, which add from-scratch authoring
+for the DRT/HFB/QRT list parameters, SGB definitions, and the ETS ETSR array
+parameter (ETS authoring includes `INSTANCES`). None is promoted to `Full` on
+the parametric axis only because of the per-package caveats above (HFB
+`TRANSIENT_HFB`+`NPHFB>0`; SGB active parameters; QRT execution; the
+*list-parameter* packages' `INSTANCES`).
 
 ## Validation
 

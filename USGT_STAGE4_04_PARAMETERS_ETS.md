@@ -135,12 +135,12 @@ instances included), with:
 - from-scratch ETSR authoring (Stage 4.6C-D, `parameters=`/`evtr_parm=`); a
   `npets>0`/`evtr_parm` with no definitions raises `ValueError`.
 
-Kept not `Full`: only the ETSR array can be parameterized (Fortran limit) and
-from-scratch parametric *execution* is not USG-T smoke-tested.
-
-Not promoted to `Full` because from-scratch parameter authoring is unsupported.
-(Only ETSR can be parameterized in the Fortran, so that is not a gap; ETS zonal
-time-series is a separate EVT-side gap tracked elsewhere.)
+Kept not `Full` for honest reasons only: only the ETSR array can be
+parameterized (Fortran limit, so that is not a FloPy gap) and from-scratch
+parametric *execution* is not USG-T smoke-tested. (ETS zonal time-series is a
+separate EVT-side gap tracked elsewhere.) From-scratch parameter authoring is
+**supported** as of Stage 4.6C-D, so it is no longer a reason to withhold
+`Full`.
 
 ## Validation
 

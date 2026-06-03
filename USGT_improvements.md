@@ -275,8 +275,10 @@ honest, upstream-ready USG-T 2.7 story.
   `flopy/mfusg/_usgt_parameters.py` adds the array-parameter **write** side and
   reuses `ModflowParBc` as the parser (no second parser; no ad-hoc strings).
   Opt-in `expand_parameters=True` keeps the legacy expanded path; from-scratch
-  parameter *authoring* (`npets>0` without loaded defs) still raises
-  `NotImplementedError`, so ETS stays ⚠️ Partial / not `Full`. Tests: `-k
+  parameter *authoring* (`npets>0` without loaded defs) still raised
+  `NotImplementedError` **at this stage** (later superseded — see Stage 4.6C-D
+  below — which adds from-scratch authoring and replaces that error with a
+  `ValueError`). At Stage 4.4A ETS stayed ⚠️ Partial / not `Full`. Tests: `-k
   mfusgets` **10 passed** (4 new preservation/instances tests; the old
   expand test now opts in via `expand_parameters=True`); focused **169**, exe
   **4**, combined **173** (ARM). The list-parameter write path was then
@@ -698,6 +700,19 @@ honest, upstream-ready USG-T 2.7 story.
   tests stay green. `-k mfusgets` **16**, focused **288**, exe **4**, combined
   **292** (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. **This completes
   the parameter from-scratch authoring family (DRT/HFB/SGB/QRT list + ETS array).**
+- **Stage 4.6C-D doc follow-up (executed, docs-only):** reconciled stale text
+  that still implied ETS / from-scratch parameter authoring was unsupported now
+  that Stage 4.6C-D ships it. Fixed current-state claims (`USGT_roadmap.md`
+  parameter-axis ETS row "fails explicitly"; the `MfUsgEts` package-table row
+  "preserving parameter syntax is not yet supported"; `USGT_PACKAGE_BACKLOG.md`
+  ETS-parameters Status/Acceptance "documented `NotImplementedError`";
+  `USGT_STAGE4_04_PARAMETERS_ETS.md` "Not promoted to Full because authoring is
+  unsupported"; the `USGT_STAGE4_04_PARAMETERS.md` ETS bullet + family line;
+  `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` key-finding #4). Historical Stage 4.4A
+  journal entries were kept as provenance with explicit *superseded by Stage
+  4.6C-D* markers (`npets>0` without defs → `ValueError`, not
+  `NotImplementedError`). `USGT_AGENT_BRIEF.md` / `USGT_STAGE3_COMPLETION_PLAN.md`
+  are dated planning snapshots and were left as-is. No code/tests touched.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area
@@ -875,7 +890,7 @@ explicitly rather than producing incomplete or mis-parsed files.
 |---|---|---|
 | `MfUsgChd` | `flopy/mfusg/mfusgchd.py` | CHD package for unstructured USG-T grids. Node-based (replaces k/i/j), supports AUX concentration variables. Internal `node` values are 0-based and file I/O is 1-based. Full `load` and `write_file` for the USG-T format (`NACT    Stress Period N` headers, `-1` reuse). |
 | `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration and a trailing reach-ID column (`irch`) that is written positionally without being declared as AUX. `irch` is auto-detected from the first data row when loading. |
-| `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays and the `IESFACTOR` transport flag. Parameterized ETS files load by expanding parameters to concrete arrays and then write as valid non-parametric `NPETS=0`; preserving parameter syntax is not yet supported. |
+| `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays and the `IESFACTOR` transport flag. ETSR array parameters are **preserved** (load → write → reload with `NPETS>0`, defs, per-SP activation records, `INSTANCES`; Stage 4.4A) **and authored from scratch** (`parameters=`/`evtr_parm=`, auto `NPETS`/`nclu`, validated before opening; Stage 4.6C-D). Opt-in `expand_parameters=True` keeps the legacy expanded `NPETS=0` write; `npets>0` without defs raises `ValueError`. Only ETSR is parameterizable (Fortran limit). |
 | `MfUsgGhb` | `flopy/mfusg/mfusgghb.py` | GHB package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration variables, stores `ipakcb` (CBC unit). Full `load` and `write_file`. Load registry now maps `"ghb"` to `MfUsgGhb`. |
 | `MfUsgDrn` | `flopy/mfusg/mfusgdrn.py` | DRN package for unstructured USG-T grids. Same pattern as GHB: internal `node` values are 0-based, file I/O is 1-based, AUX support, `ipakcb`. Full `load` and `write_file`. Load registry maps `"drn"` to `MfUsgDrn`. |
 | `MfUsgTvm` | `flopy/mfusg/mfusgtvm.py` | TVM2 (Time-Variant Materials) package. Semantic implementation: global interpolation controls plus nper+1 stress-period boundary records, with 0-based internal nodes and 1-based file I/O. Missing boundaries emit all-zero headers on write. |

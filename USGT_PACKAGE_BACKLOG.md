@@ -509,12 +509,17 @@ FloPy class: `MfUsgEts`
 
 Fortran: `gwf2ets8u1.f`
 
-Status: **parameter-preserving for the ETSR array parameter (Stage 4.4A,
-executed)**; semantic for non-parametric ETS. **Authoring tests added**
-(2026-05-30): NETSEG=1, NETSEG>1, NETSOP=2, IESFACTOR, and explicit `npets>0`
-write failure.
+Status: **parameter-preserving + from-scratch authoring for the ETSR array
+parameter** (Stage 4.4A preservation + **Stage 4.6C-D from-scratch authoring**,
+both executed); semantic for non-parametric ETS. From-scratch ETSR parameter
+authoring is now supported (`parameters=`/`evtr_parm=`, auto `NPETS`/`nclu`,
+validated before opening); `npets>0` without defs now raises **`ValueError`**;
+`expand_parameters=True` remains the opt-in expanded fallback (`NPETS=0`). See
+`USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`.
 
-Resolution (Stage 4.4A): `MfUsgEts.load` now *preserves* ETSR array parameters
+Resolution (Stage 4.4A — preservation; **superseded for the authoring gap by
+Stage 4.6C-D**, see Status above): `MfUsgEts.load` now *preserves* ETSR array
+parameters
 by default — it keeps the parsed definitions (`self.parameters`, a
 `ModflowParBc`) and the per-period activation records (`self.evtr_parm`), and
 `write_file` re-emits `NPETS>0` in item 2a, the definition blocks, and the
@@ -522,9 +527,13 @@ activation records (with `INSTANCES`), while ETSS/ETSX/IETS/PXDP/PETM stay plain
 arrays. USG-T reads `NPETS` from item 2a (`UPARARRAL` is called with `IN=-1`),
 so there is no `PARAMETER` line. The shared write helper is
 `flopy/mfusg/_usgt_parameters.py` (reuses `ModflowParBc`; no second parser).
-Opt-in `expand_parameters=True` keeps the legacy expanded path (`NPETS=0`).
-Still not `Full`: from-scratch parameter *authoring* (`npets>0` without loaded
-defs) raises `NotImplementedError`. See `USGT_STAGE4_04_PARAMETERS_ETS.md`.
+Opt-in `expand_parameters=True` keeps the legacy expanded path (`NPETS=0`). At
+Stage 4.4A, from-scratch parameter *authoring* (`npets>0` without loaded defs)
+still raised `NotImplementedError`; **Stage 4.6C-D superseded this** — authoring
+is now supported and the no-defs case raises `ValueError`. ETS stays not `Full`
+only because just ETSR is parameterizable (Fortran limit) and parametric
+*execution* is not USG-T smoke-tested. See `USGT_STAGE4_04_PARAMETERS_ETS.md` /
+`USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`.
 
 Required tests (all green, `-k mfusgets` 10 passed):
 
@@ -538,13 +547,16 @@ Required tests (all green, `-k mfusgets` 10 passed):
 - Time-varying parameter (`INSTANCES`) round-trips. (Done.)
 - Expanded fallback (`expand_parameters=True`) writes `NPETS=0`. (Done —
   regression.)
-- Programmatic `npets>0` (no defs) fails explicitly. (Done.)
+- Programmatic `npets>0` (no defs) fails explicitly with `ValueError`. (Done.)
+- **From-scratch ETSR parameter authoring** (`parameters=`/`evtr_parm=`, auto
+  counts, validated before opening). (Done — Stage 4.6C-D; 6 new tests.)
 
 Acceptance:
 
 - Users can author non-parametric ETS from scratch. (Yes.)
-- Loaded ETSR parameters are preserved on write/reload; from-scratch parameter
-  authoring is an explicit, documented `NotImplementedError`. (Yes.)
+- Loaded ETSR parameters are preserved on write/reload. (Yes.)
+- From-scratch ETSR parameter authoring is supported (Stage 4.6C-D); `npets>0`
+  with no defs raises a documented `ValueError`. (Yes.)
 
 ### HFB - parameterized barriers
 
@@ -1151,7 +1163,9 @@ synthetic tests + one exe test.
 Decision: **kept `✅ (intentionally not Full)`** — explicit gaps: ETS zonal
 time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError`; `NPEVT`
 parameters are *Expanded valid write* (loaded as arrays, `NP=0` on write,
-authoring-with-params unsupported) — same treatment as ETS. See
+authoring-with-params unsupported) — the same treatment ETS had **before** Stage
+4.4A (ETS itself now *preserves* ETSR array parameters and, as of Stage 4.6C-D,
+*authors* them from scratch; EVT `NPEVT` has not had that work). See
 `USGT_STAGE4_EVT_FULLNESS.md`. (OC / MDT / LAK untouched beyond docs.)
 
 Review follow-up: fixed a scalar-`ETFACTOR` crash (`__init__` normalizes
@@ -1426,6 +1440,15 @@ Prioritized next cards (full criteria in the audit doc):
   **288**, combined **292** (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`.
   **This completes the parameter from-scratch authoring family (DRT/HFB/SGB/QRT
   list + ETS array).**
+- **Stage 4.6C-D doc follow-up — DONE (executed, docs-only).** Reconciled stale
+  text that still implied ETS / from-scratch parameter authoring was unsupported
+  (roadmap parameter-axis row, `MfUsgEts` package-table row, this file's
+  ETS-parameters Status/Acceptance, `USGT_STAGE4_04_PARAMETERS_ETS.md` status,
+  `USGT_STAGE4_04_PARAMETERS.md` ETS+family lines, gap-audit key-finding #4).
+  Historical Stage 4.4A entries kept as provenance with *superseded by Stage
+  4.6C-D* markers (`npets>0` without defs → `ValueError`, not
+  `NotImplementedError`); `USGT_AGENT_BRIEF.md`/`USGT_STAGE3_COMPLETION_PLAN.md`
+  left as dated planning snapshots. No code/tests touched.
 - **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
   *Recommended next.*
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
