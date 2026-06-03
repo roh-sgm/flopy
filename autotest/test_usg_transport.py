@@ -6230,6 +6230,83 @@ def test_mfusgdpt_aw_adsorbim_rejects_unsupported(function_tmpdir):
         MfUsgDpt.load(str(fbare), _dpt_aw_model(function_tmpdir, "lbare"))
 
 
+def test_mfusgdpt_aw_adsorbim_canonicalizes_indices(function_tmpdir):
+    """IAREA_FNIM/IKAWI_FNIM given as numeric strings or integer-valued floats
+    are canonicalized to int, so write_file emits "1 2" (never "1.0"/"2.0") and
+    the model round-trips."""
+    from flopy.mfusg import MfUsgDpt
+
+    m = _dpt_aw_model(function_tmpdir, "can")
+    dpt = MfUsgDpt(
+        m,
+        aw_adsorbim=True,
+        iarea_fnim="1",  # numeric string
+        ikawi_fnim=2.0,  # integer-valued float
+        prsityim=0.3,
+        ddtr=0.6,
+        phif=0.4,
+        concim=1.0,
+        awamaxim=2.5,
+        alangawim=3.5,
+        blangawim=4.5,
+    )
+    assert dpt.iarea_fnim == 1 and isinstance(dpt.iarea_fnim, int)
+    assert dpt.ikawi_fnim == 2 and isinstance(dpt.ikawi_fnim, int)
+    dpt.fn_path = str(function_tmpdir / "can.dpt")
+    dpt.write_file()
+    option_line = Path(dpt.fn_path).read_text().splitlines()[0]
+    assert "A-W_ADSORBIM 1 2" in option_line
+    assert "1.0" not in option_line and "2.0" not in option_line
+
+    re = MfUsgDpt.load(dpt.fn_path, _dpt_aw_model(function_tmpdir, "canb"))
+    assert re.iarea_fnim == 1 and re.ikawi_fnim == 2
+
+
+def test_mfusgdpt_aw_adsorbim_validation_hardening(function_tmpdir):
+    """Review hardening: malformed A-W_ADSORBIM inputs fail with a clear
+    ValueError before any array is created/written (no partial file), instead of
+    a raw IndexError/TypeError or a late EOF on load."""
+    from flopy.mfusg import MfUsgDpt
+
+    def build(name, **kw):
+        return MfUsgDpt(
+            _dpt_aw_model(function_tmpdir, name, mcomp=kw.pop("mcomp", 1)),
+            aw_adsorbim=True,
+            prsityim=0.3,
+            ddtr=0.6,
+            phif=0.4,
+            concim=1.0,
+            **kw,
+        )
+
+    # per-species Langmuir arrays of the wrong length / None
+    with pytest.raises(ValueError, match="needs one per species"):
+        build("h1", mcomp=2, iarea_fnim=1, ikawi_fnim=1,
+              alangawim=[1.0], blangawim=[2.0, 3.0])
+    with pytest.raises(ValueError, match="is required"):
+        build("h2", iarea_fnim=1, ikawi_fnim=1, alangawim=None)
+    with pytest.raises(ValueError, match="is required"):
+        build("h3", iarea_fnim=1, ikawi_fnim=1, blangawim=None)
+
+    # non-canonical function indices
+    for i, bad in enumerate((1.5, "abc", True, False, None)):
+        with pytest.raises(ValueError):
+            build(f"hi{i}", iarea_fnim=bad, ikawi_fnim=1)
+    for i, bad in enumerate((2.5, "x", None)):
+        with pytest.raises(ValueError):
+            build(f"hk{i}", iarea_fnim=1, ikawi_fnim=bad)
+
+    # nothing above opened a file
+    for nm in ("h1", "h2", "h3"):
+        assert not (function_tmpdir / f"{nm}.dpt").exists()
+
+    # load with active transport off must fail at the option line (before arrays)
+    f = function_tmpdir / "awmc0.dpt"
+    f.write_text("# x\n 0 0 1 0 0 0 0 A-W_ADSORBIM 1 1\n")
+    with pytest.raises(ValueError, match="mcomp>0"):
+        MfUsgDpt.load(str(f), _dpt_aw_model(function_tmpdir, "lmc0", mcomp=0))
+
+
 # ---------------------------------------------------------------------------
 # Priority-3 review: from-scratch authoring tests for BCT / DDF
 # (previously only exercised via real-model round-trips)

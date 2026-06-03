@@ -311,6 +311,10 @@ class MfUsgDpt(Package):
         self.iarea_fnim = iarea_fnim
         self.ikawi_fnim = ikawi_fnim
         if self.aw_adsorbim:
+            # canonical integer function indices (so write_file emits "1", never
+            # "1.0" or a string) and supported-branch check
+            self.iarea_fnim = iarea_fnim = self._canon_int(iarea_fnim, "IAREA_FNIM")
+            self.ikawi_fnim = ikawi_fnim = self._canon_int(ikawi_fnim, "IKAWI_FNIM")
             self._check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim)
             if mcomp <= 0:
                 raise ValueError(
@@ -345,10 +349,8 @@ class MfUsgDpt(Package):
                     name="awarea_x0im",
                 )
             # RP2 Langmuir A/B arrays, one pair per mobile species.
-            if isinstance(alangawim, (int, float)):
-                alangawim = [alangawim] * mcomp
-            if isinstance(blangawim, (int, float)):
-                blangawim = [blangawim] * mcomp
+            alangawim = self._normalize_species_arrays(alangawim, mcomp, "alangawim")
+            blangawim = self._normalize_species_arrays(blangawim, mcomp, "blangawim")
             self.alangawim = [0] * mcomp
             self.blangawim = [0] * mcomp
             for icomp in range(mcomp):
@@ -369,6 +371,75 @@ class MfUsgDpt(Package):
 
         if add_package:
             self.parent.add_package(self)
+
+    @staticmethod
+    def _canon_int(value, what):
+        """Return ``value`` as a canonical ``int`` for an A-W_ADSORBIM function
+        index, or raise ``ValueError``. Integer-valued floats (``1.0``) and
+        integer strings (``"1"``) are normalized; ``bool``, ``None``,
+        non-integral floats (``1.5``), and non-integer strings are rejected -- so
+        ``write_file`` emits e.g. ``"1"``, never ``"1.0"`` or a string.
+        """
+        if isinstance(value, bool):
+            raise ValueError(
+                f"MfUsgDpt A-W_ADSORBIM {what} must be an integer, not a bool "
+                f"({value!r})."
+            )
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+        if isinstance(value, (float, np.floating)):
+            if float(value).is_integer():
+                return int(value)
+            raise ValueError(
+                f"MfUsgDpt A-W_ADSORBIM {what} must be a whole number; got {value!r}."
+            )
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                raise ValueError(
+                    f"MfUsgDpt A-W_ADSORBIM {what} must be an integer; got {value!r}."
+                )
+        raise ValueError(
+            f"MfUsgDpt A-W_ADSORBIM {what} must be an integer; got "
+            f"{type(value).__name__} {value!r}."
+        )
+
+    @staticmethod
+    def _normalize_species_arrays(value, mcomp, name):
+        """Normalize a per-species A-W_ADSORBIM array input to a list of length
+        ``mcomp``: a scalar (Python/NumPy) is broadcast to every species; a
+        list/tuple/ndarray must already have length ``mcomp``; ``None`` or a
+        wrong length raises a clear ``ValueError`` (never a raw
+        ``IndexError``/``TypeError`` in the per-species loop).
+        """
+        if isinstance(value, bool):
+            raise ValueError(
+                f"MfUsgDpt A-W_ADSORBIM {name} must be a number or a sequence of "
+                f"{mcomp} per-species values, not a bool."
+            )
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            return [value] * mcomp
+        # a 0-d ndarray is a scalar; broadcast it (avoid len() on an unsized array)
+        if isinstance(value, np.ndarray) and value.ndim == 0:
+            return [value.item()] * mcomp
+        if value is None:
+            raise ValueError(
+                f"MfUsgDpt A-W_ADSORBIM {name} is required (a scalar or a "
+                f"sequence of {mcomp} per-species values); got None."
+            )
+        if isinstance(value, (list, tuple, np.ndarray)):
+            seq = list(value)
+            if len(seq) != mcomp:
+                raise ValueError(
+                    f"MfUsgDpt A-W_ADSORBIM {name} has {len(seq)} entries but "
+                    f"needs one per species (mcomp={mcomp})."
+                )
+            return seq
+        raise ValueError(
+            f"MfUsgDpt A-W_ADSORBIM {name} must be a number or a sequence of "
+            f"{mcomp} per-species values; got {type(value).__name__}."
+        )
 
     @staticmethod
     def _check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim):
@@ -606,14 +677,24 @@ class MfUsgDpt(Package):
         if "A-W_ADSORBIM" in t:
             idx = t.index("A-W_ADSORBIM")
             try:
-                iarea_fnim = int(t[idx + 1])
-                ikawi_fnim = int(t[idx + 2])
-            except (IndexError, ValueError):
+                a_tok, k_tok = t[idx + 1], t[idx + 2]
+            except IndexError:
                 raise ValueError(
                     "MfUsgDpt: A-W_ADSORBIM must be followed by two integers "
                     "IAREA_FNIM IKAWI_FNIM on the option line."
                 )
+            iarea_fnim = cls._canon_int(a_tok, "IAREA_FNIM")
+            ikawi_fnim = cls._canon_int(k_tok, "IKAWI_FNIM")
             cls._check_aw_adsorbim_supported(iarea_fnim, ikawi_fnim)
+            # A-W_ADSORBIM is a per-species option: it needs active transport.
+            # Fail here (option line), before any RP1/RP2 array read, so a
+            # mcomp<=0 model never hits an EOF/IndexError mid-array.
+            if model.mcomp <= 0:
+                raise ValueError(
+                    "MfUsgDpt: A-W_ADSORBIM requires active transport (mcomp>0) "
+                    f"to read the per-species Langmuir arrays; model.mcomp="
+                    f"{model.mcomp}."
+                )
             kwargs["aw_adsorbim"] = True
             kwargs["iarea_fnim"] = iarea_fnim
             kwargs["ikawi_fnim"] = ikawi_fnim

@@ -1486,10 +1486,16 @@ Prioritized next cards (full criteria in the audit doc):
   matching `dpt2aw_adsorb.f`. Scalar/tabular branches (`IAREA_FNIM ∈ {2,3,5}`,
   `IKAWI_FNIM ∈ {3,4}` — zone map + `ROG_SIGMA`/`SIGMA_RT` + tables) raise a
   specific `NotImplementedError` (authoring **and** load, before any array read).
-  `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. 3 new tests (replacing
-  the old explicit-fail test); `-k mfusgdpt` **3**, focused **294**, exe **4**,
-  combined **298** (ARM). DPT stays ⚠️ Partial (scalar/tabular branches deferred).
-  See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
+  `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. **Review follow-up
+  (hardening):** per-species `alangawim`/`blangawim` are normalized
+  (`_normalize_species_arrays`: scalar→broadcast, list len==mcomp, None/wrong
+  length → `ValueError`, no raw `IndexError`/`TypeError`); `iarea_fnim`/
+  `ikawi_fnim` are canonicalized (`_canon_int`: int-valued floats/strings → int,
+  bool/None/non-integral → `ValueError`, so the file shows `1 1` not `1.0`); and
+  `load` with `mcomp<=0` raises `ValueError` at the option line (before array
+  reads). 5 new tests (2 from the follow-up); `-k mfusgdpt` **5**, focused
+  **296**, exe **4**, combined **300** (ARM). DPT stays ⚠️ Partial (scalar/tabular
+  branches deferred; scope unchanged). See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.** *Recommended next.*
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 - **Stage 4.8 — Upstream infrastructure** stays a separate track.

@@ -760,10 +760,16 @@ honest, upstream-ready USG-T 2.7 story.
   `_check_aw_adsorbim_supported` rejects `IAREA_FNIM ∈ {2,3,5}` and `IKAWI_FNIM ∈
   {3,4}` (zone map + `ROG_SIGMA`/`SIGMA_RT` + tables) with a specific
   `NotImplementedError` on authoring **and** load (the latter before any array is
-  read); `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. 3 new tests
-  replace the old explicit-fail test (two round-trips + a negatives test);
-  `-k mfusgdpt` **3**, focused **294**, exe **4**, combined **298** (ARM). DPT
-  stays ⚠️ Partial — the scalar/tabular branches remain deferred. See
+  read); `mcomp==0` → `ValueError`. Only `mfusgdpt.py` touched. **Review
+  follow-up (hardening):** added `_normalize_species_arrays` (per-species
+  `alangawim`/`blangawim`: scalar→broadcast, list len==mcomp, None/wrong length →
+  `ValueError`, no raw `IndexError`/`TypeError`) and `_canon_int` (canonicalizes
+  `iarea_fnim`/`ikawi_fnim`: int-valued floats/strings → int, bool/None/
+  non-integral → `ValueError`, so the file shows `1 1` not `1.0`); `load` with
+  `mcomp<=0` now raises `ValueError` at the option line before array reads. 5 new
+  tests (two round-trips + a negatives test + 2 follow-up tests); `-k mfusgdpt`
+  **5**, focused **296**, exe **4**, combined **300** (ARM). DPT stays ⚠️ Partial
+  — scope unchanged, the scalar/tabular branches remain deferred. See
   `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
   unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)

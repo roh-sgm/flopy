@@ -129,12 +129,38 @@ read).
   `IKAWI_FNIM ∈ {3,4}` (authoring → `NotImplementedError`); `mcomp=0` →
   `ValueError`; load of `5 4` (raises on `IAREA_FNIM=5`) and `1 4` (raises on
   `IKAWI_FNIM=4`) before any array read; a bare keyword → `ValueError`.
+- `test_mfusgdpt_aw_adsorbim_canonicalizes_indices` — `IAREA_FNIM="1"` /
+  `IKAWI_FNIM=2.0` normalize to int, write `A-W_ADSORBIM 1 2` (no `1.0`/`2.0`),
+  and round-trip (review hardening).
+- `test_mfusgdpt_aw_adsorbim_validation_hardening` — per-species `alangawim`/
+  `blangawim` of the wrong length or `None` → `ValueError`; non-integral indices
+  (`1.5`, `"abc"`, `True`/`False`, `None`) → `ValueError`; load with `mcomp=0`
+  → `ValueError` at the option line, before any array read; no partial file.
 
 (The old `test_mfusgdpt_aw_adsorbim_fails_explicitly` is superseded by these.)
 
 No `A-W_ADSORBIM` executable smoke was added: a convergent dual-porosity
 air-water adsorption model is not cheap to build, and the writer is audited
 line-by-line against the Fortran and round-trips in FloPy.
+
+## Review follow-up — validation hardening (executed)
+
+A code review found three from-scratch inputs that reached `write_file`/`load`
+as a raw `IndexError`/`TypeError` or a late EOF instead of a clear error. All now
+fail in `__init__` / at the load option line, before any array is created/read:
+
+- **Per-species `alangawim`/`blangawim`** are normalized by
+  `_normalize_species_arrays`: a scalar is broadcast to `mcomp`; a
+  list/tuple/ndarray must have length `mcomp`; `None` or a wrong length →
+  `ValueError` (no raw `IndexError`/`TypeError` in the per-species loop).
+- **`IAREA_FNIM`/`IKAWI_FNIM`** are canonicalized by `_canon_int`: integer-valued
+  floats (`1.0`) and integer strings (`"1"`) → `int`; `bool`, `None`,
+  non-integral floats (`1.5`), and non-integer strings → `ValueError`. So
+  `write_file` emits `A-W_ADSORBIM 1 1`, never `1.0` or a string. (`load`
+  reuses the same helper.)
+- **`load` with `model.mcomp <= 0`** raises `ValueError` ("requires mcomp>0") at
+  the option line — before the RP1/RP2 array reads — instead of hitting an
+  EOF/`IndexError` mid-array.
 
 ## Status after Stage 4.6E
 
@@ -148,9 +174,9 @@ parametric *execution* is not USG-T smoke-tested.
 ## Validation
 
 ```bash
-python -m pytest autotest/test_usg_transport.py -k mfusgdpt -q   # 3 passed
-python -m pytest autotest/test_usg_transport.py -q               # 294 passed
+python -m pytest autotest/test_usg_transport.py -k mfusgdpt -q   # 5 passed
+python -m pytest autotest/test_usg_transport.py -q               # 296 passed
 python -m pytest autotest/test_usg_transport_exe.py -q           # 4 passed
-USGT_EXE=.../usgt_270_arm python -m pytest autotest/test_usg_transport.py autotest/test_usg_transport_exe.py -q   # 298 passed
+USGT_EXE=.../usgt_270_arm python -m pytest autotest/test_usg_transport.py autotest/test_usg_transport_exe.py -q   # 300 passed
 git diff --check
 ```
