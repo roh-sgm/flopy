@@ -720,6 +720,31 @@ honest, upstream-ready USG-T 2.7 story.
   4.6C-D* markers (`npets>0` without defs → `ValueError`, not
   `NotImplementedError`). `USGT_AGENT_BRIEF.md` / `USGT_STAGE3_COMPLETION_PLAN.md`
   are dated planning snapshots and were left as-is. No code/tests touched.
+- **Stage 4.6D — LAK multi-lake + sill/connectivity (datasets 7/8) authoring
+  (executed):** closes the Card-D gap "sill/connectivity + multi-lake systems
+  round-trip but aren't authored from scratch". The writer already emitted
+  datasets 7/8 (only when `ITMP>0`, matching `gwf2lak7u1.f` `GWF2LAK7U1RPU` —
+  `ITMP<=0` skips datasets 5/6/7/8); what was missing was validation and
+  from-scratch tests. Added `MfUsgLak._validate_sill_data` (called in `__init__`,
+  before any file is opened): each `sill_data` system `([IC, lake1..lakeIC],
+  [sill1..sill_{IC-1}])` is checked for `kper` range, the `ITMP>0` rule (else the
+  sill would be silently dropped), `IC>=2` (`IC<=0` is the Fortran end-of-list
+  sentinel), `IC==len(lakes)`, lake numbers **1-based** in `[1, NLAKES]` and
+  unique per system, and `len(sillvt)==IC-1`. Rewrote the `sill_data` docstring
+  (exact layout, 1-based/center-first convention, `ITMP>0` rule; the old text
+  mislabeled `IC` as "number of sublakes" — it is the total lakes in the system).
+  **Convention decision:** lake numbers stay 1-based (as `load` stores them and as
+  `LKARR`/lake-IDs use everywhere); changing it would silently break the Ex8
+  round-trip. Only `mfusglak.py` touched (no format change). 3 new tests (two
+  multi-lake from-scratch round-trips — no-transport and classic `mcomp=1` — plus
+  a 7-case negatives test); the Card-D tests and `Ex8_Lake` real-model
+  round-trip/run stay green. `-k "mfusglak or Ex8"` **14**, focused **291**, exe
+  **4**, combined **295** (ARM). LAK stays `✅ (intentionally not Full)` — the
+  sill/multi-lake *authoring* gap is closed; remaining honest gaps are
+  `TABLEINPUT` table contents (external), GAGE (separate package), and
+  multi-lake-with-sill from-scratch *execution* (not exe-smoke-tested — manual
+  tier; `Ex8_Lake` covers LAK execution). See
+  `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** decision is **explicitly unsupported**
   (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`) shows the
   option triggers a cascade of conditional arrays (zone map, tabular area

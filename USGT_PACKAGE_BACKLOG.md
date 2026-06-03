@@ -1457,9 +1457,24 @@ Prioritized next cards (full criteria in the audit doc):
   4.6C-D* markers (`npets>0` without defs → `ValueError`, not
   `NotImplementedError`); `USGT_AGENT_BRIEF.md`/`USGT_STAGE3_COMPLETION_PLAN.md`
   left as dated planning snapshots. No code/tests touched.
-- **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
-  *Recommended next.*
+- **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring — DONE
+  (executed).** `MfUsgLak` authors multi-lake connected-lake (sublake/sill)
+  systems from scratch: `sill_data={kper: [([IC, lake1..lakeIC],
+  [sill1..sill_{IC-1}]), ...]}` (datasets 7/8; lake numbers 1-based, center
+  first). New `_validate_sill_data` (in `__init__`, before any file is opened)
+  checks `kper` range, the `ITMP>0` rule (the Fortran reads ds 7/8 only when
+  `LKARR`/`BDLKNC` are (re)specified), `IC>=2`, `IC==len(lakes)`, lake ids in
+  `[1, NLAKES]` and unique, `len(sillvt)==IC-1`. Audited against
+  `gwf2lak7u1.f` `GWF2LAK7U1RPU`. Convention: lakes stay 1-based (as `load`
+  stores them; no breaking change). Touched `mfusglak.py`. 3 new tests (2
+  multi-lake from-scratch round-trips no-transport / classic `mcomp=1`, +7-case
+  negatives); `Ex8_Lake` kept green. `-k "mfusglak or Ex8"` **14**, focused
+  **291**, exe **4**, combined **295** (ARM). LAK stays `✅ (intentionally not
+  Full)` — remaining gaps: `TABLEINPUT` table contents external, GAGE separate,
+  multi-lake-with-sill from-scratch execution not exe-smoke-tested (manual
+  tier). See `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
 - **Stage 4.6E — DPT `A-W_ADSORBIM`** decision (= old Stage 4.6).
+  *Recommended next.*
 - **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.**
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 - **Stage 4.8 — Upstream infrastructure** stays a separate track.

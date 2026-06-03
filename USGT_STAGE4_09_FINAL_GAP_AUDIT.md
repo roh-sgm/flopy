@@ -75,7 +75,7 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | OC | FS-exec | Broad authoring; gaps: `SAVE IBOUND` solver-rejected, FASTFORWARD/BOOTSTRAPPING exec unverified, numeric→words rewrite. |
 | EVT | FS-exec | All `NEVTOP`, transport `IETFACTOR`, reuse; gaps: ETS-zonal time series `NotImplementedError`, `NPEVT` Expanded-only. |
 | MDT | FS-exec | Audited authoring; gaps: chained-decay `NTCOMP>MCOMP` unverified, AI1/AI2 binaries not read. |
-| LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` authoring; gaps: sill/connectivity (ds 7/8) + multi-lake not authored from scratch; bathymetry tables external. |
+| LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` + **multi-lake sill/connectivity (ds 7/8)** authoring (Stage 4.6D, validated). Gaps: bathymetry-table contents external; GAGE separate; multi-lake-with-sill from-scratch *execution* not exe-smoke-tested (manual tier). |
 | GNC | FS-exec (✅) | Ghost-node helper; verified. |
 | ETS | FA (incl. **from-scratch ETSR array-param authoring**, Stage 4.6C-D) + ParamPreserve (ETSR array) | Only ETSR parameterized (Fortran limit); parametric execution not exe-smoke-tested; opt-in expand fallback. |
 | HFB | FA (incl. **from-scratch `NPHFB>0` authoring**, Stage 4.6C-A) + ParamPreserve (list) | Gaps: `TRANSIENT_HFB`+`NPHFB>0`, `INSTANCES`. |
@@ -102,8 +102,12 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
   and **ETS** (4.6C-D — the *array*-parameter form for ETSR, via a `ModflowParBc`
   builder, a different path from the list-parameter helpers). The biggest
   authoring gap from the audit is now closed.
-- **A2 — LAK multi-lake + sill/connectivity (ds 7/8)** not authored from scratch
-  (single-lake + basic transport authored; multi-lake systems only round-trip).
+- **A2 — LAK multi-lake + sill/connectivity (ds 7/8)** — ✅ **DONE** (Stage
+  4.6D): multi-lake connected-lake/sill systems are now authored from scratch and
+  validated (`sill_data` 1-based lakes, `IC>=2`, `ITMP>0` rule), with tests;
+  `Ex8` still round-trips/runs. Remaining (keeps LAK not-`Full`): `TABLEINPUT`
+  table contents external, GAGE separate, multi-lake-with-sill from-scratch
+  *execution* not exe-smoke-tested (manual tier).
 - **A3 — DPT `A-W_ADSORBIM`** immobile air-water adsorption unsupported (cascade
   of conditional arrays; rare PFAS use). Planned as old Stage 4.6.
 - **A4 — EVT ETS-zonal time series** (`ETS MXZNEVT`/`IZNEVT`) `NotImplementedError`;
@@ -187,8 +191,8 @@ Priorities use the review's definitions:
 - **A1 — from-scratch parameter authoring.** ✅ **DONE** — DRT (4.6B), HFB
   (4.6C-A), SGB defs (4.6C-B), QRT (4.6C-C, structural), and ETS array (4.6C-D)
   all author `NP*>0` from scratch.
-- **A2 — LAK multi-lake + sill/connectivity (ds 7/8) authoring** — now the top
-  P1 remaining.
+- **A2 — LAK multi-lake + sill/connectivity (ds 7/8) authoring** — ✅ **DONE**
+  (Stage 4.6D). Authoring + validation + tests; execution stays manual tier.
 
 ### P2 — incomplete preservation / missing tests
 
@@ -265,11 +269,18 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   (ARM). See `USGT_STAGE4_14_ETS_PARAMETER_AUTHORING.md`. **This completes the
   parameter from-scratch authoring family (DRT/HFB/SGB/QRT list + ETS array).**
 
-- **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring.**
-  *Acceptance:* author a 2-lake system with sill connectivity from scratch →
-  write → reload; `Ex8` still round-trips/runs.
+- **Stage 4.6D — LAK multi-lake + sill/connectivity (ds 7/8) authoring —
+  EXECUTED.** Authored a 2-lake system with sill connectivity from scratch →
+  write → reload (+ classic-transport variant); `Ex8_Lake` still round-trips/runs.
+  `MfUsgLak._validate_sill_data` enforces the Fortran rules (`ITMP>0`, `IC>=2`,
+  1-based lake ids in range, `len(sillvt)==IC-1`) before opening the file. 3 new
+  tests; `-k "mfusglak or Ex8"` **14**, focused **291**, exe **4**, combined
+  **295** (ARM). LAK stays `✅ (intentionally not Full)` (TABLEINPUT contents
+  external; GAGE separate; from-scratch multi-lake execution = manual tier). See
+  `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
 
-- **Stage 4.6E — DPT `A-W_ADSORBIM` decision (old Stage 4.6).**
+- **Stage 4.6E — DPT `A-W_ADSORBIM` decision (old Stage 4.6). *Recommended
+  next.***
   Either implement the immobile air-water adsorption cascade with from-scratch
   authoring, or ratify the explicit-deferral with a tighter Fortran-derived spec.
 
@@ -288,7 +299,8 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
 The **parameter from-scratch authoring family is complete** (A1 closed):
 **Stage 4.6A** (STR/SUB/SWT guard; SFR kept), **4.6B** (DRT), **4.6C-A** (HFB),
 **4.6C-B** (SGB definitions), **4.6C-C** (QRT, structural), and **4.6C-D** (ETS
-array) are all **done**. The recommended next card is **Stage 4.6D — LAK
-multi-lake + sill/connectivity (ds 7/8) authoring** (A2, the top remaining P1);
-then the P2 items (DPT `A-W_ADSORBIM`, EVT ETS-zonal/`NPEVT`, OC/MDT exe
-verification) per §4.
+array) are all **done**; **A2 — Stage 4.6D — LAK multi-lake + sill/connectivity
+(ds 7/8) authoring** is now **done** too (authoring + validation + tests;
+execution stays manual tier). The recommended next card is **Stage 4.6E — DPT
+`A-W_ADSORBIM`** decision; then the remaining P2 items (EVT ETS-zonal/`NPEVT`,
+OC/MDT exe verification) per §4.

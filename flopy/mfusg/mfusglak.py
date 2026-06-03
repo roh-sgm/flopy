@@ -150,21 +150,25 @@ class MfUsgLak(Package):
         informational message is now printed after the lakebed conductances
         are written to the main output file.
     sill_data : dict
-        (dataset 8 in documentation)
-        Dict of lists keyed by stress period. Each list has a tuple of dataset
-        8a, 8b for every multi-lake system, where dataset 8a is another tuple of
-            IC : int
-                The number of sublakes
-            ISUB : list of ints
-                The identification numbers of the sublakes in the sublake
-                system being described in this record. The center lake number
-                is listed first.
-        And dataset 8b contains
-            SILLVT : sequence of floats
-                A sequence of sill elevations for each sublakes that determines
-                whether the center lake is connected with a given sublake.
-                Values are entered for each sublake in the order the sublakes
-                are listed in the previous record.
+        (datasets 7/8 in the documentation) Connected-lake (sublake) systems.
+        A dict keyed by 0-based stress period; each value is a list of
+        ``(ds8a, sillvt)`` systems (the count is dataset 7, ``NSLMS``):
+
+        * ``ds8a`` (dataset 8a) is ``[IC, lake1, lake2, ... lakeIC]`` -- the
+          number of lakes ``IC`` in the system followed by that many **1-based**
+          lake numbers; the **center lake is listed first** and the rest are its
+          sublakes. ``IC >= 2``.
+        * ``sillvt`` (dataset 8b) is a sequence of ``IC - 1`` sill elevations,
+          one per sublake in the order the sublakes appear in ``ds8a`` (the
+          sill controls when the center lake is connected to that sublake).
+
+        Example -- one system of two lakes (center 1, sublake 2)::
+
+            sill_data = {0: [([2, 1, 2], [95.0])]}
+
+        Datasets 7/8 are only read/written for stress periods where ``ITMP>0``
+        (i.e. where ``lakarr``/``bdlknc`` are (re)specified); USG-T reuses the
+        previous period and skips them otherwise. Validated in ``__init__``.
     flux_data : dict
         (dataset 9a in documentation)
         Dict of lists keyed by stress period. The list for each stress period
@@ -413,11 +417,9 @@ class MfUsgLak(Package):
 
         if sill_data is not None:
             if not isinstance(sill_data, dict):
-                try:
-                    sill_data = {0: sill_data}
-                except:
-                    err = "sill_data must be a dictionary"
-                    raise Exception(err)
+                # a bare list of systems is taken as stress period 0
+                sill_data = {0: sill_data}
+            self._validate_sill_data(sill_data, nper)
 
         if flux_data is None:
             raise ValueError(
@@ -593,6 +595,86 @@ class MfUsgLak(Package):
         """
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         return nlay * nrow * ncol
+
+    def _validate_sill_data(self, sill_data, nper):
+        """Validate datasets 7/8 (connected-lake / sill systems) before any file
+        is opened, so authoring fails with an actionable ``ValueError`` instead
+        of a raw error inside :meth:`write_file`.
+
+        USG-T (``gwf2lak7u1.f``) reads ``NSLMS`` (dataset 7) and, per connected
+        system, dataset 8a ``IC ISUB(1..IC)`` (the center lake first, then its
+        sublakes) followed by dataset 8b ``SILLVT(1..IC-1)`` -- but only when
+        ``ITMP>0`` for that stress period (the same condition under which
+        ``LKARR``/``BDLKNC`` are (re)read; ``ITMP<=0`` reuses the previous
+        period and skips datasets 5--8). Lake numbers are 1-based, as written in
+        the file. ``IC<=0`` is the Fortran end-of-list sentinel, so a system
+        needs the center lake plus at least one sublake (``IC>=2``).
+        """
+        for kper, systems in sill_data.items():
+            if not isinstance(kper, (int, np.integer)) or not 0 <= kper < nper:
+                raise ValueError(
+                    f"MfUsgLak: sill_data stress period {kper} is out of range "
+                    f"[0, {nper}); keys are 0-based stress periods."
+                )
+            # datasets 7/8 are only read when ITMP>0 (LKARR/BDLKNC (re)read);
+            # otherwise write_file would silently drop the sill systems.
+            if self.lakarr.get_kper_entry(kper)[0] <= 0:
+                raise ValueError(
+                    f"MfUsgLak: sill_data given for stress period {kper} but "
+                    "lakarr is not (re)specified there (ITMP<=0); USG-T only "
+                    "reads datasets 7/8 when ITMP>0. Provide lakarr for that "
+                    "period or move the sill systems."
+                )
+            if not isinstance(systems, (list, tuple)):
+                raise ValueError(
+                    f"MfUsgLak: sill_data[{kper}] must be a list of "
+                    "(ds8a, sillvt) systems; got "
+                    f"{type(systems).__name__}."
+                )
+            for isys, system in enumerate(systems):
+                try:
+                    ds8a, sillvt = system
+                    ds8a = list(ds8a)
+                    sillvt = list(sillvt)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} must be a "
+                        "(ds8a, sillvt) pair where ds8a=[IC, lake1, ... lakeIC] "
+                        "and sillvt=[sill1, ... sill_(IC-1)]."
+                    )
+                ic = int(ds8a[0])
+                lakes = ds8a[1:]
+                if ic < 2:
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} has IC={ic}; "
+                        "a connected-lake system needs the center lake plus at "
+                        "least one sublake (IC>=2)."
+                    )
+                if ic != len(lakes):
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} declares "
+                        f"IC={ic} but lists {len(lakes)} lake numbers "
+                        "(dataset 8a is IC followed by IC lake numbers)."
+                    )
+                for lake in lakes:
+                    if not 1 <= int(lake) <= self.nlakes:
+                        raise ValueError(
+                            f"MfUsgLak: sill_data[{kper}] system {isys} lake "
+                            f"number {lake} is out of range [1, {self.nlakes}] "
+                            "(lake numbers are 1-based)."
+                        )
+                if len({int(x) for x in lakes}) != len(lakes):
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} repeats a "
+                        f"lake number ({lakes}); each lake appears once per "
+                        "system."
+                    )
+                if len(sillvt) != ic - 1:
+                    raise ValueError(
+                        f"MfUsgLak: sill_data[{kper}] system {isys} has "
+                        f"{len(sillvt)} sill elevations but dataset 8b needs "
+                        f"IC-1={ic - 1} (one per sublake)."
+                    )
 
     def write_file(self):
         """

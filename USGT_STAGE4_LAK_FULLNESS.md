@@ -121,6 +121,44 @@ required lake entry → `ValueError`. The five original positive/negative tests 
 the `Ex8_Lake` round-trip are unchanged. Decision is unchanged: LAK stays
 `✅ (intentionally not Full)`.
 
+## Stage 4.6D — multi-lake + sill/connectivity (datasets 7/8) authoring
+
+Card D left this gap: "Sill/connectivity (datasets 7/8) and multi-lake sublake
+systems: written and round-tripped (and exercised by Ex8) but not authored from
+scratch in the tests." **Stage 4.6D closes the authoring half of that gap.**
+
+The writer already emitted datasets 7/8 (only when `ITMP>0`, matching
+`gwf2lak7u1.f` `GWF2LAK7U1RPU`: `ITMP<=0` skips datasets 5/6/7/8). What was
+missing was validation and from-scratch tests. Added (`flopy/mfusg/mfusglak.py`):
+
+- `_validate_sill_data(sill_data, nper)` — validates datasets 7/8 in `__init__`
+  before any file is opened: `kper` in range; the period has `ITMP>0` (else the
+  sill would be silently dropped); each system is `(ds8a, sillvt)` with
+  `ds8a=[IC, lake1..lakeIC]`, `IC>=2`, `IC==len(lakes)`, lake numbers **1-based**
+  in `[1, NLAKES]` and unique, and `len(sillvt)==IC-1`.
+- Rewrote the `sill_data` docstring (exact `{kper: [([IC, lake1..lakeIC],
+  [sill1..sill_{IC-1}]), ...]}` layout; 1-based lakes, center first; `ITMP>0`
+  rule). The old docstring mislabeled `IC` as "the number of sublakes" — it is
+  the total number of lakes in the system.
+
+**Convention:** lake numbers in `sill_data` stay **1-based** (as `load` already
+stores them and as `LKARR`/lake-IDs use everywhere); not changed (would break the
+Ex8 round-trip). Documented in the docstring + validator.
+
+Three tests added: `test_mfusglak_multilake_sill_authoring_roundtrip`
+(two lakes, no transport, datasets 7/8 written 1-based + reload preserves
+`IC`/`ISUB`/`SILLVT`); `test_mfusglak_multilake_sill_transport_roundtrip` (two
+lakes + sill + classic `mcomp=1`); `test_mfusglak_sill_rejects_invalid` (7
+negatives, no partial file). `Ex8_Lake` stays green. `-k "mfusglak or Ex8"`
+**14**, focused **291**, exe **4**, combined **295** (ARM). See
+`USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.
+
+**Decision: LAK stays `✅ (intentionally not Full)`** — the sill/multi-lake
+*authoring* gap is now closed, but the honest gaps that remain are
+`TABLEINPUT` bathymetry-table **contents** (external), **GAGE** (separate
+package), and multi-lake-with-sill from-scratch **execution** (not exe-smoke-
+tested; manual tier — `Ex8_Lake` covers LAK execution on a real model).
+
 ## Validation
 
 ```bash

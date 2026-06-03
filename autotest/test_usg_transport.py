@@ -8258,6 +8258,125 @@ def test_mfusglak_flux_data_rejects_missing_lake(function_tmpdir):
         )
 
 
+# --- Stage 4.6D: LAK multi-lake + sill/connectivity (datasets 7/8) authoring --
+
+
+def _lak_grids_2lakes():
+    """1-layer 3x3 grid with two lakes: cell (0,0,0)=lake 1, (0,2,2)=lake 2."""
+    lakarr = np.zeros((1, 3, 3), dtype=int)
+    lakarr[0, 0, 0] = 1
+    lakarr[0, 2, 2] = 2
+    return {0: lakarr}, {0: np.ones((1, 3, 3), dtype=float) * 0.1}
+
+
+def test_mfusglak_multilake_sill_authoring_roundtrip(function_tmpdir):
+    """Two lakes + a connected-lake system (datasets 7/8) author from scratch,
+    write, and reload with the sill system intact (NSLMS, IC, 1-based ISUB,
+    SILLVT)."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids_2lakes()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "ml"),
+        nlakes=2,
+        stages=[100.0, 100.0],
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0], 1: [1.0, 2.0, 0.0, 0.0]}},
+        sill_data={0: [([2, 1, 2], [95.0])]},
+    )
+    lak.fn_path = str(function_tmpdir / "ml.lak")
+    lak.write_file()
+
+    text = Path(lak.fn_path).read_text()
+    # dataset 7 (NSLMS=1) written once, dataset 8a is "IC lake1 lake2" 1-based
+    assert sum("Data set 7" in ln for ln in text.splitlines()) == 1
+    assert any(
+        ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines()
+    )
+
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "mlb"))
+    assert re.nlakes == 2
+    assert list(re.sill_data.keys()) == [0]
+    ds8a, sillvt = re.sill_data[0][0]
+    assert ds8a == [2, 1, 2]  # IC=2, center lake 1, sublake 2 (1-based)
+    assert sillvt == [95.0]
+
+
+def test_mfusglak_multilake_sill_transport_roundtrip(function_tmpdir):
+    """Two lakes + sill system with classic transport (mcomp=1) round-trips:
+    datasets 7/8 and dataset 9b (CPPT/CRNF per lake) are both preserved."""
+    from flopy.mfusg import MfUsgLak
+
+    lakarr, bdlknc = _lak_grids_2lakes()
+    lak = MfUsgLak(
+        _lak_model(function_tmpdir, "mlt", mcomp=1),
+        nlakes=2,
+        stages=[100.0, 100.0],
+        lakarr=lakarr,
+        bdlknc=bdlknc,
+        flux_data={0: {0: [1.0, 2.0, 0.0, 0.0], 1: [1.0, 2.0, 0.0, 0.0]}},
+        sill_data={0: [([2, 1, 2], [95.0])]},
+        clake=[[5.0], [6.0]],
+        conc_data={0: {(0, 0): [3.0, 1.0], (1, 0): [4.0, 2.0]}},  # CPPT, CRNF
+    )
+    lak.fn_path = str(function_tmpdir / "mlt.lak")
+    lak.write_file()
+
+    re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "mltb", mcomp=1))
+    assert re.nlakes == 2
+    assert re.sill_data[0][0][0] == [2, 1, 2]
+    assert re.sill_data[0][0][1] == [95.0]
+    assert [float(x) for x in re.conc_data[0][(1, 0)]] == [4.0, 2.0]
+
+
+def test_mfusglak_sill_rejects_invalid(function_tmpdir):
+    """Datasets 7/8 authoring fails with an actionable ValueError, no partial
+    file: bad lake ids, IC/list mismatch, IC<2, wrong sill count, duplicate
+    lake, kper out of range, and sill for a period with ITMP<=0."""
+    from flopy.mfusg import MfUsgLak
+    from flopy.modflow import ModflowDis
+
+    def build(name, sill, nper=1, **over):
+        lakarr, bdlknc = _lak_grids_2lakes()
+        if nper == 1:
+            model = _lak_model(function_tmpdir, name)
+        else:
+            model = MfUsg(
+                structured=True, model_ws=str(function_tmpdir), modelname=name
+            )
+            ModflowDis(
+                model, nlay=1, nrow=3, ncol=3, nper=nper, nstp=1, steady=False
+            )
+        kw = {
+            "nlakes": 2,
+            "stages": [100.0, 100.0],
+            "lakarr": lakarr,
+            "bdlknc": bdlknc,
+            "flux_data": {0: {0: [1.0, 2.0, 0.0, 0.0], 1: [1.0, 2.0, 0.0, 0.0]}},
+            "sill_data": sill,
+        }
+        kw.update(over)
+        return MfUsgLak(model, **kw)
+
+    with pytest.raises(ValueError, match="out of range"):  # lake id (1-based)
+        build("b1", {0: [([2, 1, 3], [95.0])]})
+    with pytest.raises(ValueError, match="but lists"):  # IC vs listed lakes
+        build("b2", {0: [([3, 1, 2], [95.0])]})
+    with pytest.raises(ValueError, match="IC>=2"):  # no sublake
+        build("b3", {0: [([1, 1], [])]})
+    with pytest.raises(ValueError, match="sill elevations"):  # sill count != IC-1
+        build("b4", {0: [([2, 1, 2], [1.0, 2.0])]})
+    with pytest.raises(ValueError, match="repeats a lake"):  # duplicate lake
+        build("b5", {0: [([2, 1, 1], [95.0])]})
+    with pytest.raises(ValueError, match=r"out of range \[0, 1\)"):  # bad kper
+        build("b6", {5: [([2, 1, 2], [95.0])]})
+    with pytest.raises(ValueError, match="ITMP<=0"):  # sill where lakarr reused
+        build("b7", {1: [([2, 1, 2], [95.0])]}, nper=2)
+    # the failing constructor never opened the file
+    assert not (function_tmpdir / "b7.lak").exists()
+
+
 # --- Stage 4.6A: STR/SUB/SWT compatibility guard on unstructured MfUsg --------
 #
 # STR/SUB/SWT have no validated USG-T unstructured layout, so MfUsg registers
