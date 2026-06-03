@@ -1536,5 +1536,21 @@ Prioritized next cards (full criteria in the audit doc):
   **307** (ARM). EVT stays `✅ (intentionally not Full)` — this is the one honest
   remaining gap. See `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
-  *Recommended next.*
-- **Stage 4.8 — Upstream infrastructure** stays a separate track.
+  **DONE (docs-only).**
+- **Stage 4.7A — A5 list-parameter edge cases — DONE (deferred, executed).** HFB
+  `TRANSIENT_HFB`+`NPHFB>0` and parameter `INSTANCES` across the list-parameter
+  packages (HFB/DRT/QRT/SGB). Fortran audit: none is implementable
+  execution-safe — HFB `INSTANCES` make USG-T `USTOP` ("INSTANCES ARE NOT
+  SUPPORTED FOR HFB", gwf2hfb7u1.f:135-137); `TRANSIENT_HFB`+params re-define
+  params under `ITERP=1` → "Duplicate parameter name" abort (parutl7.f:604-609);
+  DRT/QRT `INSTANCES` are structural-only (recipient `NodDRT`/`NodQRT` not copied
+  on activation; QRT also scales `NumRT` not `Q`); SGB active/`INSTANCES` hit the
+  `PARTYP='SGB'` vs `'G'` abort. Each now fails explicitly with the Fortran
+  reason cited; message-only code changes (no behavior change). 1 new test
+  (HFB `INSTANCES` on load) + 5 existing negatives. `-k "mfusghfb or mfusgdrt or
+  mfusgqrt or mfusgsgb"` **141**, focused **304**, exe **4**, combined **308**
+  (ARM). **Closes the A1–A5 authoring-gap inventory.** See
+  `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`.
+- **Next: executable verification** (OC/MDT exe smokes; parametric /
+  multi-lake-with-sill exe tiers stay manual). **Stage 4.8 — Upstream
+  infrastructure** stays a separate track.

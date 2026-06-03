@@ -663,8 +663,13 @@ class MfUsgDrt(ModflowDrt):
                 if numinst > 0:
                     raise NotImplementedError(
                         "MfUsgDrt.load: DRT parameter INSTANCES (NUMINST>0) are "
-                        "supported by the Fortran but not yet by FloPy (instances "
-                        "combined with per-row recipient lists)."
+                        "supported by the Fortran (UPARLSTRP/UINSRP) but not "
+                        "modeled by FloPy. Even without instances an activated "
+                        "DRT parameter is structural-only: the spreading "
+                        "recipient nodes (NodDRT, NR<0) are read with U1DINT "
+                        "outside the parameter RLIST and are not copied on "
+                        "activation (UPARLSTSUB), so per-instance recipient "
+                        "handling is not execution-guaranteed."
                     )
                 data, recips = cls._read_drain_rows(
                     f, nlst, returnflow, changec, naux, dtype, model, ext_unit_dict

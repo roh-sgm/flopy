@@ -5623,6 +5623,26 @@ def test_mfusghfb_transient_with_parameters_fails(function_tmpdir):
         MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "tp", nper=2), nper=2)
 
 
+def test_mfusghfb_parameter_instances_unsupported(function_tmpdir):
+    """HFB parameter INSTANCES are rejected on load -- USG-T itself aborts the
+    run ('INSTANCES ARE NOT SUPPORTED FOR HFB', gwf2hfb7u1.f), so FloPy fails
+    explicitly at the parameter header before reading any rows (Stage 4.7A/A5)."""
+    from flopy.mfusg import MfUsgHfb
+
+    p = function_tmpdir / "hfbinst.hfb"
+    p.write_text(
+        "# hfb parameter with INSTANCES\n"
+        "         1         2         0\n"  # NPHFB MXFB NHFBNP
+        "hp hfb 1.0 1 INSTANCES 2\n"
+        "spring\n"
+        "1 2 0.5\n"
+        "fall\n"
+        "3 4 0.5\n"
+    )
+    with pytest.raises(NotImplementedError, match="INSTANCES"):
+        MfUsgHfb.load(str(p), _hfb_model(function_tmpdir, "hi"), nper=1)
+
+
 # --- Stage 4.4B follow-up: HFB list controls (SFAC / OPEN-CLOSE / EXTERNAL) --
 
 

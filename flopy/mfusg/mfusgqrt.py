@@ -738,8 +738,13 @@ class MfUsgQrt(Package):
                 if numinst > 0:
                     raise NotImplementedError(
                         "MfUsgQrt.load: QRT parameter INSTANCES (NUMINST>0) are "
-                        "supported by the Fortran but not yet by FloPy (instances "
-                        "combined with per-row recipient lists)."
+                        "supported by the Fortran (UPARLSTRP/UINSRP) but not "
+                        "modeled by FloPy. An activated QRT parameter is "
+                        "structural-only / not execution-guaranteed: the value "
+                        "scales QRTF(5)=NumRT not Q (IPVL=5, a Fortran bug) and "
+                        "the recipient nodes (NodQRT) are read with U1DINT "
+                        "outside the parameter RLIST and are not copied on "
+                        "activation, so per-instance handling cannot be honored."
                     )
                 data, recips = cls._read_sink_rows(
                     f, nlst, returnflow, changec, naux, dtype, model, ext_unit_dict

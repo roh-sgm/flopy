@@ -187,10 +187,13 @@ class MfUsgHfb(ModflowHfb):
             if self.transient:
                 raise NotImplementedError(
                     "MfUsgHfb.write_file does not support TRANSIENT_HFB combined "
-                    "with HFB parameters (NPHFB > 0): the Fortran re-reads the "
-                    "parameter definitions every stress period (UPARLSTRP "
-                    "ITERP=1), which would redefine them. Use non-transient "
-                    "parameterized HFB, or NPHFB=0 for transient barriers."
+                    "with HFB parameters (NPHFB > 0): under TRANSIENT_HFB the "
+                    "Fortran re-reads the parameter definitions every stress "
+                    "period via UPARLSTRP with ITERP=1, so the second period "
+                    "would re-define the same parameter names and USG-T aborts "
+                    "with 'Duplicate parameter name' (parutl7.f:604-609). Use "
+                    "non-transient parameterized HFB, or NPHFB=0 for transient "
+                    "barriers."
                 )
             # Normalize from-scratch / preserved definitions, auto-compute the
             # counts, and validate the whole parameterized state before opening
@@ -503,7 +506,9 @@ class MfUsgHfb(ModflowHfb):
                 if numinst > 0:
                     raise NotImplementedError(
                         "MfUsgHfb.load: HFB parameter INSTANCES are not "
-                        "supported (gwf2hfb7u1.f aborts when NUMINST>0)."
+                        "supported -- USG-T itself rejects them: gwf2hfb7u1.f:"
+                        "135-137 writes 'INSTANCES ARE NOT SUPPORTED FOR HFB' "
+                        "and calls USTOP when NUMINST>0."
                     )
                 data = cls._read_hfb_rows(
                     f, nlst, dtype, structured, model, ext_unit_dict

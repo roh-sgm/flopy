@@ -7,9 +7,11 @@ Date: 2026-06-02 · Base: `develop` @ `e0ea8073` (after Stage 4.5B + polish + cl
 > (DRT/HFB/SGB/QRT/ETS from-scratch parameter authoring), **4.6D** (LAK
 > multi-lake + sill/connectivity authoring), **4.6E** (DPT `A-W_ADSORBIM`
 > array-only), **4.6F-A** (EVT `NPEVT`), **4.6F-B** (EVT ETS-zonal deferred), and
-> **4.6G** (this P3 cleanup). **A1–A4 are closed**; the remaining inventory items
-> are **A5** (HFB `TRANSIENT_HFB`+`NPHFB>0`; parameter `INSTANCES` across the
-> list-parameter packages — Fortran-blocked / not yet authored) and the
+> **4.6G** (this P3 cleanup) and **4.7A** (A5). **A1–A5 are now closed** — A5
+> (HFB `TRANSIENT_HFB`+`NPHFB>0`; parameter `INSTANCES` across the list-parameter
+> packages) is closed as deferred/explicit-fail (none implementable
+> execution-safe; see `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`). What remains
+> are the
 > intentionally-deferred caveats per package (DPT scalar/tabular `A-W_ADSORBIM`,
 > EVT ETS-zonal, parametric/multi-lake **exe** smokes). The package table and §3
 > below were updated in place to reflect this; the latest combined test count is
@@ -135,7 +137,11 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
   branch (authoring + load), no partial parse, with the full spec recorded
   (`USGT_STAGE4_16_EVT_ETS_ZONAL.md`).
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`** and **`INSTANCES`** (all param packages)
-  unsupported.
+  — ✅ **DONE (deferred, Stage 4.7A)**: none is implementable execution-safe (HFB
+  `INSTANCES` → USG-T `USTOP`s; `TRANSIENT_HFB`+params → `ITERP=1` duplicate-name
+  abort; DRT/QRT `INSTANCES` structural-only — recipients not copied; SGB
+  `SGB`/`G` conflict). Each fails explicitly with the Fortran reason + a test.
+  See `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`.
 
 ### 3.2 Parser / load gaps
 
@@ -223,7 +229,9 @@ Priorities use the review's definitions:
 - **A4 — EVT `NPEVT` param authoring** — ✅ **DONE** (Stage 4.6F-A). **EVT
   ETS-zonal time series** — ✅ **DONE (deferred, Stage 4.6F-B)**: ATS-coupled
   dynamic mode, explicit per-branch failure + full Fortran spec.
-- **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`; `INSTANCES` (all param packages).**
+- **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`; `INSTANCES` (all param packages)** — ✅
+  **DONE (deferred, Stage 4.7A)**: explicit Fortran-justified failures + tests;
+  none implementable execution-safe.
 - ~~**L2 — compat-package load validation.**~~ Addressed by Stage 4.6A
   (STR/SUB/SWT guarded; SFR DISU-validated via `freyberg_usg`; FHB/GAGE via Ex8).
 - **W2 — OC `SAVE IBOUND` / numeric-format** behavior tightening.
@@ -348,8 +356,10 @@ execution stays manual tier), and **A3 — Stage 4.6E — DPT `A-W_ADSORBIM`** i
 done (array-only branches authored; scalar/tabular branches explicit
 `NotImplementedError`), and **A4 — EVT** is done (**4.6F-A** NPEVT preserved +
 authored; **4.6F-B** ETS-zonal deferred as an ATS-coupled dynamic mode, explicit
-per-branch failure + full spec). **A1–A4 are now addressed**; the remaining
-inventory item is **A5** (HFB `TRANSIENT_HFB`+`NPHFB>0`; parameter `INSTANCES`
-across the list-parameter packages — Fortran-blocked / not yet authored). The
-recommended next card is **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip
-warning; doc numbering); then A5 and OC/MDT exe verification per §4.
+per-branch failure + full spec). **A5 — Stage 4.7A** is done too (HFB
+`TRANSIENT_HFB`+`NPHFB>0` and `INSTANCES` across the list-parameter packages:
+none implementable execution-safe, so each fails explicitly with the Fortran
+reason + a test). **The whole A1–A5 authoring-gap inventory is now closed.** The
+recommended next work is **executable verification** (OC/MDT exe smokes; the
+parametric / multi-lake-with-sill exe tiers that stay manual) and the separate
+**Stage 4.8 upstream-infrastructure** track per §4 — not new authoring gaps.

@@ -810,6 +810,24 @@ honest, upstream-ready USG-T 2.7 story.
   (`test_mfusgevt_ets_zonal_deferred`); `-k mfusgevt` **16**, focused **303**,
   exe **4**, combined **307** (ARM). EVT stays `✅ (intentionally not Full)` for
   this one honest gap. Full spec: `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
+- **Stage 4.7A — A5 list-parameter edge cases (deferred, executed):** closes the
+  last gap-audit item — HFB `TRANSIENT_HFB`+`NPHFB>0` and parameter `INSTANCES`
+  across the list-parameter packages (HFB/DRT/QRT/SGB). Fortran audit
+  (`parutl7.f` `UPARLSTRP`/`UINSRP`/`UPARLSTSUB`; the four package readers) shows
+  none is implementable execution-safe: HFB `INSTANCES` make USG-T `USTOP`
+  ("INSTANCES ARE NOT SUPPORTED FOR HFB", `gwf2hfb7u1.f:135-137`);
+  `TRANSIENT_HFB`+params re-process the definitions under `ITERP=1` → "Duplicate
+  parameter name" abort (`parutl7.f:604-609`); DRT/QRT `INSTANCES` are
+  structural-only (the recipient `NodDRT`/`NodQRT` lists are read outside the
+  parameter RLIST and not copied on activation; QRT also scales `NumRT` not `Q`);
+  SGB active/`INSTANCES` hit the `PARTYP='SGB'` vs `'G'` abort. So A5 is closed as
+  **deferred/explicit-fail**: message-only changes strengthen each
+  `NotImplementedError` to cite the exact Fortran line/abort (no behavior
+  change), and the one missing negative test (HFB `INSTANCES` on load) was added
+  on top of the five existing A5 negatives. `-k "mfusghfb or mfusgdrt or mfusgqrt
+  or mfusgsgb"` **141**, focused **304**, exe **4**, combined **308** (ARM). No
+  package label changes. **This closes the A1–A5 authoring-gap inventory.** See
+  `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
   unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)
   shows the option triggers a cascade of conditional arrays (zone map, tabular
