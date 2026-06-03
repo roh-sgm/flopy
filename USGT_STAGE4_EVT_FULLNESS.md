@@ -75,14 +75,13 @@ EVT honest at `✅ (intentionally not Full)`:
 
 - **ETS zonal time-series** (`ETS MXZNEVT` / per-SP `IZNEVT`): unsupported —
   raises `NotImplementedError`. (Requires ATS and per-SP zone arrays that are not
-  authored or parsed.)
-- **NPEVT named parameters**: a parameterized EVT file loads as expanded arrays
-  (`parameter_bcfill`) and is rewritten non-parametrically (`NP=0`) — i.e.
-  *Expanded valid write*, the same treatment as the ETS package. Authoring with
-  parameters is not supported.
+  authored or parsed.) Deferred as **Stage 4.6F-B**.
+- **NPEVT named parameters**: **resolved in Stage 4.6F-A** (below) — the EVTR
+  array parameters now load → write → reload with their syntax intact and can be
+  authored from scratch; `expand_parameters=True` keeps the legacy expanded
+  `NPEVT=0` path.
 
-These mirror how the sibling ETS package is classified, so promoting EVT to
-`Full` would overclaim.
+The ETS-zonal gap (4.6F-B) keeps EVT honest at `✅ (intentionally not Full)`.
 
 ## Review follow-up (resolved)
 
@@ -103,6 +102,53 @@ Tests added: `test_mfusgevt_etfactor_scalar_and_array_roundtrip`,
 **9 passed**; focused **146 passed**; exe **4 passed**; combined **150 passed**
 under the USG-T 2.7 ARM binary. EVT status unchanged: `✅ (intentionally not
 Full)`.
+
+## Stage 4.6F-A — NPEVT parameter preservation + from-scratch authoring
+
+Closes the `NPEVT` gap above. EVT parameterizes only the **EVTR** (max ET-rate)
+array, via the **same** MODFLOW array-parameter machinery as ETS.
+
+**Fortran audit (`gwf2evt8u1.f` + `parutl7.f`):** item 1 is read with
+`UPARARRAL(IN,IOUT,LINE,NPEVT)` — with `IN>0` it decodes an **optional**
+`PARAMETER NPEVT` line that *precedes* item 2 (`NEVTOP IEVTCB [IETFACTOR]`); this
+is the one structural difference from ETS, which carries `NPETS` in item 2a with
+no `PARAMETER` line. When `NPEVT>0`, `NPEVT` definitions follow (`UPARARRRP`,
+`PTYP='EVT'`, `ITVP=1` so `INSTANCES` are allowed). Per stress period, when
+`INEVTR>=0` and `NPEVT>0`, `INEVTR` is the **count of active EVTR parameters**
+(`UPARARRSUB2`, `'EVT'`); `INEVTR<0` reuses the previous period's EVTR. Only EVTR
+is parameterized (`SURF`/`EXDP`/`IEVT` stay plain arrays). The `ETS MXZNEVT`
+zonal sub-mode is independent of `NPEVT` (separate option, deferred to 4.6F-B).
+
+**Implementation (`flopy/mfusg/mfusgevt.py`, mirrors `MfUsgEts`):**
+
+- `load(..., expand_parameters=False)` (default) **preserves**: keeps `npevt`,
+  the parsed `ModflowParBc` (`self.parameters`), and the per-SP activation
+  records (`self.evtr_parm = {kper: [(name, instance_or_None), ...]}`).
+  `expand_parameters=True` keeps the legacy expand-to-arrays / `NPEVT=0` path.
+- `write_file` re-emits the `PARAMETER NPEVT` line, the definition blocks, and
+  per-period `INEVTR = len(records)` (or `-1` to reuse) with the activation
+  records in place of the EVTR array — `SURF`/`EXDP`/`IEVT` stay plain arrays.
+- **From-scratch authoring:** pass `parameters={name: {parval, clusters |
+  instances}}` + `evtr_parm={kper: [(name, instance_or_None), ...]}`. The
+  ergonomic dict is built into a `ModflowParBc` via the shared
+  `build_array_parameter_bc_parms` (`partyp='evt'`); `npevt` auto-computed; the
+  first stress period must activate (USG-T cannot reuse an uninitialized EVTR).
+  `_resolve_parameters` / `_validate_active_params` validate **before opening**
+  the file (no partial file): `npevt>0`/`evtr_parm` with no defs → `ValueError`;
+  per-SP duplicate/undefined/instance-mismatch → `ValueError`; duplicate
+  definition names (case-insensitive) → `ValueError`.
+
+Only `mfusgevt.py` was touched; the shared array-parameter helpers in
+`_usgt_parameters.py` are reused unchanged, and `MfUsgEts` is not modified.
+
+**Tests:** `test_mfusgevt_npevt_authoring_and_roundtrip`,
+`_npevt_instances_roundtrip`, `_npevt_expand_parameters`,
+`_npevt_rejects_invalid`. The 9 Card-B EVT tests and the
+`test_usgt_exe_evt_from_scratch` exe smoke stay green. `-k mfusgevt` **13**,
+focused **300**, exe **4**, combined **304** (USG-T 2.7 ARM).
+
+**Status:** EVT stays `✅ (intentionally not Full)` — the NPEVT gap is closed, but
+the ETS-zonal time-series (4.6F-B) remains `NotImplementedError`.
 
 ## Validation
 

@@ -1174,11 +1174,12 @@ a USG-T 2.7 EVT executable smoke (`test_usgt_exe_evt_from_scratch`). Six
 synthetic tests + one exe test.
 
 Decision: **kept `✅ (intentionally not Full)`** — explicit gaps: ETS zonal
-time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError`; `NPEVT`
-parameters are *Expanded valid write* (loaded as arrays, `NP=0` on write,
-authoring-with-params unsupported) — the same treatment ETS had **before** Stage
-4.4A (ETS itself now *preserves* ETSR array parameters and, as of Stage 4.6C-D,
-*authors* them from scratch; EVT `NPEVT` has not had that work). See
+time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError` (deferred as
+Stage 4.6F-B); `NPEVT` parameters were *Expanded valid write* (loaded as arrays,
+`NP=0` on write) — **superseded by Stage 4.6F-A**, which preserves the EVTR
+array parameters (load → write → reload) and authors them from scratch via the
+same machinery as ETS (`PARAMETER NPEVT` line, PTYP='EVT', `INSTANCES`;
+`expand_parameters=True` keeps the legacy expanded path). See
 `USGT_STAGE4_EVT_FULLNESS.md`. (OC / MDT / LAK untouched beyond docs.)
 
 Review follow-up: fixed a scalar-`ETFACTOR` crash (`__init__` normalizes
@@ -1496,6 +1497,20 @@ Prioritized next cards (full criteria in the audit doc):
   reads). 5 new tests (2 from the follow-up); `-k mfusgdpt` **5**, focused
   **296**, exe **4**, combined **300** (ARM). DPT stays ⚠️ Partial (scalar/tabular
   branches deferred; scope unchanged). See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
-- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring.** *Recommended next.*
+- **Stage 4.6F-A — EVT `NPEVT` parameter preservation + authoring — DONE
+  (executed).** `MfUsgEvt` preserves `NPEVT>0` EVTR array parameters (load →
+  write → reload: `PARAMETER NPEVT` line + `UPARARRRP` defs + per-SP
+  `UPARARRSUB2` activations) and authors them from scratch (`parameters={name:
+  {parval, clusters | instances}}` + `evtr_parm`, auto `NPEVT`, first period must
+  activate, validated before opening). Reuses the shared ETS array-parameter
+  helpers (`build_array_parameter_bc_parms`, `read/write_active_array_parameters`,
+  `write_array_parameter_defs`) — only difference vs ETS is the optional
+  `PARAMETER NPEVT` line (item 1) that precedes item 2. `expand_parameters=True`
+  keeps the legacy expanded `NPEVT=0` write. Only `mfusgevt.py` touched (ETS and
+  `_usgt_parameters.py` unchanged). 4 new tests; `-k mfusgevt` **13**, focused
+  **300**, exe **4**, combined **304** (ARM). EVT stays ⚠️/✅ not Full (ETS-zonal
+  remains). See `USGT_STAGE4_EVT_FULLNESS.md`.
+- **Stage 4.6F-B — EVT ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`).**
+  Still `NotImplementedError` (needs ATS + per-SP zone arrays). *Recommended next.*
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 - **Stage 4.8 — Upstream infrastructure** stays a separate track.

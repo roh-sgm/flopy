@@ -73,7 +73,7 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | TIB | FA (`parse=True`) | `load` default is byte-exact **Raw**; semantic on `parse=True`; raw fallback on `U1DINT` EXTERNAL/OPEN-CLOSE. |
 | GSF | FA (`parse=True`) | Not solver input. `load` default **Raw**; semantic + `from_grid`/`to_grid`. |
 | OC | FS-exec | Broad authoring; gaps: `SAVE IBOUND` solver-rejected, FASTFORWARD/BOOTSTRAPPING exec unverified, numeric→words rewrite. |
-| EVT | FS-exec | All `NEVTOP`, transport `IETFACTOR`, reuse; gaps: ETS-zonal time series `NotImplementedError`, `NPEVT` Expanded-only. |
+| EVT | FS-exec | All `NEVTOP`, transport `IETFACTOR`, reuse; **NPEVT EVTR array params preserved + authored** (Stage 4.6F-A). Gap: ETS-zonal time series `NotImplementedError` (4.6F-B). |
 | MDT | FS-exec | Audited authoring; gaps: chained-decay `NTCOMP>MCOMP` unverified, AI1/AI2 binaries not read. |
 | LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` + **multi-lake sill/connectivity (ds 7/8)** authoring (Stage 4.6D, validated). Gaps: bathymetry-table contents external; GAGE separate; multi-lake-with-sill from-scratch *execution* not exe-smoke-tested (manual tier). |
 | GNC | FS-exec (✅) | Ghost-node helper; verified. |
@@ -112,8 +112,11 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
   (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}`) are authored/loaded/written; the
   scalar/tabular branches (`{2,3,5}` / `{3,4}`, which add a zone map +
   `ROG_SIGMA`/`SIGMA_RT` + tables) stay a specific `NotImplementedError`.
-- **A4 — EVT ETS-zonal time series** (`ETS MXZNEVT`/`IZNEVT`) `NotImplementedError`;
-  **`NPEVT` parameters** Expanded-only (no param authoring).
+- **A4 — EVT `NPEVT` parameters** — ✅ **DONE** (Stage 4.6F-A): EVTR array
+  parameters preserved (load → write → reload) + authored from scratch (same
+  machinery as ETS; `PARAMETER NPEVT` line, PTYP='EVT', INSTANCES). **EVT
+  ETS-zonal time series** (`ETS MXZNEVT`/`IZNEVT`) is still `NotImplementedError`
+  — deferred as **Stage 4.6F-B**.
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`** and **`INSTANCES`** (all param packages)
   unsupported.
 
@@ -200,7 +203,8 @@ Priorities use the review's definitions:
 
 - **A3 — DPT `A-W_ADSORBIM`** — ✅ **DONE** (Stage 4.6E): array-only branches
   implemented; scalar/tabular branches kept as explicit `NotImplementedError`.
-- **A4 — EVT ETS-zonal time series + `NPEVT` param authoring.**
+- **A4 — EVT `NPEVT` param authoring** — ✅ **DONE** (Stage 4.6F-A). **EVT
+  ETS-zonal time series** deferred as **Stage 4.6F-B**.
 - **A5 — HFB `TRANSIENT_HFB`+`NPHFB>0`; `INSTANCES` (all param packages).**
 - ~~**L2 — compat-package load validation.**~~ Addressed by Stage 4.6A
   (STR/SUB/SWT guarded; SFR DISU-validated via `freyberg_usg`; FHB/GAGE via Ex8).
@@ -290,8 +294,16 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   before any array read). 3 new tests; `-k mfusgdpt` **3**, focused **294**, exe
   **4**, combined **298** (ARM). See `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 
-- **Stage 4.6F — EVT ETS-zonal + `NPEVT` authoring (old EVT gaps). *Recommended
-  next.***
+- **Stage 4.6F-A — EVT `NPEVT` parameter preservation + authoring — EXECUTED.**
+  EVTR array parameters preserved (load → write → reload) + authored from scratch
+  via the shared ETS array-parameter machinery (optional `PARAMETER NPEVT` line,
+  PTYP='EVT', `INSTANCES`; `expand_parameters=True` keeps legacy `NPEVT=0`). Only
+  `mfusgevt.py` touched. 4 new tests; `-k mfusgevt` **13**, focused **300**, exe
+  **4**, combined **304** (ARM). See `USGT_STAGE4_EVT_FULLNESS.md`.
+
+- **Stage 4.6F-B — EVT ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`).**
+  *Recommended next.* Still `NotImplementedError` (needs ATS + per-SP zone
+  arrays).
 
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
 
@@ -310,5 +322,7 @@ array) are all **done**; **A2 — Stage 4.6D — LAK multi-lake + sill/connectiv
 (ds 7/8) authoring** is now **done** too (authoring + validation + tests;
 execution stays manual tier), and **A3 — Stage 4.6E — DPT `A-W_ADSORBIM`** is
 done (array-only branches authored; scalar/tabular branches explicit
-`NotImplementedError`). The recommended next card is **Stage 4.6F — EVT
-ETS-zonal + `NPEVT` authoring**; then OC/MDT exe verification per §4.
+`NotImplementedError`), and **A4 — Stage 4.6F-A — EVT `NPEVT`** is done (EVTR
+array parameters preserved + authored). The recommended next card is **Stage
+4.6F-B — EVT ETS-zonal time series** (`ETS MXZNEVT`/`IZNEVT`, still
+`NotImplementedError`); then OC/MDT exe verification per §4.

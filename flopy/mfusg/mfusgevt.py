@@ -13,6 +13,12 @@ from ..utils.utils_def import (
     get_pak_vals_shape,
     type_from_iterable,
 )
+from ._usgt_parameters import (
+    build_array_parameter_bc_parms,
+    read_active_array_parameters,
+    write_active_array_parameters,
+    write_array_parameter_defs,
+)
 
 
 class MfUsgEvt(Package):
@@ -106,6 +112,9 @@ class MfUsgEvt(Package):
         etfactor=0.0,
         inznevt=0,
         iznevt=0,
+        npevt=0,
+        parameters=None,
+        evtr_parm=None,
         extension="evt",
         unitnumber=None,
         filenames=None,
@@ -185,6 +194,13 @@ class MfUsgEvt(Package):
         # self.iznevt = Transient2d(model, iznevt_u2d_shape,
         # np.int32, iznevt, name="iznevt")
 
+        # NPEVT array parameters (preserved from load, or authored from scratch).
+        # Like ETS, EVT parameterizes only the EVTR (max ET-rate) array via the
+        # MODFLOW array-parameter machinery (UPARARRAL/UPARARRRP/UPARARRSUB2,
+        # PARTYP='EVT'); evtr_parm holds the per-SP active-parameter records.
+        self.npevt = npevt
+        self.parameters = parameters
+        self.evtr_parm = evtr_parm if evtr_parm is not None else {}
         self.np = 0
         self.parent.add_package(self)
 
@@ -201,6 +217,104 @@ class MfUsgEvt(Package):
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         return nrow * ncol
 
+    def _resolve_parameters(self):
+        """Resolve + validate EVT array parameters (EVTR) for a write.
+
+        Accepts ``self.parameters`` as an ergonomic dict (built into a
+        :class:`ModflowParBc` via the shared array-parameter machinery) or as an
+        already-canonical :class:`ModflowParBc` (preserved from :meth:`load`).
+        Returns ``(ModflowParBc or None, npevt)`` with ``npevt`` auto-computed
+        from the definitions when omitted/0. Mirrors ``MfUsgEts`` (EVT uses the
+        same UPARARRAL/UPARARRRP/UPARARRSUB2 machinery, PARTYP='EVT').
+        """
+        if self.parameters is None:
+            if any(self.evtr_parm.values()):
+                raise ValueError(
+                    "MfUsgEvt.write_file: evtr_parm activates parameters but none "
+                    "are defined. Pass parameters={name: {...}} to author EVT "
+                    "(EVTR) array parameters from scratch."
+                )
+            if self.npevt:
+                raise ValueError(
+                    f"MfUsgEvt.write_file: npevt={self.npevt} but no parameters "
+                    "are defined; pass parameters={name: {...}} or npevt=0."
+                )
+            return None, 0
+
+        if isinstance(self.parameters, dict):
+            bc_parms = build_array_parameter_bc_parms(
+                self.parameters, "evt", prefix="MfUsgEvt.write_file"
+            )
+            params = mfparbc(bc_parms)
+        else:
+            params = self.parameters  # preserved ModflowParBc
+
+        npevt = self.npevt if self.npevt else len(params.bc_parms)
+        if npevt != len(params.bc_parms):
+            raise ValueError(
+                f"MfUsgEvt.write_file: NPEVT ({npevt}) must equal the number of "
+                f"parameter definitions ({len(params.bc_parms)})."
+            )
+        self._validate_active_params(params)
+        return params, npevt
+
+    def _validate_active_params(self, params):
+        """Validate ``evtr_parm`` activations against the (canonical) definitions.
+
+        The first stress period must activate at least one parameter (USG-T
+        reuses the previous period's EVTR when ``INEVTR<0``, so a first parametric
+        period with ``INEVTR<0`` would reuse an uninitialized EVTR). Per period:
+        no duplicate activation, the name must be defined, a time-varying
+        parameter must name a known instance, a static one must not.
+        """
+        nper = self.parent.nrow_ncol_nlay_nper[3]
+        if not self.evtr_parm.get(0):
+            raise ValueError(
+                "MfUsgEvt.write_file: the first stress period must activate EVTR "
+                "parameters (evtr_parm[0]); USG-T cannot reuse a previous EVTR on "
+                "the first parametric period."
+            )
+        for kper, recs in self.evtr_parm.items():
+            if not 0 <= kper < nper:
+                raise ValueError(
+                    f"MfUsgEvt.write_file: evtr_parm stress period {kper} is out "
+                    f"of range 0..{nper - 1}."
+                )
+            lowered = [name.lower() for name, _ in recs]
+            if len(set(lowered)) != len(lowered):
+                raise ValueError(
+                    f"MfUsgEvt.write_file: a parameter is activated more than once "
+                    f"in stress period {kper}: {recs}."
+                )
+            for name, instance in recs:
+                pdef = params.bc_parms.get(name.lower())
+                if pdef is None:
+                    raise ValueError(
+                        f"MfUsgEvt.write_file: active parameter '{name}' (stress "
+                        f"period {kper}) is not defined in parameters."
+                    )
+                timevarying = pdef[0]["timevarying"]
+                pinst = pdef[1]
+                if timevarying:
+                    if instance is None:
+                        raise ValueError(
+                            f"MfUsgEvt.write_file: parameter '{name}' is "
+                            "time-varying (INSTANCES); activation must name an "
+                            f"instance (stress period {kper})."
+                        )
+                    if str(instance).lower() not in pinst:
+                        raise ValueError(
+                            f"MfUsgEvt.write_file: parameter '{name}' has no "
+                            f"instance '{instance}' (stress period {kper}); "
+                            f"defined instances: {sorted(pinst)}."
+                        )
+                elif instance is not None and str(instance).lower() != "static":
+                    raise ValueError(
+                        f"MfUsgEvt.write_file: parameter '{name}' is static but is "
+                        f"activated with instance '{instance}' (stress period "
+                        f"{kper}); use None."
+                    )
+
     def write_file(self, f=None):
         """
         Write the package file.
@@ -210,12 +324,21 @@ class MfUsgEvt(Package):
         None
 
         """
+        # Resolve + validate EVT array parameters before opening the file, so a
+        # PARAMETER NPEVT header is never written without a complete, consistent
+        # body (no partial file). ``params`` is a ModflowParBc (authored or
+        # preserved); ``npevt`` is auto-computed when omitted.
+        params, npevt = self._resolve_parameters()
+        preserve = params is not None
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         if f is not None:
             f_evt = f
         else:
             f_evt = open(self.fn_path, "w")
         f_evt.write(f"{self.heading}\n")
+        # Item 1: optional PARAMETER NPEVT line (UPARARRAL) before item 2.
+        if preserve:
+            f_evt.write(f"PARAMETER {npevt:10d}\n")
         f_evt.write(f"{self.nevtop:10d}{self.ipakcb:10d}")
 
         # USG-T's reader takes 3 integers (NEVTOP IEVTCB IETFACTOR) whenever
@@ -263,9 +386,20 @@ class MfUsgEvt(Package):
                 f_evt.write(f"{self.etfactor[icomp]:10.2e}")
             f_evt.write("\n")
 
+        # EVT parameter definitions (preserved from load or authored from scratch)
+        if preserve:
+            write_array_parameter_defs(f_evt, params)
+
         for n in range(nper):
             insurf, surf = self.surf.get_kper_entry(n)
-            inevtr, evtr = self.evtr.get_kper_entry(n)
+            if preserve:
+                # EVTR is defined by active parameters: INEVTR = count (>=1),
+                # or -1 to reuse the previous period's EVTR.
+                recs = self.evtr_parm.get(n)
+                inevtr = len(recs) if recs else -1
+                evtr = None
+            else:
+                inevtr, evtr = self.evtr.get_kper_entry(n)
             inexdp, exdp = self.exdp.get_kper_entry(n)
             inievt = -1
             if self.nevtop == 2:
@@ -281,7 +415,11 @@ class MfUsgEvt(Package):
             if insurf >= 0:
                 f_evt.write(surf)
             if inevtr >= 0:
-                f_evt.write(evtr)
+                if preserve:
+                    # active-parameter records replace the EVTR array
+                    write_active_array_parameters(f_evt, self.evtr_parm[n])
+                else:
+                    f_evt.write(evtr)
             if inexdp >= 0:
                 f_evt.write(exdp)
             if self.nevtop == 2 and inievt >= 0:
@@ -294,7 +432,7 @@ class MfUsgEvt(Package):
         f_evt.close()
 
     @classmethod
-    def load(cls, f, model, nper=None, ext_unit_dict=None):
+    def load(cls, f, model, nper=None, ext_unit_dict=None, expand_parameters=False):
         """
         Load an existing package.
 
@@ -398,6 +536,7 @@ class MfUsgEvt(Package):
         evtr = {}
         exdp = {}
         ievt = {}
+        evtr_parm_d = {}
         # iznevt = {}
         current_surf = []
         current_evtr = []
@@ -443,24 +582,12 @@ class MfUsgEvt(Package):
                         ext_unit_dict,
                     )
                 else:
-                    parm_dict = {}
-                    for ipar in range(inevtr):
-                        line = f.readline()
-                        t = line.strip().split()
-                        c = t[0].lower()
-                        if len(c) > 10:
-                            c = c[0:10]
-                        pname = c
-                        try:
-                            c = t[1].lower()
-                            instance_dict = pak_parms.bc_parms[pname][1]
-                            if c in instance_dict:
-                                iname = c
-                            else:
-                                iname = "static"
-                        except:
-                            iname = "static"
-                        parm_dict[pname] = iname
+                    records = read_active_array_parameters(f, inevtr, pak_parms)
+                    evtr_parm_d[iper] = records
+                    parm_dict = {
+                        name.lower(): (inst if inst else "static")
+                        for name, inst in records
+                    }
                     t = mfparbc.parameter_bcfill(model, u2d_shape, parm_dict, pak_parms)
 
                 current_evtr = t
@@ -506,6 +633,14 @@ class MfUsgEvt(Package):
         args["etfactor"] = etfactor
         # args["inznevt"] = inznevt
         # args["iznevt"] = iznevt
+
+        # If the file is parameterized, either preserve the parameter syntax
+        # (default) or expand it to concrete EVTR arrays (expand_parameters=True
+        # -> legacy "Expanded valid write", NPEVT=0 on output).
+        if pak_parms is not None and not expand_parameters:
+            args["npevt"] = npar
+            args["parameters"] = pak_parms
+            args["evtr_parm"] = evtr_parm_d
 
         # determine specified unit number
         unitnumber = None

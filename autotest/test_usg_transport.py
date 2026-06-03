@@ -7613,6 +7613,153 @@ def test_mfusgevt_nevtop2_unstructured_ievt_out_of_range(function_tmpdir):
         ).write_file()
 
 
+# --- Stage 4.6F-A: EVT NPEVT array-parameter preservation + authoring ---------
+
+
+def test_mfusgevt_npevt_authoring_and_roundtrip(function_tmpdir):
+    """A from-scratch NPEVT>0 EVT writes the PARAMETER line + definition + per-SP
+    activation, and load -> write -> reload preserves NPEVT/parameters/evtr_parm
+    (no silent collapse to NP=0)."""
+    from flopy.mfusg import MfUsgEvt
+
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "pe"),
+        nevtop=1,
+        surf=10.0,
+        exdp=1.0,
+        parameters={
+            "evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
+        },
+        evtr_parm={0: [("evtrate", None)]},
+    )
+    evt.fn_path = str(function_tmpdir / "pe.evt")
+    evt.write_file()
+    text = Path(evt.fn_path).read_text()
+    # item 1 PARAMETER NPEVT (not NP=0), the EVT-typed definition, and the
+    # per-SP activation record (the parameter name, not an EVTR array)
+    assert any(ln.strip().startswith("PARAMETER") for ln in text.splitlines())
+    assert any(
+        ln.lower().split()[:2] == ["evtrate", "evt"]
+        for ln in text.splitlines()
+        if ln.strip()
+    )
+
+    re = MfUsgEvt.load(evt.fn_path, _evt_struct_model(function_tmpdir, "peb"))
+    assert re.npevt == 1
+    assert re.parameters is not None and "evtrate" in re.parameters.bc_parms
+    assert [n.lower() for n, _ in re.evtr_parm[0]] == ["evtrate"]
+
+    # reload of the written file keeps NPEVT>0 through another round-trip
+    re.fn_path = str(function_tmpdir / "pe2.evt")
+    re.write_file()
+    assert "PARAMETER" in Path(re.fn_path).read_text()
+    re2 = MfUsgEvt.load(re.fn_path, _evt_struct_model(function_tmpdir, "pec"))
+    assert re2.npevt == 1
+
+
+def test_mfusgevt_npevt_instances_roundtrip(function_tmpdir):
+    """A time-varying EVT parameter (INSTANCES) preserves its per-SP active
+    instance across load -> write -> reload."""
+    from flopy.mfusg import MfUsgEvt
+
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "pi", nper=2),
+        nevtop=1,
+        surf=10.0,
+        exdp=1.0,
+        parameters={
+            "etr": {
+                "parval": "5e-4",
+                "instances": {
+                    "spring": [("NONE", "ALL", [])],
+                    "fall": [("NONE", "ALL", [])],
+                },
+            }
+        },
+        evtr_parm={0: [("etr", "spring")], 1: [("etr", "fall")]},
+    )
+    evt.fn_path = str(function_tmpdir / "pi.evt")
+    evt.write_file()
+    re = MfUsgEvt.load(
+        evt.fn_path, _evt_struct_model(function_tmpdir, "pib", nper=2)
+    )
+    assert re.npevt == 1
+    assert re.evtr_parm[0][0][1] == "spring"
+    assert re.evtr_parm[1][0][1] == "fall"
+
+
+def test_mfusgevt_npevt_expand_parameters(function_tmpdir):
+    """expand_parameters=True keeps the legacy expanded path: NPEVT=0 on output,
+    EVTR written as a concrete array (no PARAMETER line)."""
+    from flopy.mfusg import MfUsgEvt
+
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "px"),
+        nevtop=1,
+        surf=10.0,
+        exdp=1.0,
+        parameters={
+            "evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
+        },
+        evtr_parm={0: [("evtrate", None)]},
+    )
+    evt.fn_path = str(function_tmpdir / "px.evt")
+    evt.write_file()
+
+    ex = MfUsgEvt.load(
+        evt.fn_path, _evt_struct_model(function_tmpdir, "pxb"), expand_parameters=True
+    )
+    assert ex.npevt == 0 and ex.parameters is None
+    ex.fn_path = str(function_tmpdir / "pxex.evt")
+    ex.write_file()
+    assert "PARAMETER" not in Path(ex.fn_path).read_text()
+
+
+def test_mfusgevt_npevt_rejects_invalid(function_tmpdir):
+    """NPEVT authoring fails with an actionable ValueError, no partial file:
+    activation without definitions, npevt without definitions, first SP not
+    activating, an undefined active name, and a duplicate definition name."""
+    from flopy.mfusg import MfUsgEvt
+
+    good_def = {"r": {"parval": "1", "clusters": [("NONE", "ALL", [])]}}
+
+    def write(name, nper=1, **kw):
+        evt = MfUsgEvt(
+            _evt_struct_model(function_tmpdir, name, nper=nper),
+            nevtop=1,
+            surf=10.0,
+            exdp=1.0,
+            **kw,
+        )
+        evt.fn_path = str(function_tmpdir / f"{name}.evt")
+        evt.write_file()
+
+    # evtr_parm activates but no parameters defined
+    with pytest.raises(ValueError, match="none are defined"):
+        write("b1", evtr_parm={0: [("r", None)]})
+    # npevt>0 but no parameters defined
+    with pytest.raises(ValueError, match="no parameters"):
+        write("b2", npevt=1)
+    # first stress period does not activate
+    with pytest.raises(ValueError, match="first stress period"):
+        write("b3", nper=2, parameters=good_def, evtr_parm={1: [("r", None)]})
+    # active name not defined
+    with pytest.raises(ValueError, match="not defined"):
+        write("b4", parameters=good_def, evtr_parm={0: [("nope", None)]})
+    # duplicate definition name (case-insensitive)
+    with pytest.raises(ValueError):
+        write(
+            "b5",
+            parameters={
+                "R": {"parval": "1", "clusters": [("NONE", "ALL", [])]},
+                "r": {"parval": "2", "clusters": [("NONE", "ALL", [])]},
+            },
+            evtr_parm={0: [("r", None)]},
+        )
+    for nm in ("b1", "b2", "b3", "b4", "b5"):
+        assert not (function_tmpdir / f"{nm}.evt").exists()
+
+
 def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
     from flopy.mfusg import MfUsgOc
