@@ -217,6 +217,52 @@ class MfUsgEvt(Package):
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         return nrow * ncol
 
+    def _check_evtr_parm(self):
+        """Validate the ``evtr_parm`` container/record structure before any use,
+        so a malformed input fails with an actionable ``ValueError`` instead of an
+        ``AttributeError`` (a list/string where a dict is expected) or a
+        tuple-unpack error (a record that is not a ``(name, instance)`` pair).
+        Semantic checks (range, duplicates, defined names, instances) are done in
+        :meth:`_validate_active_params` once the structure is known to be sound.
+        """
+        if not isinstance(self.evtr_parm, dict):
+            raise ValueError(
+                "MfUsgEvt.write_file: evtr_parm must be a dict keyed by 0-based "
+                f"stress period; got {type(self.evtr_parm).__name__}."
+            )
+        for kper, recs in self.evtr_parm.items():
+            if isinstance(kper, bool) or not isinstance(kper, (int, np.integer)):
+                raise ValueError(
+                    f"MfUsgEvt.write_file: evtr_parm key {kper!r} must be an "
+                    "integer stress period (0-based)."
+                )
+            if isinstance(recs, str) or not isinstance(recs, (list, tuple)):
+                raise ValueError(
+                    f"MfUsgEvt.write_file: evtr_parm[{kper}] must be a list of "
+                    f"(name, instance) pairs; got {type(recs).__name__}."
+                )
+            for rec in recs:
+                if (
+                    isinstance(rec, str)
+                    or not isinstance(rec, (list, tuple))
+                    or len(rec) != 2
+                ):
+                    raise ValueError(
+                        f"MfUsgEvt.write_file: evtr_parm[{kper}] record {rec!r} "
+                        "must be a (name, instance_or_None) pair."
+                    )
+                name, instance = rec
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError(
+                        f"MfUsgEvt.write_file: evtr_parm[{kper}] parameter name "
+                        f"{name!r} must be a non-empty string."
+                    )
+                if instance is not None and not isinstance(instance, str):
+                    raise ValueError(
+                        f"MfUsgEvt.write_file: evtr_parm[{kper}] instance "
+                        f"{instance!r} must be a string or None."
+                    )
+
     def _resolve_parameters(self):
         """Resolve + validate EVT array parameters (EVTR) for a write.
 
@@ -227,6 +273,7 @@ class MfUsgEvt(Package):
         from the definitions when omitted/0. Mirrors ``MfUsgEts`` (EVT uses the
         same UPARARRAL/UPARARRRP/UPARARRSUB2 machinery, PARTYP='EVT').
         """
+        self._check_evtr_parm()
         if self.parameters is None:
             if any(self.evtr_parm.values()):
                 raise ValueError(
@@ -240,6 +287,14 @@ class MfUsgEvt(Package):
                     "are defined; pass parameters={name: {...}} or npevt=0."
                 )
             return None, 0
+
+        # An empty parameters dict carries no definitions: fail directly rather
+        # than building an empty ModflowParBc and tripping the first-period check.
+        if isinstance(self.parameters, dict) and not self.parameters:
+            raise ValueError(
+                "MfUsgEvt.write_file: parameters is empty (no parameter "
+                "definitions). Pass parameters={name: {...}} or parameters=None."
+            )
 
         if isinstance(self.parameters, dict):
             bc_parms = build_array_parameter_bc_parms(
@@ -480,9 +535,20 @@ class MfUsgEvt(Package):
             if line[0] != "#":
                 break
         npar = 0
-        if "parameter" in line.lower():
+        if line.strip().lower().split()[:1] == ["parameter"]:
             raw = line.strip().split()
-            npar = int(raw[1])
+            if len(raw) < 2:
+                raise ValueError(
+                    "MfUsgEvt.load: PARAMETER line must be 'PARAMETER <NPEVT>'; "
+                    f"got {line.strip()!r}."
+                )
+            try:
+                npar = int(raw[1])
+            except ValueError:
+                raise ValueError(
+                    "MfUsgEvt.load: PARAMETER line must be 'PARAMETER <NPEVT>' "
+                    f"with an integer count; got {raw[1]!r}."
+                )
             if npar > 0:
                 if model.verbose:
                     print("  Parameters detected. Number of parameters = ", npar)

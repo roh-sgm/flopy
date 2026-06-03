@@ -1507,9 +1507,16 @@ Prioritized next cards (full criteria in the audit doc):
   `write_array_parameter_defs`) — only difference vs ETS is the optional
   `PARAMETER NPEVT` line (item 1) that precedes item 2. `expand_parameters=True`
   keeps the legacy expanded `NPEVT=0` write. Only `mfusgevt.py` touched (ETS and
-  `_usgt_parameters.py` unchanged). 4 new tests; `-k mfusgevt` **13**, focused
-  **300**, exe **4**, combined **304** (ARM). EVT stays ⚠️/✅ not Full (ETS-zonal
-  remains). See `USGT_STAGE4_EVT_FULLNESS.md`.
+  `_usgt_parameters.py` unchanged). **Review follow-up (hardening):** new
+  `_check_evtr_parm` validates the `evtr_parm` structure up front (dict keyed by
+  integer SP; values are lists of `(name, instance_or_None)` pairs — a string is
+  not a record; non-empty string name; instance str/None) so a malformed input
+  fails with `ValueError` not `AttributeError`/tuple-unpack; `parameters={}` →
+  "parameters is empty"; a malformed `PARAMETER` line on load (`PARAMETER`,
+  `PARAMETER abc`) → clear `ValueError` (`PARAMETER 0` still loads
+  non-parametric). 6 new tests total; `-k mfusgevt` **15**, focused **302**, exe
+  **4**, combined **306** (ARM). EVT stays ⚠️/✅ not Full (ETS-zonal remains;
+  scope unchanged). See `USGT_STAGE4_EVT_FULLNESS.md`.
 - **Stage 4.6F-B — EVT ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`).**
   Still `NotImplementedError` (needs ATS + per-SP zone arrays). *Recommended next.*
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).

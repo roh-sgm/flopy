@@ -771,6 +771,27 @@ honest, upstream-ready USG-T 2.7 story.
   **5**, focused **296**, exe **4**, combined **300** (ARM). DPT stays ⚠️ Partial
   — scope unchanged, the scalar/tabular branches remain deferred. See
   `USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
+- **Stage 4.6F-A — EVT `NPEVT` parameter preservation + authoring (executed):**
+  closes the EVT NPEVT gap (a parameterized EVT used to load as expanded arrays
+  and rewrite `NP=0`). `MfUsgEvt` now preserves `NPEVT>0` EVTR array parameters
+  (load → write → reload) and authors them from scratch via the **same** machinery
+  as ETS (`parameters={name: {parval, clusters | instances}}` + `evtr_parm`,
+  `_resolve_parameters`/`_validate_active_params`); the one structural difference,
+  audited in `gwf2evt8u1.f`, is the optional `PARAMETER NPEVT` line (item 1,
+  `UPARARRAL` with `IN>0`) that precedes item 2 — ETS carries `NPETS` in item 2a.
+  PTYP='EVT'; `INSTANCES` supported; `expand_parameters=True` keeps the legacy
+  expanded `NPEVT=0` path. Reuses the shared array-parameter helpers in
+  `_usgt_parameters.py` unchanged; `MfUsgEts` not modified; only `mfusgevt.py`
+  touched. **Review follow-up (hardening):** `_check_evtr_parm` validates the
+  `evtr_parm` structure up front (dict keyed by integer SP; values are lists of
+  `(name, instance_or_None)` pairs — a string is not a record; non-empty name;
+  instance str/None) so a malformed input fails with `ValueError` not
+  `AttributeError`/tuple-unpack; `parameters={}` → "parameters is empty"; a
+  malformed `PARAMETER` line on load → clear `ValueError` (`PARAMETER 0` still
+  loads non-parametric). 6 new tests; `-k mfusgevt` **15**, focused **302**, exe
+  **4**, combined **306** (ARM). EVT stays `✅ (intentionally not Full)` — the
+  ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`) remains `NotImplementedError`
+  (Stage 4.6F-B). See `USGT_STAGE4_EVT_FULLNESS.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
   unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)
   shows the option triggers a cascade of conditional arrays (zone map, tabular

@@ -141,11 +141,24 @@ zonal sub-mode is independent of `NPEVT` (separate option, deferred to 4.6F-B).
 Only `mfusgevt.py` was touched; the shared array-parameter helpers in
 `_usgt_parameters.py` are reused unchanged, and `MfUsgEts` is not modified.
 
+**Review follow-up (hardening):** malformed inputs now fail with a clear
+`ValueError` before any file is opened (no `AttributeError`/tuple-unpack, no
+partial file). `_check_evtr_parm` validates the `evtr_parm` structure (must be a
+dict keyed by integer stress period; each value a list of `(name,
+instance_or_None)` pairs — a string is not a valid record sequence; name a
+non-empty string; instance a string or None), run at the top of
+`_resolve_parameters` so even a non-dict `evtr_parm` with `parameters=None` is
+caught before `.values()`. `parameters={}` now raises "parameters is empty"
+directly instead of tripping the first-period check. On `load`, a `PARAMETER`
+line without an integer count (`PARAMETER`, `PARAMETER abc`) raises a clear
+`ValueError`; `PARAMETER 0` still loads as plain non-parametric.
+
 **Tests:** `test_mfusgevt_npevt_authoring_and_roundtrip`,
 `_npevt_instances_roundtrip`, `_npevt_expand_parameters`,
-`_npevt_rejects_invalid`. The 9 Card-B EVT tests and the
-`test_usgt_exe_evt_from_scratch` exe smoke stay green. `-k mfusgevt` **13**,
-focused **300**, exe **4**, combined **304** (USG-T 2.7 ARM).
+`_npevt_rejects_invalid`, `_npevt_validation_hardening`,
+`_npevt_parameter0_loads_nonparametric`. The 9 Card-B EVT tests and the
+`test_usgt_exe_evt_from_scratch` exe smoke stay green. `-k mfusgevt` **15**,
+focused **302**, exe **4**, combined **306** (USG-T 2.7 ARM).
 
 **Status:** EVT stays `✅ (intentionally not Full)` — the NPEVT gap is closed, but
 the ETS-zonal time-series (4.6F-B) remains `NotImplementedError`.

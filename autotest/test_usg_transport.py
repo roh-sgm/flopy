@@ -7760,6 +7760,83 @@ def test_mfusgevt_npevt_rejects_invalid(function_tmpdir):
         assert not (function_tmpdir / f"{nm}.evt").exists()
 
 
+def test_mfusgevt_npevt_validation_hardening(function_tmpdir):
+    """Review hardening: a malformed evtr_parm or parameters={} fails with a
+    clear ValueError (no AttributeError / tuple-unpack), no partial file; and a
+    malformed PARAMETER line on load raises a clear ValueError."""
+    from flopy.mfusg import MfUsgEvt
+
+    good_def = {"r": {"parval": "1", "clusters": [("NONE", "ALL", [])]}}
+
+    def write(name, **kw):
+        evt = MfUsgEvt(
+            _evt_struct_model(function_tmpdir, name),
+            nevtop=1,
+            surf=10.0,
+            exdp=1.0,
+            **kw,
+        )
+        evt.fn_path = str(function_tmpdir / f"{name}.evt")
+        evt.write_file()
+
+    # evtr_parm container/record structure
+    with pytest.raises(ValueError, match="must be a dict"):  # list, not dict
+        write("v1", parameters=good_def, evtr_parm=[("r", None)])
+    with pytest.raises(ValueError, match="must be a dict"):  # string, not dict
+        write("v2", parameters=good_def, evtr_parm="r")
+    with pytest.raises(ValueError, match="must be a dict"):  # bad even w/o defs
+        write("v3", evtr_parm=[("r", None)])
+    with pytest.raises(ValueError, match="list of"):  # recs is a string
+        write("v4", parameters=good_def, evtr_parm={0: "r"})
+    with pytest.raises(ValueError, match=r"must be a \(name"):  # rec not a pair
+        write("v5", parameters=good_def, evtr_parm={0: ["r"]})
+    with pytest.raises(ValueError, match=r"must be a \(name"):  # 1-tuple
+        write("v6", parameters=good_def, evtr_parm={0: [("r",)]})
+    with pytest.raises(ValueError, match="non-empty string"):  # empty name
+        write("v7", parameters=good_def, evtr_parm={0: [("", None)]})
+    with pytest.raises(ValueError, match="string or None"):  # bad instance
+        write("v8", parameters=good_def, evtr_parm={0: [("r", 3)]})
+    with pytest.raises(ValueError, match="integer stress period"):  # str key
+        write("v9", parameters=good_def, evtr_parm={"0": [("r", None)]})
+    # parameters={} is "no definitions", not a first-period error
+    with pytest.raises(ValueError, match="parameters is empty"):
+        write("v10", parameters={}, evtr_parm={0: [("r", None)]})
+    for nm in (f"v{i}" for i in range(1, 11)):
+        assert not (function_tmpdir / f"{nm}.evt").exists()
+
+    # load: malformed PARAMETER line
+    f1 = function_tmpdir / "lp1.evt"
+    f1.write_text("# x\nPARAMETER\n         1         0\n")
+    with pytest.raises(ValueError, match="PARAMETER <NPEVT>"):
+        MfUsgEvt.load(str(f1), _evt_struct_model(function_tmpdir, "lp1b"))
+    f2 = function_tmpdir / "lp2.evt"
+    f2.write_text("# x\nPARAMETER abc\n         1         0\n")
+    with pytest.raises(ValueError, match="integer count"):
+        MfUsgEvt.load(str(f2), _evt_struct_model(function_tmpdir, "lp2b"))
+
+
+def test_mfusgevt_npevt_parameter0_loads_nonparametric(function_tmpdir):
+    """A 'PARAMETER 0' header loads as a plain non-parametric EVT (npevt=0)."""
+    from flopy.mfusg import MfUsgEvt
+
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "p0"),
+        nevtop=1,
+        surf=10.0,
+        evtr=1e-4,
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "p0.evt")
+    evt.write_file()
+    body = Path(evt.fn_path).read_text().splitlines()
+    # re-emit with an explicit "PARAMETER 0" line before item 2
+    p0 = function_tmpdir / "p0p.evt"
+    p0.write_text(body[0] + "\nPARAMETER 0\n" + "\n".join(body[1:]) + "\n")
+
+    re = MfUsgEvt.load(str(p0), _evt_struct_model(function_tmpdir, "p0b"))
+    assert re.npevt == 0 and re.parameters is None
+
+
 def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
     from flopy.mfusg import MfUsgOc
