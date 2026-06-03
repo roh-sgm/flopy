@@ -206,3 +206,42 @@ def test_usgt_exe_evt_from_scratch(function_tmpdir):
     # ET is reported in the budget (ET removes water -> ET_OUT) and it closes.
     assert any("ET" in name for name in inc.dtype.names)
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
+
+
+@requires_exe(USGT_EXE)
+def test_usgt_exe_oc_atsa_from_scratch(function_tmpdir):
+    """OC adaptive time-stepping (ATSA) runs under USG-T 2.7. A transient model
+    with ``MfUsgOc(atsa=1)`` exercises the ATS path: the Fortran overrides NSTP
+    and uses its built-in DELTAT/TMINAT/TMAXAT/TADJAT/TCUTAT (glo2basu1.f), so the
+    OC file only needs the ``ATSA`` keyword. With the CHD boundaries held fixed
+    the run reaches the analytical steady gradient.
+
+    (FASTFORWARD/FASTFORWARDC/BOOTSTRAPPING are not exe-smoked here — they read
+    GWF/CLN/DDF heads (or concentrations) from an external file produced by a
+    prior run, i.e. a two-stage fixture; see USGT_STAGE4_18_EXE_VERIFICATION.md
+    for the manual tier.)"""
+    ml = MfUsg(
+        modelname="atsa",
+        model_ws=str(function_tmpdir),
+        exe_name=USGT_EXE,
+        structured=True,
+    )
+    ModflowDis(
+        ml, nlay=1, nrow=1, ncol=5, nper=1, perlen=100.0, nstp=1, steady=False,
+        delr=10.0, delc=10.0, top=10.0, botm=0.0,
+    )
+    MfUsgBas(ml, ibound=1, strt=5.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ss=1.0e-5, ipakcb=0)
+    MfUsgSms(ml, linmeth=1)
+    MfUsgOc(ml, atsa=1, stress_period_data={(0, 0): ["save head"]})
+    ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 8.0, 8.0],
+                                           [0, 0, 4, 2.0, 2.0]]})
+    ml.write_input()
+    assert "ATSA" in (function_tmpdir / "atsa.oc").read_text()
+
+    success, _ = ml.run_model(silent=True)
+    assert success, "USG-T ATSA run did not terminate normally"
+
+    # transient model with fixed CHD reaches the analytical linear gradient
+    heads = HeadFile(os.path.join(ml.model_ws, "atsa.hds")).get_data().ravel()
+    assert np.allclose(heads, [8.0, 6.5, 5.0, 3.5, 2.0], atol=1e-3)

@@ -828,6 +828,23 @@ honest, upstream-ready USG-T 2.7 story.
   or mfusgsgb"` **141**, focused **304**, exe **4**, combined **308** (ARM). No
   package label changes. **This closes the A1–A5 authoring-gap inventory.** See
   `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`.
+- **Stage 4.7B — OC/MDT executable verification (executed):** addresses the
+  post-authoring exe-verification items. Fortran audit (`glo2basu1.f`
+  `SGWF2BAS7I`; `gwt2mdtu1.for`). **OC `ATSA`** adaptive time-stepping is now
+  exe-verified — a new `test_usgt_exe_oc_atsa_from_scratch` runs a transient model
+  with `MfUsgOc(atsa=1)` under USG-T 2.7 and reaches the analytical linear
+  gradient (the Fortran overrides `NSTP` and uses built-in
+  `DELTAT`/`TMINAT`/`TMAXAT`/`TADJAT`/`TCUTAT`, so the OC file only needs the
+  `ATSA` keyword). Documented **manual tier** (no brittle synthetic test): OC
+  `FASTFORWARD`/`FASTFORWARDC`/`BOOTSTRAPPING` (read GWF/CLN/DDF heads or
+  concentrations from an external prior-run file — a two-stage fixture), OC
+  `SAVE IBOUND` (USG-T 2.7's solver rejects it; FloPy preserves + `check()`
+  warns), and MDT `NTCOMP>MCOMP` chained decay (tailored BCT setup) +
+  `SEPARATE_AI2`/`MULTIFILE_MD` per-component binary outputs; MDT *execution* is
+  already covered by the three real Ex7 matrix-diffusion round-trip/run models.
+  Only the exe test file + docs touched (no package code). exe **5**, combined
+  **309**, focal `mfusgoc or mfusgmdt or usgt_exe` **25** (ARM). OC/MDT stay
+  `✅ (intentionally not Full)`. See `USGT_STAGE4_18_EXE_VERIFICATION.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
   unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)
   shows the option triggers a cascade of conditional arrays (zone map, tabular

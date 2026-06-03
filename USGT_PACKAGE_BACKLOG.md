@@ -1551,6 +1551,20 @@ Prioritized next cards (full criteria in the audit doc):
   mfusgqrt or mfusgsgb"` **141**, focused **304**, exe **4**, combined **308**
   (ARM). **Closes the A1–A5 authoring-gap inventory.** See
   `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`.
-- **Next: executable verification** (OC/MDT exe smokes; parametric /
-  multi-lake-with-sill exe tiers stay manual). **Stage 4.8 — Upstream
-  infrastructure** stays a separate track.
+- **Stage 4.7B — OC/MDT executable verification — DONE.** Fortran audit
+  (glo2basu1.f SGWF2BAS7I; gwt2mdtu1.for). **OC `ATSA`** adaptive time-stepping
+  now has an exe smoke (`test_usgt_exe_oc_atsa_from_scratch`: transient model
+  runs under USG-T 2.7, reaches the analytical gradient; the Fortran overrides
+  NSTP and uses built-in ATS constants). **Manual tier** (documented, not a
+  brittle synthetic test): OC `FASTFORWARD`/`FASTFORWARDC`/`BOOTSTRAPPING` (read
+  GWF/CLN/DDF heads or conc from an external prior-run file — two-stage fixture);
+  OC `SAVE IBOUND` (USG-T 2.7 solver rejects it; check() warns); MDT
+  `NTCOMP>MCOMP` chained decay (tailored BCT setup) and `SEPARATE_AI2`/
+  `MULTIFILE_MD` per-component binary outputs. MDT *execution* is already covered
+  by the three real Ex7 matrix-diffusion models. Only the exe test file +
+  docs touched. exe **5**, combined **309**, focal "mfusgoc or mfusgmdt or
+  usgt_exe" **25** (ARM). OC/MDT stay `✅ (intentionally not Full)`. See
+  `USGT_STAGE4_18_EXE_VERIFICATION.md`.
+- **Remaining (not authoring gaps):** the parametric / multi-lake-with-sill exe
+  tiers stay manual; OC FASTFORWARD/BOOTSTRAPPING + MDT chained-decay/AI manual.
+  **Stage 4.8 — Upstream infrastructure** stays a separate track.

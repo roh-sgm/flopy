@@ -88,9 +88,9 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 | CLN | FA | Circular/rect/`GENERAL_SEC`/`PROCESSCCF`/`ISHAPE`. |
 | TIB | FA (`parse=True`) | `load` default is byte-exact **Raw**; semantic on `parse=True`; raw fallback on `U1DINT` EXTERNAL/OPEN-CLOSE. |
 | GSF | FA (`parse=True`) | Not solver input. `load` default **Raw**; semantic + `from_grid`/`to_grid`. |
-| OC | FS-exec | Broad authoring; gaps: `SAVE IBOUND` solver-rejected, FASTFORWARD/BOOTSTRAPPING exec unverified, numeric→words rewrite. |
+| OC | FS-exec | Broad authoring; **`ATSA` exe-verified (Stage 4.7B)**. Manual tier: FASTFORWARD/FASTFORWARDC/BOOTSTRAPPING (external prior-run head/conc file); `SAVE IBOUND` solver-rejected by USG-T 2.7 (check() warns); numeric→words rewrite. |
 | EVT | FS-exec | All `NEVTOP`, transport `IETFACTOR`, reuse; **NPEVT EVTR array params preserved + authored** (4.6F-A); **ETS-zonal deferred** (4.6F-B) — ATS-coupled dynamic mode, explicit per-branch failure + full spec. |
-| MDT | FS-exec | Audited authoring; gaps: chained-decay `NTCOMP>MCOMP` unverified, AI1/AI2 binaries not read. |
+| MDT | FS-exec | Audited authoring; **execution covered by the 3 real Ex7 models (Stage 4.7B)**. Manual tier: chained-decay `NTCOMP>MCOMP` (tailored BCT setup), `SEPARATE_AI2`/`MULTIFILE_MD` per-component binary outputs. |
 | LAK | FS-exec | No-transport/classic/`TRANSPORTBOUNDARY`/`TABLEINPUT` + **multi-lake sill/connectivity (ds 7/8)** authoring (Stage 4.6D, validated). Gaps: bathymetry-table contents external; GAGE separate; multi-lake-with-sill from-scratch *execution* not exe-smoke-tested (manual tier). |
 | GNC | FS-exec (✅) | Ghost-node helper; verified. |
 | ETS | FA (incl. **from-scratch ETSR array-param authoring**, Stage 4.6C-D) + ParamPreserve (ETSR array) | Only ETSR parameterized (Fortran limit); parametric execution not exe-smoke-tested; opt-in expand fallback. |
@@ -173,9 +173,16 @@ raw/text round-trip · **Compat** = compatibility-only (base class).
 - **E1 — QRT `NP>0` activation** not execution-guaranteed (Fortran bug: value
   scales `NumRT` not `Q`; `NodQRT` not copied). FloPy preserves structurally and
   does not apply the value to `Q`. *Not a FloPy defect.*
-- **E2 — OC FASTFORWARD/FASTFORWARDC + BOOTSTRAPPING** placement/execution not
-  exe-verified.
-- **E3 — MDT chained-decay `NTCOMP>MCOMP`** not independently exe-verified.
+- **E2 — OC executable verification** — ✅ **addressed (Stage 4.7B)**: `ATSA`
+  adaptive time-stepping now has an exe smoke; `FASTFORWARD`/`FASTFORWARDC`/
+  `BOOTSTRAPPING` are **manual tier** (they read GWF/CLN/DDF heads or
+  concentrations from an external prior-run file — a two-stage fixture);
+  `SAVE IBOUND` is solver-rejected by USG-T 2.7 (not exe-testable). See
+  `USGT_STAGE4_18_EXE_VERIFICATION.md`.
+- **E3 — MDT executable verification** — ✅ **addressed (Stage 4.7B)**: MDT
+  execution is covered by the three real Ex7 matrix-diffusion models (round-trip/
+  run); `NTCOMP>MCOMP` chained decay (a tailored BCT setup) and the
+  `SEPARATE_AI2`/`MULTIFILE_MD` per-component **binary** outputs stay manual tier.
 - (E-closed — SGB active params abort the run; FloPy already refuses to write.)
 
 ### 3.5 Docs / tests / cleanup gaps
@@ -235,7 +242,9 @@ Priorities use the review's definitions:
 - ~~**L2 — compat-package load validation.**~~ Addressed by Stage 4.6A
   (STR/SUB/SWT guarded; SFR DISU-validated via `freyberg_usg`; FHB/GAGE via Ex8).
 - **W2 — OC `SAVE IBOUND` / numeric-format** behavior tightening.
-- **E2/E3 — OC BOOTSTRAPPING & MDT chained-decay exe verification.**
+- ~~**E2/E3 — OC BOOTSTRAPPING & MDT chained-decay exe verification.**~~ Addressed
+  by Stage 4.7B: OC `ATSA` exe-smoked; FASTFORWARD/BOOTSTRAPPING + MDT
+  chained-decay/AI binaries are documented manual tier; MDT execution via Ex7.
 
 ### P3 — docs / cleanup
 
@@ -336,8 +345,14 @@ Ordered P0-latent first, then by authoring impact. One reviewable card each.
   **303**, exe **4**, combined **307** (ARM). Full spec in
   `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
 
-- **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
-  *Recommended next.*
+- **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering)
+  — **DONE** (docs-only).
+- **Stage 4.7A — A5 list-parameter edge cases** — **DONE** (deferred/explicit-fail;
+  `USGT_STAGE4_17_A5_LIST_PARAM_EDGE_CASES.md`).
+- **Stage 4.7B — OC/MDT executable verification** — **DONE** (OC `ATSA` exe smoke
+  added; FASTFORWARD/BOOTSTRAPPING/SAVE-IBOUND and MDT chained-decay/AI binaries
+  documented manual-tier; MDT execution covered by Ex7;
+  `USGT_STAGE4_18_EXE_VERIFICATION.md`).
 
 - **(Separate track) Stage 4.8 — Upstream infrastructure** stays as planned in
   `USGT_STAGE4_08_UPSTREAM_INFRA.md` (executable source/release/CI); it is not a
