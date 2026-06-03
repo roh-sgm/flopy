@@ -7837,6 +7837,52 @@ def test_mfusgevt_npevt_parameter0_loads_nonparametric(function_tmpdir):
     assert re.npevt == 0 and re.parameters is None
 
 
+# --- Stage 4.6F-B: EVT ETS zonal time-series is deferred (explicit failure) ---
+
+
+def test_mfusgevt_ets_zonal_deferred(function_tmpdir):
+    """EVT ETS zonal time-series ('ETS MXZNEVT' / per-SP 'INEVTZONES') is a
+    dynamic ATS-coupled mode (external IUETS time-series superseding EVTR), not
+    static I/O. It is deferred (Stage 4.6F-B): authoring and load fail explicitly,
+    per branch, with no partial parse — while plain EVT is unaffected."""
+    from flopy.mfusg import MfUsgEvt
+
+    # authoring with mxetzones>0 -> specific NotImplementedError (cites the spec)
+    with pytest.raises(NotImplementedError, match="ATS"):
+        MfUsgEvt(_evt_struct_model(function_tmpdir, "z1"), nevtop=1, mxetzones=3)
+
+    # load: 'ETS MXZNEVT' in item 2 fails before any stress-period parse
+    f1 = function_tmpdir / "ets.evt"
+    f1.write_text(
+        "# x\n         1         0 ETS         3\n"
+        "         0         0         0  # SP1 must not be parsed\n"
+    )
+    with pytest.raises(NotImplementedError, match="ETS"):
+        MfUsgEvt.load(str(f1), _evt_struct_model(function_tmpdir, "z2"))
+
+    # load: a per-SP 'INEVTZONES' flag fails explicitly
+    f2 = function_tmpdir / "inz.evt"
+    f2.write_text(
+        "# x\n         1         0\n"
+        "INEVTZONES 1         0         1         1\n"
+    )
+    with pytest.raises(NotImplementedError, match="INEVTZONES"):
+        MfUsgEvt.load(str(f2), _evt_struct_model(function_tmpdir, "z3"))
+
+    # plain EVT (no ETS option) is unaffected and still round-trips
+    evt = MfUsgEvt(
+        _evt_struct_model(function_tmpdir, "z4"),
+        nevtop=1,
+        surf=10.0,
+        evtr=1e-4,
+        exdp=1.0,
+    )
+    evt.fn_path = str(function_tmpdir / "z4.evt")
+    evt.write_file()
+    re = MfUsgEvt.load(evt.fn_path, _evt_struct_model(function_tmpdir, "z4b"))
+    assert re.nevtop == 1 and re.mxetzones == 0
+
+
 def test_mfusgoc_atsa_authoring_roundtrip(function_tmpdir):
     """OC ATS adaptive time-stepping (ATSA) authors from scratch and round-trips."""
     from flopy.mfusg import MfUsgOc

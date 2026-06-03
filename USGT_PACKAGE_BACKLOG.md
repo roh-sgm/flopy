@@ -1174,8 +1174,10 @@ a USG-T 2.7 EVT executable smoke (`test_usgt_exe_evt_from_scratch`). Six
 synthetic tests + one exe test.
 
 Decision: **kept `✅ (intentionally not Full)`** — explicit gaps: ETS zonal
-time-series (`ETS MXZNEVT`/`IZNEVT`) raises `NotImplementedError` (deferred as
-Stage 4.6F-B); `NPEVT` parameters were *Expanded valid write* (loaded as arrays,
+time-series (`ETS MXZNEVT`/`INEVTZONES`) is **deferred (Stage 4.6F-B, executed)**
+as an ATS-coupled dynamic mode, now failing explicitly per branch with the full
+spec (`USGT_STAGE4_16_EVT_ETS_ZONAL.md`); `NPEVT` parameters were *Expanded valid
+write* (loaded as arrays,
 `NP=0` on write) — **superseded by Stage 4.6F-A**, which preserves the EVTR
 array parameters (load → write → reload) and authors them from scratch via the
 same machinery as ETS (`PARAMETER NPEVT` line, PTYP='EVT', `INSTANCES`;
@@ -1517,7 +1519,18 @@ Prioritized next cards (full criteria in the audit doc):
   non-parametric). 6 new tests total; `-k mfusgevt` **15**, focused **302**, exe
   **4**, combined **306** (ARM). EVT stays ⚠️/✅ not Full (ETS-zonal remains;
   scope unchanged). See `USGT_STAGE4_EVT_FULLNESS.md`.
-- **Stage 4.6F-B — EVT ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`).**
-  Still `NotImplementedError` (needs ATS + per-SP zone arrays). *Recommended next.*
+- **Stage 4.6F-B — EVT ETS-zonal time series (`ETS MXZNEVT`/`INEVTZONES`) — DONE
+  (deferred, executed).** Fortran audit (`gwf2evt8u1.f`): it is an ATS-coupled
+  dynamic execution mode — requires `IATS>0` (else `STOP`), reads an external
+  `IUETS` time-series progressively during the run (`Tstart Tend Factor
+  Ets(MXZNEVT)`), `IETSOPT=1` **supersedes** the EVTR array (EVTR recomputed each
+  step), and a per-SP `INEVTZONES` flag (re)reads `IZNEVT`. Not static I/O →
+  **deferred**. The generic `NotImplementedError` is replaced by specific
+  per-branch failures (authoring `mxetzones>0`; load of `ETS MXZNEVT` before any
+  SP parse; load of a per-SP `INEVTZONES`), no partial parse. Only `mfusgevt.py`
+  touched. 1 new test; `-k mfusgevt` **16**, focused **303**, exe **4**, combined
+  **307** (ARM). EVT stays `✅ (intentionally not Full)` — this is the one honest
+  remaining gap. See `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
 - **Stage 4.6G — P3 cleanup** (DISU/OC todos; load-skip warning; doc numbering).
+  *Recommended next.*
 - **Stage 4.8 — Upstream infrastructure** stays a separate track.

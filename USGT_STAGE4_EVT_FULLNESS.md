@@ -73,9 +73,11 @@ with per-`MCOMP` `ETFACTOR`, per-SP reuse), a real `IETFACTOR` round-trip bug wa
 fixed, and the executable accepts a from-scratch EVT. But two bounded gaps keep
 EVT honest at `✅ (intentionally not Full)`:
 
-- **ETS zonal time-series** (`ETS MXZNEVT` / per-SP `IZNEVT`): unsupported —
-  raises `NotImplementedError`. (Requires ATS and per-SP zone arrays that are not
-  authored or parsed.) Deferred as **Stage 4.6F-B**.
+- **ETS zonal time-series** (`ETS MXZNEVT` / per-SP `INEVTZONES`/`IZNEVT`):
+  **deferred — Stage 4.6F-B** (executed). It is an ATS-coupled dynamic execution
+  mode (an external time-series file superseding the EVTR array), not static I/O,
+  so it is not modeled; it now fails explicitly per branch (authoring + load),
+  with the full Fortran spec recorded in `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
 - **NPEVT named parameters**: **resolved in Stage 4.6F-A** (below) — the EVTR
   array parameters now load → write → reload with their syntax intact and can be
   authored from scratch; `expand_parameters=True` keeps the legacy expanded
@@ -162,6 +164,29 @@ focused **302**, exe **4**, combined **306** (USG-T 2.7 ARM).
 
 **Status:** EVT stays `✅ (intentionally not Full)` — the NPEVT gap is closed, but
 the ETS-zonal time-series (4.6F-B) remains `NotImplementedError`.
+
+## Stage 4.6F-B — ETS zonal time-series (deferred, explicit per-branch failure)
+
+Fortran audit (`gwf2evt8u1.f`) confirms `ETS MXZNEVT` is a **dynamic, ATS-coupled
+execution mode**, not static I/O: it **requires** adaptive time-stepping (the
+Fortran `STOP`s when `IATS==0`), reads an **external time-series file** (`IUETS`)
+record-by-record during the run (`Tstart Tend Factor Ets(1..MXZNEVT)`), and with
+`IETSOPT=1` the time-series **supersedes** the EVTR array (EVTR is recomputed each
+step as `etsevt(IZNEVT(n))*AREA*Factor`); a per-SP `INEVTZONES` flag redefines
+`MXZNEVT` and (re)reads the `IZNEVT` zone-index array. **Decision: deferred** —
+FloPy models static EVT I/O only.
+
+The single generic `NotImplementedError` was replaced by specific, per-branch
+explicit failures (no partial parse): `__init__` (`mxetzones>0`) cites the full
+spec; `load` rejects `ETS MXZNEVT` on item 2 before reading any stress period;
+`load` rejects a per-SP `INEVTZONES` header. Plain EVT and NPEVT are unaffected.
+Test: `test_mfusgevt_ets_zonal_deferred`. `-k mfusgevt` **16**, focused **303**,
+exe **4**, combined **307** (ARM). Full spec + rationale:
+`USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
+
+**EVT stays `✅ (intentionally not Full)`**: static I/O is complete (NPEVT closed,
+ETS-zonal deferred with the spec recorded), but the ATS-coupled ETS time-series
+is intentionally unsupported, so promoting to `Full` would overclaim.
 
 ## Validation
 

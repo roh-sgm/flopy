@@ -151,10 +151,19 @@ class MfUsgEvt(Package):
         self.mxetzones = int(mxetzones) if mxetzones else 0
         if self.mxetzones > 0:
             raise NotImplementedError(
-                "EVT ETS zonal time-series is not supported by MfUsgEvt: the "
-                "'ETS MXZNEVT' header and the per-stress-period IZNEVT zone "
-                "arrays are neither authored nor parsed (USG-T also requires "
-                "ATS for ETS). Remove the ETS option."
+                "EVT ETS zonal time-series ('ETS MXZNEVT') is not supported by "
+                "MfUsgEvt. It is a dynamic, ATS-coupled execution mode, not "
+                "static array I/O (gwf2evt8u1.f): (1) it requires adaptive "
+                "time-stepping -- the Fortran STOPs when IATS==0; (2) the ET "
+                "rates come from a separate external ETS time-series file "
+                "(unit IUETS) read progressively during the run, one "
+                "'Tstart Tend Factor Ets(1..MXZNEVT)' record at a time as the "
+                "simulation time reaches Tend; (3) IETSOPT=1 means the "
+                "time-series SUPERSEDES the array EVTR -- EVTR is recomputed each "
+                "step as etsevt(IZNEVT(n))*AREA*Factor, so it is not a "
+                "preservable array; and (4) per stress period an 'INEVTZONES' "
+                "flag (re)reads the IZNEVT zone-index array. FloPy models static "
+                "EVT I/O only; remove the ETS option (deferred -- Stage 4.6F-B)."
             )
 
         self.ietfactor = int(ietfactor or 0)
@@ -559,11 +568,21 @@ class MfUsgEvt(Package):
         ipakcb = int(t[1])
         ietfactor = type_from_iterable(t, 2)
 
-        # Options
+        # Options. ETS zonal time-series is a dynamic ATS-coupled execution mode
+        # (external IUETS time-series superseding the EVTR array), not static I/O;
+        # fail here, before reading any stress-period data, so nothing is parsed
+        # partially (see __init__ and Stage 4.6F-B for the full spec).
         mxetzones = 0
-        if "ETS" in t:
-            idx = t.index("ETS")
-            mxetzones = float(t[idx + 1])
+        if any(tok.upper() == "ETS" for tok in t):
+            if openfile:
+                f.close()
+            raise NotImplementedError(
+                "MfUsgEvt.load: EVT ETS zonal time-series ('ETS MXZNEVT') is not "
+                "supported -- it is an ATS-coupled dynamic mode reading an "
+                "external time-series file (IUETS) that supersedes the EVTR "
+                "array; FloPy models static EVT I/O only (deferred, Stage "
+                "4.6F-B)."
+            )
 
         # dataset 2b for mfusg
         if not model.structured and nevtop == 2:
@@ -613,6 +632,19 @@ class MfUsgEvt(Package):
         for iper in range(nper):
             line = f.readline()
             t = line.strip().split()
+            # The per-SP INEVTZONES flag belongs to the ETS zonal time-series
+            # mode (it (re)reads the IZNEVT zone-index array and drives the
+            # external ETS file). That mode is not modeled; fail explicitly here
+            # rather than mis-parsing the header (deferred, Stage 4.6F-B).
+            if any(tok.upper() == "INEVTZONES" for tok in t):
+                if openfile:
+                    f.close()
+                raise NotImplementedError(
+                    "MfUsgEvt.load: the per-stress-period 'INEVTZONES' flag is "
+                    "part of the EVT ETS zonal time-series mode (IZNEVT zone "
+                    "array + external ETS file), which is not supported -- FloPy "
+                    "models static EVT I/O only (deferred, Stage 4.6F-B)."
+                )
             insurf = int(t[0])
             inevtr = int(t[1])
             inexdp = int(t[2])
@@ -623,10 +655,6 @@ class MfUsgEvt(Package):
                     u2d_shape = (1, inievt)
             elif not model.structured:
                 u2d_shape = (1, ncol[0])
-
-            # if "INEVTZONES" in t:
-            #     idx = t.index("INEVTZONES")
-            #     inznevt[iper] = int(t[idx + 1])
 
             if insurf >= 0:
                 if model.verbose:

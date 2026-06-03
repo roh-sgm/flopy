@@ -792,6 +792,24 @@ honest, upstream-ready USG-T 2.7 story.
   **4**, combined **306** (ARM). EVT stays `✅ (intentionally not Full)` — the
   ETS-zonal time series (`ETS MXZNEVT`/`IZNEVT`) remains `NotImplementedError`
   (Stage 4.6F-B). See `USGT_STAGE4_EVT_FULLNESS.md`.
+- **Stage 4.6F-B — EVT ETS zonal time-series (deferred, executed):** closes the
+  last EVT gap with an honest decision. Fortran audit (`gwf2evt8u1.f`) shows
+  `ETS MXZNEVT` is an **ATS-coupled dynamic execution mode**, not static array
+  I/O: it requires adaptive time-stepping (the Fortran `STOP`s when `IATS==0`),
+  reads an **external `IUETS` time-series** progressively during the run
+  (`Tstart Tend Factor Ets(1..MXZNEVT)`), and with `IETSOPT=1` the time-series
+  **supersedes** the EVTR array (EVTR recomputed each step as
+  `etsevt(IZNEVT(n))*AREA*Factor`); a per-SP `INEVTZONES` flag (re)reads the
+  `IZNEVT` zone array. Modeling it would require authoring an external
+  time-series file *and* the ATS-coupled progressive read — outside FloPy's
+  static EVT I/O — so it is **deferred**. The single generic `NotImplementedError`
+  is replaced by specific per-branch failures (no partial parse): `__init__`
+  (`mxetzones>0`) cites the full spec; `load` rejects `ETS MXZNEVT` on item 2
+  before any stress-period parse; `load` rejects a per-SP `INEVTZONES` header.
+  `NPEVT` and plain EVT are unaffected. Only `mfusgevt.py` touched. 1 new test
+  (`test_mfusgevt_ets_zonal_deferred`); `-k mfusgevt` **16**, focused **303**,
+  exe **4**, combined **307** (ARM). EVT stays `✅ (intentionally not Full)` for
+  this one honest gap. Full spec: `USGT_STAGE4_16_EVT_ETS_ZONAL.md`.
 - **Card 3 — DPT `A-W_ADSORBIM`:** original decision was **explicitly
   unsupported** (deferred). Fortran audit of `dpt2aw_adsorb.f` (`AW_ADSORBIM1AL`)
   shows the option triggers a cascade of conditional arrays (zone map, tabular
