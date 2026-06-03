@@ -2,6 +2,14 @@
 
 Date: 2026-05-31
 
+> **Status (post-Stage 4.6G):** this plan has been **executed** — Stages
+> 4.6A–4.6G are done. Per-section "currently …" / "Target state …" notes below
+> describe the state *when the plan was written* and are now historical. The
+> authoritative final state is `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` (and the
+> `USGT_roadmap.md` coverage table). Notably DPT `A-W_ADSORBIM` is no longer
+> "explicit unsupported" — Stage 4.6E implemented the array-only branches (the
+> scalar/tabular branches stay deferred).
+
 Purpose: define the remaining work to move the fork from strong USG-T 2.7
 support to a more complete feature surface. Stage 3 closed the core
 upstream-readiness concerns around honest status, executable validation,

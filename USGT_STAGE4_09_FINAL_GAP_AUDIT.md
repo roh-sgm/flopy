@@ -2,6 +2,20 @@
 
 Date: 2026-06-02 · Base: `develop` @ `e0ea8073` (after Stage 4.5B + polish + cleanup)
 
+> **Final snapshot (post-Stage 4.6G).** The implementation cards proposed in this
+> audit have been executed: **4.6A** (STR/SUB/SWT guarded; SFR kept), **4.6B/C**
+> (DRT/HFB/SGB/QRT/ETS from-scratch parameter authoring), **4.6D** (LAK
+> multi-lake + sill/connectivity authoring), **4.6E** (DPT `A-W_ADSORBIM`
+> array-only), **4.6F-A** (EVT `NPEVT`), **4.6F-B** (EVT ETS-zonal deferred), and
+> **4.6G** (this P3 cleanup). **A1–A4 are closed**; the remaining inventory items
+> are **A5** (HFB `TRANSIENT_HFB`+`NPHFB>0`; parameter `INSTANCES` across the
+> list-parameter packages — Fortran-blocked / not yet authored) and the
+> intentionally-deferred caveats per package (DPT scalar/tabular `A-W_ADSORBIM`,
+> EVT ETS-zonal, parametric/multi-lake **exe** smokes). The package table and §3
+> below were updated in place to reflect this; the latest combined test count is
+> **307 passed** (USG-T 2.7 ARM). `USGT_roadmap.md` remains the authoritative
+> per-package status table.
+
 Purpose: before implementing more features, take stock of where FloPy stands on
 **programmatic authoring of USG-T 2.7 packages from scratch** (the primary Stage
 4 objective), classify every package, enumerate the concrete remaining gaps,

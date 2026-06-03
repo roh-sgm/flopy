@@ -100,7 +100,7 @@ print(all(m.mfnam_packages[k] is c for k,c in \
 | DRT | `gwf2drt8u.f` — `GWF2DRT8U1AR/RP`, `SGWF2DRT8LR` | Header `MXADRT IDRTCB NPDRT MXL`; line `ND EL COND NR [PROP] [IDCHNGTYP] [aux]`. `NR>0` single inline recipient; `NR<0` ⇒ `-NumRT` spreading nodes via `U1DINT` **immediately after that line** (interleaved). `NDRTVL=5+NAUX+2+IDRTFL`. |
 | BCF/LPF TABRICH | `gwf2bcf-lpf-u1.f` (BCF block ~L163–180, LPF block ~L3120) | After the option line, before LAYCON/LAYTYP: 1c `IUZONTAB` = `U1DINT(NODES)`; 1d `RETCRVS(3,NUTABROWS,NUZONES)` read zone-outer/row-inner, 3 free values per line = **capillary head / saturation / relative permeability**. Python shape `(nuzones, nutabrows, 3)`. |
 | BAS | `glo2basu1.f` L161 (`RICHARDS_HP` ⇒ IUNSat=1, IPRES=1), L184–198 (`IHM` then `IUIHM`) | option keywords on the BAS option line |
-| DPT | `gwt2dptu1.f` L135 (`A-W_ADSORBIM`), `dpt2aw_adsorb.f` | option triggers extra arrays — unsupported, explicit fail on load |
+| DPT | `gwt2dptu1.f` L135 (`A-W_ADSORBIM`), `dpt2aw_adsorb.f` | option triggers extra arrays — array-only branches implemented (Stage 4.6E); scalar/tabular branches explicit-fail |
 
 Indexing contract (verify in the writers/loaders): internal `node` and
 recipient values are **0-based**; files are read/written **1-based**.
@@ -111,7 +111,23 @@ recipient values are **0-based**; files are read/written **1-based**.
 ## 5. Design decisions & explicit-failure scope cuts
 
 Per the USG-T design rules, unsupported sub-modes **fail explicitly** rather
-than write incomplete / mis-parse:
+than write incomplete / mis-parse.
+
+> **Updated (Stages 4.4–4.6):** several of the *original* scope-cuts listed below
+> have since been closed — `NPSGB`/`NPQRT`/`NPDRT`/`NPHFB`/`NPETS`/`NPEVT` named
+> parameters are now preserved **and** authored from scratch (Stages 4.4 /
+> 4.6B–4.6F-A); QRT inline `TRANSIENTQ` (4.5A) and DRT/QRT recipient
+> `EXTERNAL`/`OPEN-CLOSE` (4.5B, free-format) are supported; DPT `A-W_ADSORBIM`
+> array-only branches are implemented (4.6E). The list below is the original
+> scope; the **authoritative current state** is `USGT_roadmap.md` /
+> `USGT_STAGE4_09_FINAL_GAP_AUDIT.md`. The explicit failures that *remain* are the
+> per-package caveats recorded there: parameter `INSTANCES` (list packages), SGB
+> active params (Fortran `SGB`/`G` conflict), `TRANSIENT_HFB`+`NPHFB>0`,
+> `TRANSIENTQ`+`NPQRT>0` / external-unit `TRANSIENTQ`, DPT `A-W_ADSORBIM`
+> scalar/tabular branches (`IAREA_FNIM ∈ {2,3,5}`, `IKAWI_FNIM ∈ {3,4}`), EVT
+> ETS-zonal time-series (`ETS MXZNEVT`), and STR/SUB/SWT on unstructured `MfUsg`.
+
+Original scope-cuts (the design intent; see the note above for current state):
 
 - Named parameters: `NPSGB>0`, `NPQRT>0`, `NPDRT>0` → `NotImplementedError`.
 - QRT `TRANSIENTQ` (transient-flow time series) → `NotImplementedError`.
@@ -121,10 +137,16 @@ than write incomplete / mis-parse:
 - HFB `NPHFB>0` → `NotImplementedError` (load + write).
 - DPT `A-W_ADSORBIM` → `NotImplementedError` (load).
 
-Intentionally **Partial** (not `Full`), documented in the roadmap:
-ETS parameter-syntax preservation; HFB parameterized barriers; DPT air-water
-adsorption; LAK from-scratch authoring (validated via `Ex8` round-trip);
-SFR/STR/GAGE/FHB/SUB/SWT are compatibility-only (base classes).
+Intentionally **Partial** / not `Full`, documented in the roadmap. Current
+reasons (post-4.6): **ETS** — only ETSR is parameterizable (Fortran limit) and
+parametric execution is not exe-smoke-tested (preservation + from-scratch
+authoring done); **HFB** — `TRANSIENT_HFB`+`NPHFB>0` and parameter `INSTANCES`;
+**DPT** — `A-W_ADSORBIM` scalar/tabular branches (array-only done); **LAK** —
+TABLEINPUT table contents external, GAGE separate, multi-lake-with-sill
+from-scratch execution not exe-smoke-tested (authoring done); **EVT** — ETS-zonal
+time-series (ATS-coupled). **SFR/FHB/GAGE** are compatibility base classes;
+**STR/SUB/SWT** are compatibility-only **guarded** on unstructured `MfUsg`
+(Stage 4.6A).
 
 `MfUsgDrt`: new class subclassing `ModflowDrt`; **structured (DIS) grids
 delegate to the base class** (USG-T extensions are unstructured-only).

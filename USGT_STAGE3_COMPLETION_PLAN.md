@@ -139,7 +139,9 @@ Packages: `ETS`, `HFB`, `SGB`, `QRT`, `DRT`
 Goal: decide and implement one consistent v1 policy for MODFLOW-style
 parameters.
 
-Current state:
+Current state (at the start of Stage 3 — **now historical**; the Stage 4.4/4.6
+parameter work has since preserved + authored these. Authoritative state:
+`USGT_roadmap.md` / `USGT_STAGE4_09_FINAL_GAP_AUDIT.md`):
 
 - `ETS`: parameterized input loads and writes expanded `NPETS=0`.
 - `HFB`: `NPHFB>0` fails explicitly.

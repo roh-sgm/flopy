@@ -145,7 +145,10 @@ round-trip for no-transport, classic transport, `TRANSPORTBOUNDARY` (MCOMP>1),
 and `TABLEINPUT`. Kept the `Ex8_Lake` real-model round-trip/run (no synthetic LAK
 exe smoke — Ex8 covers execution). Kept LAK `✅ (intentionally not Full)` (gaps:
 sill/connectivity + multi-lake systems not authored from scratch; TABLEINPUT
-table contents external; GAGE separate).
+table contents external; GAGE separate). **(Superseded by Stage 4.6D:
+sill/connectivity + multi-lake are now authored from scratch and validated; the
+remaining gaps are TABLEINPUT contents, GAGE, and from-scratch multi-lake
+execution — see `USGT_STAGE4_15_LAK_MULTILAKE_CONNECTIVITY.md`.)**
 
 **Review follow-up (executed).** Hardened three from-scratch authoring inputs
 that `__init__` accepted but `write_file()` then crashed on with a raw

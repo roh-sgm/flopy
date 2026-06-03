@@ -670,8 +670,12 @@ FloPy class: `MfUsgDpt`
 Fortran: `gwt2dptu1.f`, `dpt2aw_adsorb.f`
 
 Status: **Reviewed** (2026-05-30). DLIM requires `IDPF/=0 AND IDISPIM/=0`; the
-immobile air-water adsorption option `A-W_ADSORBIM` now fails explicitly on
-load instead of silently shifting reads.
+immobile air-water adsorption option `A-W_ADSORBIM` originally failed explicitly
+on load instead of silently shifting reads. **Updated by Stage 4.6E:** the
+array-only function-index branches (`IAREA_FNIM ∈ {1,4}` × `IKAWI_FNIM ∈ {1,2}`)
+are now authored/loaded/written; the scalar/tabular branches (`{2,3,5}` / `{3,4}`)
+still raise a specific `NotImplementedError`. See
+`USGT_STAGE4_06_DPT_AW_ADSORBIM.md`.
 
 Problem:
 
