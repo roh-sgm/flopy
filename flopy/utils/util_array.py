@@ -46,7 +46,8 @@ class ArrayFormat:
     width : int
         the width of the formatted numeric output
     decimal : int
-        the number of decimal digits in the numeric output
+        the number of decimal digits in the numeric output (digits after the
+        point in d.dddE notation, so significant digits = decimal + 1)
     format : str
         the output format type e.g. I, G, E, etc
     free : bool
@@ -57,7 +58,7 @@ class ArrayFormat:
 
     Methods
     -------
-    get_default_numpy_fmt : (dtype : [np.int32, np.float32])
+    get_default_numpy_fmt : (dtype : [np.int32, np.float32, np.float64])
         a static method to get a default numpy dtype - used for loading
     decode_fortran_descriptor : (fd : str)
         a static method to decode fortran descriptors into npl, format,
@@ -68,6 +69,10 @@ class ArrayFormat:
 
     Notes
     -----
+    np.float64 arrays default to E24.16 (17 significant digits, enough for
+    a correctly rounded read to return the same float64 value). A custom
+    format with fewer digits (e.g. fortran="(10E15.6)" or an F format) is
+    honored as given and rounds the values written.
 
     Examples
     --------
@@ -101,6 +106,9 @@ class ArrayFormat:
         self.default_int_format = "I"
         self.default_float_decimal = 6
         self.default_int_decimal = 0
+        # float64: 1 + 16 decimals = 17 significant digits (round-trip)
+        self.default_double_width = 24
+        self.default_double_decimal = 16
 
         self._fmts = ["I", "G", "E", "F"]
 
@@ -137,6 +145,11 @@ class ArrayFormat:
             self._format = self.default_float_format
             self._width = self.default_float_width
             self._decimal = self.default_float_decimal
+        elif self.dtype == np.float64:
+            self._npl = self._npl_full
+            self._format = self.default_float_format
+            self._width = self.default_double_width
+            self._decimal = self.default_double_decimal
         else:
             raise Exception(
                 f"ArrayFormat._set_defaults() error: unsupported dtype: {self.dtype!s}"
@@ -155,10 +168,12 @@ class ArrayFormat:
             return "%10d"
         elif dtype == np.float32:
             return "%15.6E"
+        elif dtype == np.float64:
+            return "%24.16E"
         else:
             raise Exception(
                 "ArrayFormat.get_default_numpy_fmt(): unrecognized "
-                "dtype, must be np.int32 or np.float32"
+                "dtype, must be np.int32, np.float32 or np.float64"
             )
 
     @classmethod
@@ -228,6 +243,10 @@ class ArrayFormat:
                     f"than default of {self.default_float_width}"
                 )
                 self._width = width
+            elif self.dtype == np.float64:
+                if width < self.decimal:
+                    raise Exception("width cannot be less than decimal")
+                self._width = width
         elif key == "decimal":
             if self.dtype == np.int32:
                 raise Exception("cannot set decimal for integer dtypes")
@@ -244,6 +263,14 @@ class ArrayFormat:
                         f"current value of {self.default_float_decimal}"
                     )
                 self._decimal = int(value)
+            elif self.dtype == np.float64:
+                value = int(value)
+                if value < self.default_double_decimal:
+                    warn(
+                        f"ArrayFormat: {value} decimals give {value + 1} significant "
+                        "digits; float64 values may not round-trip (17 needed)"
+                    )
+                self._decimal = value
             else:
                 raise TypeError(self.dtype)
 
@@ -410,6 +437,30 @@ class ArrayFormat:
         raise Exception(f"Unrecognized format type: {fd} looking for: {fmts}")
 
 
+def _float32_exact(value):
+    """True if a real value is exactly representable as REAL (float32)."""
+    return bool(np.float64(np.float32(value)) == np.float64(value))
+
+
+def _real_field(value, width):
+    """Shortest text that reads back as the same REAL (float32) value and
+    fits in ``width`` characters; used for control-record multipliers and
+    constants, which the double-precision readers hold as REAL."""
+    v = np.float32(value)
+    for text in (
+        np.format_float_positional(v, unique=True, trim="0"),
+        np.format_float_scientific(v, unique=True, trim="0", exp_digits=2),
+    ):
+        if len(text) <= width:
+            return text
+    raise ValueError(f"REAL value {value!r} does not fit in {width} characters")
+
+
+def _header_precision(dtype):
+    """Binary array header layout read by the REAL / REAL*8 array readers."""
+    return "double" if dtype == np.float64 else "single"
+
+
 def read1d(f, a):
     """
     Fill the 1d array, a, with the correct number of values.  Required in
@@ -458,7 +509,7 @@ class Util3d(DataInterface):
         this package will be added.
     shape : length 3 tuple
         shape of the 3-D array, typically (nlay,nrow,ncol)
-    dtype : [np.int32, np.float32, bool]
+    dtype : [np.int32, np.float32, np.float64, bool]
         the type of the data
     value : variable
         the data to be assigned to the 3-D array.
@@ -1795,8 +1846,10 @@ class Util2d(DataInterface):
         this package will be added.
     shape : tuple
         Shape of the 1- or 2-D array
-    dtype : [np.int32, np.float32, bool]
-        the type of the data
+    dtype : [np.int32, np.float32, np.float64, bool]
+        the type of the data; np.float64 is for arrays read in double
+        precision (U1DREL8/U2DREL8), whose control-record multiplier and
+        CONSTANT value are REAL (single precision)
     value : variable
         the data to be assigned to the 1- or 2-D array.
         can be a scalar, list, ndarray, or filename
@@ -1889,7 +1942,7 @@ class Util2d(DataInterface):
         model : model object
         shape : tuple
             Dimensions of 1- or 2-D array, e.g. (nrow, ncol)
-        dtype : int or np.float32
+        dtype : int, np.float32 or np.float64
         value : str, list, np.int32, np.float32, bool or np.ndarray
         name : str
             Array name or description
@@ -1941,7 +1994,7 @@ class Util2d(DataInterface):
                     f"for array {name}"
                 )
             dtype = np.int32
-        if dtype not in [np.int32, np.float32, bool]:
+        if dtype not in [np.int32, np.float32, np.float64, bool]:
             raise TypeError(f"Util2d:unsupported dtype: {dtype!s}")
 
         if name is not None:
@@ -2007,6 +2060,11 @@ class Util2d(DataInterface):
         # if a constant was passed in
         if self.vtype in [np.int32, np.float32]:
             self._how = "constant"
+        elif self.vtype == np.float64:
+            if _float32_exact(self.__value):
+                self._how = "constant"
+            else:
+                self._how = "internal"
         # if a filename was passed in or external path was set
         elif (
             self._model is not None and self._model.external_path is not None
@@ -2270,6 +2328,14 @@ class Util2d(DataInterface):
             self._how = value
         elif key == "model":
             self._model = value
+        elif (
+            key == "cnstnt"
+            and getattr(self, "_dtype", None) == np.float64
+            and not isinstance(value, str)
+        ):
+            # the control record multiplier (CNSTNT) is REAL in the
+            # double-precision readers (U1DREL8/U2DREL8)
+            super().__setattr__(key, np.float32(value))
         else:
             super().__setattr__(key, value)
 
@@ -2379,10 +2445,14 @@ class Util2d(DataInterface):
             cr = "{:>10.0f}{:>10.5G}{:>19s}{:>10.0f} #{}\n".format(
                 locat, value, fformat, self.iprn, self._name
             )
+        elif self._dtype == np.float64:
+            cr = "{:>10.0f}{:>10s}{:>19s}{:>10.0f} #{}\n".format(
+                locat, _real_field(value, 10), fformat, self.iprn, self._name
+            )
         else:
             raise Exception(
                 "Util2d: error generating fixed-format control record, "
-                "dtype must be np.int32 or np.float32"
+                "dtype must be np.int32, np.float32 or np.float64"
             )
         return cr
 
@@ -2399,6 +2469,8 @@ class Util2d(DataInterface):
     def cnstnt_str(self):
         if isinstance(self.cnstnt, str):
             return self.cnstnt
+        elif self._dtype == np.float64:
+            return f"{_real_field(self.cnstnt, 15):>15s}"
         else:
             return f"{self.cnstnt:15.6G}"
 
@@ -2423,11 +2495,52 @@ class Util2d(DataInterface):
         else:
             return self._get_fixed_cr(locat)
 
+    def _constant_value(self):
+        if self.vtype not in [np.int32, np.float32, np.float64]:
+            u = np.unique(self._array)
+            assert u.shape[0] == 1, (
+                "Util2d error: 'how' is constant, but array is not uniform"
+            )
+            return u[0]
+        return self.__value
+
+    def check_real_fields(self, how=None):
+        """Raise, without writing anything, the errors that get_file_entry
+        raises for a float64 array: binary output (not implemented), a
+        CONSTANT value that is not exact as REAL, and REAL constant or
+        multiplier text that does not fit its control-record field.
+        Does nothing for other dtypes."""
+        if self._dtype != np.float64:
+            return
+        if self.format.binary:
+            raise NotImplementedError(
+                f"Util2d {self._name}: double-precision binary array output "
+                "is not implemented"
+            )
+        how = self._how if how is None else how.lower()
+        if self._model is not None and self._model.external_path:
+            if how in {"constant", "internal"}:
+                how = "external"
+        free = self.format.array_free_format
+        if how == "constant":
+            value = self._constant_value()
+            if not _float32_exact(value):
+                raise ValueError(
+                    f"Util2d {self._name}: CONSTANT {value!r} is read as REAL "
+                    "(single precision); use how='internal'"
+                )
+            if not free:
+                _real_field(value, 10)
+        elif not isinstance(self.cnstnt, str):
+            _real_field(self.cnstnt, 15 if free else 10)
+
     def get_file_entry(self, how=None):
         if how is not None:
             how = how.lower()
         else:
             how = self._how
+
+        self.check_real_fields(how)
 
         if not self.format.array_free_format and self.format.free:
             print(f"Util2d {self._name}: can't be free format...resetting")
@@ -2523,15 +2636,7 @@ class Util2d(DataInterface):
                 return self.get_openclose_cr()
 
         elif how == "constant":
-            if self.vtype not in [np.int32, np.float32]:
-                u = np.unique(self._array)
-                assert u.shape[0] == 1, (
-                    "Util2d error: 'how' is constant, but array is not uniform"
-                )
-                value = u[0]
-            else:
-                value = self.__value
-            return self.get_constant_cr(value)
+            return self.get_constant_cr(self._constant_value())
 
         else:
             raise Exception(f"Util2d.get_file_entry() error: unrecognized 'how':{how}")
@@ -2605,17 +2710,19 @@ class Util2d(DataInterface):
         """
         if self.vtype == str:
             if self.__value_built is None:
-                file_in = open(self.__value, "r")
-
-                if self.format.binary:
-                    header, self.__value_built = Util2d.load_bin(
-                        self.shape, file_in, self._dtype, bintype="head"
-                    )
-                else:
-                    self.__value_built = Util2d.load_txt(
-                        self.shape, file_in, self._dtype, self.format.fortran
-                    ).astype(self._dtype)
-                file_in.close()
+                with open(self.__value, "r") as file_in:
+                    if self.format.binary:
+                        header, self.__value_built = Util2d.load_bin(
+                            self.shape,
+                            file_in,
+                            self._dtype,
+                            bintype="head",
+                            header_precision=_header_precision(self._dtype),
+                        )
+                    else:
+                        self.__value_built = Util2d.load_txt(
+                            self.shape, file_in, self._dtype, self.format.fortran
+                        ).astype(self._dtype)
             return self.__value_built
         elif self.vtype != np.ndarray:
             if self.__value_built is None:
@@ -2813,7 +2920,7 @@ class Util2d(DataInterface):
         return s
 
     @staticmethod
-    def load_bin(shape, file_in, dtype, bintype=None):
+    def load_bin(shape, file_in, dtype, bintype=None, header_precision="single"):
         """Load unformatted file to a 2-D array
 
         Parameters
@@ -2827,6 +2934,9 @@ class Util2d(DataInterface):
             Fortran's INTEGER, and np.float32 for Fortran's REAL data types.
         bintype : str
             Normally 'Head'
+        header_precision : str
+            'single' (default) or 'double' header layout; the double layout
+            (REAL*8 PERTIM/TOTIM, 52 bytes) is read by U1DREL8/U2DREL8
 
         Notes
         -----
@@ -2851,13 +2961,21 @@ class Util2d(DataInterface):
         openfile = not hasattr(file_in, "read")
         if openfile:
             file_in = open(file_in, "rb")
-        header_data = None
-        if bintype is not None and np.issubdtype(dtype, np.floating):
-            header_dtype = bf.BinaryHeader.set_dtype(bintype=bintype)
-            header_data = np.fromfile(file_in, dtype=header_dtype, count=1)
-        data = np.fromfile(file_in, dtype=dtype, count=num_items)
-        if openfile:
-            file_in.close()
+        try:
+            header_data = None
+            if bintype is not None and np.issubdtype(dtype, np.floating):
+                header_dtype = bf.BinaryHeader.set_dtype(
+                    bintype=bintype, precision=header_precision
+                )
+                header_data = np.fromfile(file_in, dtype=header_dtype, count=1)
+                if header_precision == "double" and header_data.size != 1:
+                    raise ValueError(
+                        "Util2d.load_bin(): truncated double-precision header"
+                    )
+            data = np.fromfile(file_in, dtype=dtype, count=num_items)
+        finally:
+            if openfile:
+                file_in.close()
         if data.size != num_items:
             raise ValueError(
                 f"Util2d.load_bin(): expected array size {num_items}, "
@@ -2936,6 +3054,13 @@ class Util2d(DataInterface):
                     raise Exception(
                         f'Util2d:could not cast scalar value to type "float": {value}'
                     )
+            elif self._dtype == np.float64:
+                try:
+                    self.__value = np.float64(value)
+                except:
+                    raise Exception(
+                        f'Util2d:could not cast scalar value to type "float": {value}'
+                    )
 
         elif isinstance(value, np.ndarray):
             # if value is 3d, but dimension 1 is only length 1,
@@ -2970,10 +3095,18 @@ class Util2d(DataInterface):
         ext_unit_dict=None,
         array_free_format=None,
         array_format="modflow",
+        binary_multiplier=True,
+        binary_negative_unit_only=False,
     ):
         """
         functionality to load Util2d instance from an existing
         model input file.
+        binary_multiplier=False reproduces U1DREL/U1DREL8, which return
+        after reading binary data without applying CNSTNT.
+        binary_negative_unit_only=True rejects binary records that U1DREL
+        and U1DREL8 cannot read: they read binary data only through a
+        negative unit (EXTERNAL or fixed-format LOCAT), never through
+        OPEN/CLOSE or a positive unit with (BINARY).
         external and internal record types must be fully loaded
         if you are using fixed format record types,make sure
         ext_unit_dict has been initialized from the NAM file
@@ -3001,11 +3134,15 @@ class Util2d(DataInterface):
         )
 
         if cr_dict["type"] == "constant":
+            value = cr_dict["cnstnt"]
+            if dtype == np.float64:
+                # CNSTNT is REAL in U1DREL8/U2DREL8
+                value = np.float64(np.float32(value))
             u2d = cls(
                 model,
                 shape,
                 dtype,
-                cr_dict["cnstnt"],
+                value,
                 name=name,
                 iprn=cr_dict["iprn"],
                 fmtin="(FREE)",
@@ -3025,14 +3162,23 @@ class Util2d(DataInterface):
                 f"Util2d.load() error: open/close file {fname} not found"
             )
             if "binary" not in cr_dict["fmtin"].lower():
-                f = open(fname, "r")
-                data = Util2d.load_txt(
-                    shape=shape, file_in=f, dtype=dtype, fmtin=cr_dict["fmtin"]
-                )
+                with open(fname, "r") as f:
+                    data = Util2d.load_txt(
+                        shape=shape, file_in=f, dtype=dtype, fmtin=cr_dict["fmtin"]
+                    )
             else:
-                f = open(fname, "rb")
-                header_data, data = Util2d.load_bin(shape, f, dtype, bintype="Head")
-            f.close()
+                if binary_negative_unit_only:
+                    raise ValueError(
+                        f"Util2d.load(): {name}: OPEN/CLOSE (BINARY) is not "
+                        "read as binary by the 1-D array readers"
+                    )
+                header_data, data = Util2d.load_bin(
+                    shape,
+                    fname,
+                    dtype,
+                    bintype="Head",
+                    header_precision=_header_precision(dtype),
+                )
             u2d = cls(
                 model,
                 shape,
@@ -3073,12 +3219,30 @@ class Util2d(DataInterface):
                     shape, ext_unit.filehandle, dtype, cr_dict["fmtin"]
                 )
             else:
+                if binary_negative_unit_only and not cr_dict["negative_unit"]:
+                    raise ValueError(
+                        f"Util2d.load(): {name}: binary data on positive unit "
+                        f"{cr_dict['nunit']} is not read as binary by the 1-D "
+                        "array readers (a negative unit is required)"
+                    )
                 if cr_dict["nunit"] not in list(ext_unit_dict.keys()):
                     cr_dict["nunit"] *= -1
                 assert cr_dict["nunit"] in list(ext_unit_dict.keys())
                 header_data, data = Util2d.load_bin(
-                    shape, ext_unit.filehandle, dtype, bintype="Head"
+                    shape,
+                    ext_unit.filehandle,
+                    dtype,
+                    bintype="Head",
+                    header_precision=_header_precision(dtype),
                 )
+                if not binary_multiplier:
+                    if cr_dict["cnstnt"] not in (0.0, 1.0):
+                        warn(
+                            f"Util2d.load(): {name}: multiplier "
+                            f"{cr_dict['cnstnt']} is not applied to binary data "
+                            "by the 1-D array readers"
+                        )
+                    cr_dict["cnstnt"] = 1.0
             u2d = cls(
                 model,
                 shape,
@@ -3127,8 +3291,9 @@ class Util2d(DataInterface):
         raw = line.strip().split()
         freefmt, cnstnt, fmtin, iprn, nunit = None, None, None, -1, None
         fname = None
+        negative_unit = False
         isfloat = False
-        if dtype == float or dtype == np.float32:
+        if dtype == float or dtype == np.float32 or dtype == np.float64:
             isfloat = True
             # if free format keywords
         if str(raw[0].lower()) in str(free_fmt):
@@ -3147,6 +3312,19 @@ class Util2d(DataInterface):
                 iprn = 0
                 if len(raw) >= 4:
                     iprn = int(raw[3])
+            elif raw[0].lower() == "external" and int(raw[1]) < 0:
+                # negative unit: binary; FMTIN and IPRN are not read
+                negative_unit = True
+                nunit = -int(raw[1])
+                if ext_unit_dict is not None and nunit in ext_unit_dict:
+                    fname = ext_unit_dict[nunit].filename.strip()
+                cnstnt = 0.0 if isfloat else 0
+                if len(raw) >= 3 and not raw[2].startswith("#"):
+                    if isfloat:
+                        cnstnt = float(raw[2].lower().replace("d", "e"))
+                    else:
+                        cnstnt = int(raw[2].lower())
+                fmtin = "(BINARY)"
             elif raw[0].lower() == "external":
                 nunit = abs(int(raw[1]))
                 if ext_unit_dict is not None:
@@ -3199,6 +3377,7 @@ class Util2d(DataInterface):
                 freefmt = "constant"
             elif locat < 0:
                 freefmt = "external"
+                negative_unit = True
                 nunit = int(locat) * -1
                 fmtin = "(binary)"
             elif locat > 0:
@@ -3231,4 +3410,5 @@ class Util2d(DataInterface):
         cr_dict["iprn"] = iprn
         cr_dict["fmtin"] = fmtin
         cr_dict["fname"] = fname
+        cr_dict["negative_unit"] = negative_unit
         return cr_dict

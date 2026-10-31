@@ -4,11 +4,240 @@ the MfusgOc class as `flopy.mfusg.MfusgOc`.
 
 """
 
+import math
 import os
+import re
+from decimal import Decimal, localcontext
+from itertools import pairwise
+from numbers import Real
+
+import numpy as np
 
 from ..pakbase import Package
 from ..utils.utils_def import type_from_iterable
 from .mfusg import MfUsg
+
+# reuse the URWORD REAL helpers of the DIS stress-period records
+from .mfusgdis import _REAL_WORD, _stofrac_from_word, _stofrac_word
+
+_ATS_WORDS = ("DELTAT", "TMINAT", "TMAXAT", "TADJAT", "TCUTAT")
+# ATS1RP replaces values below these limits by the defaults (glo2basu1.f);
+# the limits and defaults are REAL constants
+_ATS_LIMITS = {
+    "DELTAT": (float(np.float32(1.0e-20)), "1.0"),
+    "TMINAT": (float(np.float32(1.0e-20)), "1.0E-10"),
+    "TMAXAT": (float(np.float32(1.0e-20)), "1.0E10"),
+    "TADJAT": (1.0, "2.0"),
+    "TCUTAT": (1.0, "5.0"),
+}
+_OC_OPTIONS = (
+    "ATS",
+    "ATSA",
+    "NPTIMES",
+    "NPSTPS",
+    "FASTFORWARD",
+    "FASTFORWARDC",
+    "BOOTSTRAPPING",
+)
+# first words USG-T reads as numeric output control although they are options
+_NUMERIC_FIRST = ("ATS", "NPTIMES", "NPSTPS")
+# TMINAT when TIMOT is read (PTIMES1RP) and TIMOT(NPTIMES+1)
+_TIMOT_GAP = float(np.float32(1.0e-10))
+_TIMOT_END = float(np.float32(1.0e20))
+
+
+def _ats_real(word, name):
+    """REAL value of an ATS parameter word as USG-T reads it (URWORD)."""
+    try:
+        return _stofrac_from_word(word, 0)
+    except ValueError:
+        raise ValueError(
+            f"MfUsgOc: {name} {word!r} is not a finite REAL number USG-T can "
+            "read (or it is beyond the REAL range)"
+        ) from None
+
+
+def _timot_value(word):
+    """DOUBLE value of a TIMOT word (list-directed READ)."""
+    m = _REAL_WORD.match(word)
+    if m is None:
+        raise ValueError(
+            f"MfUsgOc: TIMOT {word!r} is not supported: numbers separated by "
+            "blanks, tabs or commas are read; repeat counts, null values, '/', "
+            "quotes and comments are not"
+        )
+    mantissa, e1, e2 = m.groups()
+    with localcontext() as ctx:
+        ctx.prec = 400
+        value = float(Decimal(mantissa).scaleb(int(e1 or e2 or 0)))
+    if not math.isfinite(value):
+        raise ValueError(f"MfUsgOc: TIMOT {word!r} is beyond the DOUBLE range")
+    return value
+
+
+def _read_timot(f, nptimes):
+    """Read the NPTIMES output times that follow the first OC record like
+    USG-T (PTIMES1RP, list-directed READ of DOUBLE values over as many lines
+    as needed)."""
+    timot = []
+    while len(timot) < nptimes:
+        line = f.readline()
+        if not line:
+            raise ValueError(
+                f"MfUsgOc: end of file while reading {nptimes} TIMOT values"
+            )
+        words = re.split(r"\s*,\s*|\s+", line.strip())
+        if words[-1] == "" and len(words) > 1:
+            words.pop()  # a comma that ends the line
+        if words == [""]:
+            continue  # blank line
+        if "" in words:
+            raise ValueError(
+                f"MfUsgOc: TIMOT line {line.strip()!r} has a null value (not supported)"
+            )
+        timot += [_timot_value(w) for w in words]
+    if len(timot) > nptimes:
+        raise ValueError(
+            f"MfUsgOc: the TIMOT lines have {len(timot)} values but NPTIMES is "
+            f"{nptimes} (USG-T would ignore the extra values)"
+        )
+    return timot
+
+
+def _ats_action(text):
+    """'NAME value' for an OC action whose first word is DELTAT, TMINAT,
+    TMAXAT, TADJAT or TCUTAT (URWORD: blanks, tabs and commas separate words,
+    any case), once the value is a REAL USG-T reads; None for other actions."""
+    words = [w for w in re.split(r"[\s,]+", text.strip().upper()) if w]
+    if not words or words[0] not in _ATS_WORDS:
+        return None
+    if len(words) < 2:
+        raise ValueError(f"MfUsgOc: {words[0]} needs a value")
+    _ats_real(words[1], words[0])
+    return f"{words[0]} {words[1]}"
+
+
+def _first_record_words(line):
+    """Upper-case words of the first OC record as USG-T scans it for options:
+    blanks, tabs and commas separate words, URWORD reads the first 399
+    characters and the scan stops after the word that ends at column 198 or
+    later (LLOC >= 200); options beyond that point are blanked (their values
+    are kept in place)."""
+    words = []
+    scanned = True
+    for m in re.finditer(r"[^\s,]+", line[:399]):
+        word = m.group().upper()
+        words.append(word if scanned or word not in _OC_OPTIONS else "")
+        if m.end() >= 198:
+            scanned = False
+    return words
+
+
+class _NumericAts:
+    """Numeric output control with ATS records (ATS1RP) written as words.
+
+    The word form keeps the values USG-T uses: ATS1RP replaces values below
+    its limits by the defaults and sets DELTAT=PERLEN in steady-state periods,
+    which the word form does not do. Cases the word form cannot represent are
+    rejected before anything is lost.
+    """
+
+    def __init__(self, model, kwargs, words):
+        if not model.free_format_input:
+            raise NotImplementedError(
+                "MfUsgOc: numeric OC with ATS records in fixed format "
+                "(5F10.3,4I10) is not supported"
+            )
+        for name in ("FASTFORWARD", "FASTFORWARDC", "BOOTSTRAPPING"):
+            if name in words:
+                raise NotImplementedError(
+                    f"MfUsgOc: numeric OC with ATS records and {name} is not supported"
+                )
+        if model.itrnsp or model.icln or model.idpf:
+            raise NotImplementedError(
+                "MfUsgOc: numeric OC with ATS records is supported for flow "
+                "models without transport, CLN or DPF only"
+            )
+        dis = model.get_package("DIS")
+        if dis is None:
+            dis = model.get_package("DISU")
+        self.perlen = dis.perlen.array
+        self.steady = dis.steady.array
+        self.nptimes = kwargs["nptimes"]
+        # TIMOT(1..NPTIMES+1) as ATS1RP reads it
+        self.timot = [None] + list(kwargs["timot"] or []) + [_TIMOT_END]
+        self.npstps = set()
+
+    def record(self, line, kper):
+        """Word actions for the ATS record of stress period kper."""
+        # upper case like the word form loaded from a file
+        words = [w.upper() for w in re.split(r"[\s,]+", line.strip()) if w]
+        if len(words) < 5:
+            raise ValueError(
+                f"MfUsgOc: ATS record of stress period {kper + 1} must give "
+                "DELTAT TMINAT TMAXAT TADJAT TCUTAT"
+            )
+        nptk, npsk, iboot, ibootscale = [int(w) for w in (words[5:9] + ["0"] * 4)[:4]]
+        if nptk != self.nptimes:
+            raise NotImplementedError(
+                f"MfUsgOc: ATS record of stress period {kper + 1} has NPTIMES "
+                f"{nptk}, but the first line has NPTIMES {self.nptimes}; "
+                "per-period values are not supported"
+            )
+        if iboot or ibootscale:
+            raise NotImplementedError(
+                f"MfUsgOc: ATS record of stress period {kper + 1}: IBOOT and "
+                "IBOOTSCALE other than 0 are not supported"
+            )
+        self.npstps.add(npsk)
+        text = {}
+        for name, word in zip(_ATS_WORDS, words[:5]):
+            limit, default = _ATS_LIMITS[name]
+            if _ats_real(word, name) < limit:
+                word = default
+            text[name] = word
+        kp = kper + 1
+        if self.steady[kper]:
+            # DELTAT = PERLEN; a value at or above PERLEN is cut to PERLEN
+            up = np.nextafter(np.float32(self.perlen[kper]), np.float32(np.inf))
+            text["DELTAT"] = _stofrac_word(up).upper()
+        elif self.nptimes > 0:
+            if kp > self.nptimes + 1:
+                raise NotImplementedError(
+                    f"MfUsgOc: ATS record of stress period {kp}: USG-T reads "
+                    "TIMOT beyond NPTIMES+1 for its first time step"
+                )
+            cap = self.timot[1] if kp == 1 else self.timot[kp] - self.timot[kp - 1]
+            if _ats_real(text["DELTAT"], "DELTAT") > cap:
+                raise NotImplementedError(
+                    f"MfUsgOc: ATS record of stress period {kp}: DELTAT is "
+                    "limited by TIMOT in numeric OC only (not supported)"
+                )
+        return [f"{name} {text[name]}" for name in _ATS_WORDS]
+
+    def flags(self, kper, words, incode, ihddfl, icbcfl, ioflg=()):
+        """Reject numeric flags the word form would change."""
+        msg = f"MfUsgOc: numeric OC with ATS records, stress period {kper + 1}: "
+        if len(words) > 4:
+            raise NotImplementedError(msg + "transport flags are not supported")
+        if incode < 0:
+            raise NotImplementedError(msg + "INCODE < 0 is not supported")
+        if icbcfl == 2:
+            raise NotImplementedError(msg + "ICBCFL = 2 is not supported")
+        if ihddfl == 0 and any(ioflg):
+            raise NotImplementedError(
+                msg + "IHDDFL = 0 with head or drawdown flags is not supported"
+            )
+
+    def npsteps(self):
+        """NPSTPS common to all ATS records (it replaces the first-line value
+        from stress period 1 on); 0 means no output cadence."""
+        if len(self.npstps) > 1:
+            raise NotImplementedError(
+                f"MfUsgOc: ATS records with different NPSTPS {sorted(self.npstps)} "
+                "are not supported"
+            )
+        return self.npstps.pop() if self.npstps else 0
 
 
 class MfUsgOc(Package):
@@ -60,6 +289,17 @@ class MfUsgOc(Package):
     unitnumber : list of ints
         (default is [14, 51, 52, 53, 0]).
     filenames : str or list of str
+    atsa : int, optional keyword (default is 0)
+        1 turns on adaptive time stepping (ATSA). USG-T also turns it on when
+        nptimes or npsteps is positive, and so does write_file.
+    nptimes : int, optional keyword (default is 0)
+        Number of output times (NPTIMES).
+    npsteps : int, optional keyword (default is 0)
+        Output every npsteps time steps (NPSTPS); 0 writes no NPSTPS.
+    timot : sequence of float, optional keyword
+        The nptimes output times (TIMOT), increasing by more than 1.0E-10.
+        They are written once, after the first line, with their full double
+        precision value.
 
     Attributes
     ----------
@@ -76,6 +316,17 @@ class MfUsgOc(Package):
     available.  Also, the "compact" budget should normally be used as it
     produces files that are typically much smaller.  The compact budget form is
     also a requirement for using the MODPATH particle tracking program.
+
+    With ATS, USG-T reads output control once per stress period, so at most
+    one non-empty stress_period_data entry per stress period is written, as
+    ``PERIOD k [DDREFERENCE]``. DELTAT, TMINAT, TMAXAT, TADJAT and TCUTAT
+    actions keep their REAL text. Numeric output control with ATS records is
+    loaded as words for flow models in free format; per-period NPTIMES,
+    NPSTPS that changes between periods, IBOOT/IBOOTSCALE, INCODE < 0,
+    ICBCFL = 2, IHDDFL = 0 with head or drawdown flags, transport, CLN, DPF,
+    FASTFORWARD and BOOTSTRAPPING raise NotImplementedError. A common NPSTPS
+    of 0 is loaded as no output cadence. HCLOSE and BTOL actions are still
+    written with four significant digits.
 
     Examples
     --------
@@ -486,6 +737,56 @@ class MfUsgOc(Package):
         chk.summarize()
         return chk
 
+    def _check_before_writing(self):
+        """Check the ATS settings before the file is opened; return the ATS
+        flag and the TIMOT values (USG-T turns ATS on with ATSA, NPTIMES or
+        NPSTPS)."""
+        for name in ("atsa", "nptimes", "npsteps"):
+            value = getattr(self, name)
+            if not isinstance(value, (int, np.integer)) or value < 0:
+                raise ValueError(
+                    f"MfUsgOc: {name} must be a non-negative integer, got {value!r}"
+                )
+        ats = bool(self.atsa or self.nptimes > 0 or self.npsteps > 0)
+        timot = []
+        if self.timot is not None:
+            if np.ndim(self.timot) != 1:
+                raise ValueError(
+                    "MfUsgOc: timot must be a one-dimensional sequence, got "
+                    f"shape {np.shape(self.timot)}"
+                )
+            for t in self.timot:
+                if isinstance(t, (bool, np.bool_)) or not isinstance(t, Real):
+                    raise ValueError(f"MfUsgOc: TIMOT value {t!r} is not a number")
+                timot.append(float(t))
+        if len(timot) != self.nptimes:
+            raise ValueError(
+                f"MfUsgOc: NPTIMES is {self.nptimes} but {len(timot)} TIMOT "
+                "values are given"
+            )
+        if not all(math.isfinite(t) for t in timot):
+            raise ValueError("MfUsgOc: TIMOT values must be finite")
+        for a, b in pairwise(timot):
+            if not b - a > _TIMOT_GAP:
+                raise ValueError(
+                    f"MfUsgOc: TIMOT values {a!r} and {b!r} are not increasing "
+                    "by more than TMINAT=1.0E-10 (USG-T stops)"
+                )
+        kpers = []
+        for (kper, kstp), data in self.stress_period_data.items():
+            data = data if isinstance(data, list) else [data]
+            if data:
+                kpers.append(kper)
+            for item in data:
+                _ats_action(item)
+        dup = sorted({k + 1 for k in kpers if kpers.count(k) > 1})
+        if ats and dup:
+            raise ValueError(
+                "MfUsgOc: with ATS, USG-T reads output control once per stress "
+                f"period; several time steps are given for stress period(s) {dup}"
+            )
+        return ats, timot
+
     def write_file(self):
         """
         Write the package file.
@@ -495,7 +796,11 @@ class MfUsgOc(Package):
         None
 
         """
-        f_oc = open(self.fn_path, "w")
+        ats, timot = self._check_before_writing()
+        with open(self.fn_path, "w") as f_oc:
+            self._write(f_oc, ats, timot)
+
+    def _write(self, f_oc, ats, timot):
         f_oc.write(f"{self.heading}\n")
 
         # write options. BOOTSTRAPPING must sit on the first OC line (USG-T's
@@ -508,15 +813,17 @@ class MfUsgOc(Package):
                 boot += f" {self.iucboot:.0f}"
             if getattr(self.parent, "idpf", 0):
                 boot += f" {self.iudboot:.0f}"
-        if self.atsa:
+        if ats:
             f_oc.write("ATSA ")
             if self.nptimes > 0:
                 f_oc.write(f"NPTIMES {self.nptimes} ")
-                for i in range(self.nptimes):
-                    f_oc.write(f"{self.timot[i]} ")
             if self.npsteps > 0:
                 f_oc.write(f"NPSTPS {self.npsteps} ")
             f_oc.write(f"{boot}\n")
+            # TIMOT follows the first record once (PTIMES1RP); repr keeps
+            # the DOUBLE value
+            for i in range(0, len(timot), 10):
+                f_oc.write(" ".join(repr(t) for t in timot[i : i + 10]) + "\n")
         elif boot:
             f_oc.write(f"{boot.strip()}\n")
         if self.fastforward:
@@ -530,11 +837,6 @@ class MfUsgOc(Package):
                 f" {self.iugfastc:3.0f} {self.iucfastc:3.0f} {self.iudfastc:3.0f}"
                 f" {self.iumfastc:3.0f}\n"
             )
-
-        if self.atsa and self.nptimes > 0:
-            for i in range(self.nptimes):
-                f_oc.write(f"{self.timot[i]} ")
-            f_oc.write("\n")
 
         line = f"HEAD PRINT FORMAT {self.ihedfm:3.0f}\n"
         f_oc.write(line)
@@ -585,6 +887,26 @@ class MfUsgOc(Package):
         keys = list(self.stress_period_data.keys())
         keys.sort()
 
+        if ats:
+            # USG-T reads ATS output control once per stress period and skips
+            # the word after the period number only if it is not DDREFERENCE,
+            # so STEP is not written
+            for kperkstp in keys:
+                data = self.stress_period_data[kperkstp]
+                data = data if isinstance(data, list) else [data]
+                if kperkstp[0] >= nper or not data:
+                    continue
+                ddnref = ""
+                lines = ""
+                for item in data:
+                    if "DDREFERENCE" in item.upper():
+                        ddnref = item.lower()
+                    else:
+                        lines += f"  {item}\n"
+                f_oc.write(f"period {kperkstp[0] + 1} {ddnref}\n")
+                f_oc.write(lines)
+            return
+
         data = []
         ddnref = ""
         lines = ""
@@ -611,9 +933,6 @@ class MfUsgOc(Package):
                     f_oc.write(lines)
                     ddnref = ""
                     lines = ""
-
-        # close oc file
-        f_oc.close()
 
     def _set_singlebudgetunit(self, budgetunit):
         if budgetunit is None:
@@ -850,6 +1169,18 @@ class MfUsgOc(Package):
 
         """
 
+        if not hasattr(f, "read"):
+            # the file opened here is closed also when reading fails
+            with open(f, "r") as fh:
+                return cls.load(
+                    fh,
+                    model,
+                    nper=nper,
+                    nstp=nstp,
+                    nlay=nlay,
+                    ext_unit_dict=ext_unit_dict,
+                )
+
         if model.verbose:
             print("loading oc package file...")
 
@@ -947,12 +1278,7 @@ class MfUsgOc(Package):
 
         numericformat = False
 
-        openfile = not hasattr(f, "read")
-        if openfile:
-            filename = f
-            f = open(filename, "r")
-        else:
-            filename = os.path.basename(f.name)
+        filename = os.path.basename(f.name)
 
         line = f.readline().upper()
         while line[0] == "#":
@@ -966,7 +1292,14 @@ class MfUsgOc(Package):
         except:
             f.seek(0)
 
-        # read options
+        # read options (only the words USG-T scans on the first record)
+        lnlst = _first_record_words(line)
+        if not numericformat and lnlst and lnlst[0] in _NUMERIC_FIRST:
+            raise ValueError(
+                f"MfUsgOc: USG-T reads an OC file whose first word is {lnlst[0]} "
+                "as numeric output control and stops; start the first line "
+                "with ATSA"
+            )
         ispcfm = type_from_iterable(lnlst, index=4)
         ispcun = type_from_iterable(lnlst, index=5)
         if "ATS" in lnlst or "ATSA" in lnlst:
@@ -1004,16 +1337,17 @@ class MfUsgOc(Package):
                 kwargs["iucboot"] = int(lnlst[idx + 2])
             if model.idpf:
                 kwargs["iudboot"] = int(lnlst[idx + 3])
+        if kwargs["nptimes"] > 0 or kwargs["npsteps"] > 0:
+            # USG-T turns ATS on when NPTIMES or NPSTPS is given
+            kwargs["atsa"] = 1
 
         # read numeric formats
         if numericformat:
             # read TIMOT values
-            if kwargs["atsa"] and kwargs["nptimes"] > 0:
-                line = f.readline()
-                lnlst = line.strip().split()
-                kwargs["timot"] = [0] * kwargs["nptimes"]
-                for i in range(kwargs["nptimes"]):
-                    kwargs["timot"][i] = int(lnlst[i])
+            if kwargs["nptimes"] > 0:
+                kwargs["timot"] = _read_timot(f, kwargs["nptimes"])
+            if kwargs["atsa"]:
+                atsconv = _NumericAts(model, kwargs, lnlst)
             # process each line
             lines = []
             # Item 3 is read for each time step if adaptive time stepping is not used.
@@ -1024,19 +1358,16 @@ class MfUsgOc(Package):
                 for itsoc in range(nstp[iperoc]):
                     lines = []
                     if kwargs["atsa"]:
-                        line = f.readline()
-                        lnlst = line.strip().split()
-                        lines.append("DELTAT {float(lnlst[0]):11.4e}")
-                        lines.append("TMINAT {float(lnlst[1]):11.4e}")
-                        lines.append("TMAXAT {float(lnlst[2]):11.4e}")
-                        lines.append("TADJAT {float(lnlst[3]):11.4e}")
-                        lines.append("TCUTAT {float(lnlst[4]):11.4e}")
+                        lines += atsconv.record(f.readline(), iperoc)
 
                     line = f.readline()
                     lnlst = line.strip().split()
                     incode, ihddfl = int(lnlst[0]), int(lnlst[1])
                     ibudfl, icbcfl = int(lnlst[2]), int(lnlst[3])
                     ispcfl = type_from_iterable(lnlst, index=4)
+                    ioflg = []
+                    if kwargs["atsa"]:
+                        atsconv.flags(iperoc, lnlst, incode, ihddfl, icbcfl)
 
                     # new print and save flags are needed if incode is not
                     #  less than 0.
@@ -1056,6 +1387,7 @@ class MfUsgOc(Package):
                         hdsv, ddsv = int(lnlst[2]), int(lnlst[3])
                         cnpr = type_from_iterable(lnlst, index=4)
                         cnsv = type_from_iterable(lnlst, index=5)
+                        ioflg += [hdpr, ddpr, hdsv, ddsv]
                         if hdpr != 0:
                             lines.append("PRINT HEAD")
                         if ddpr != 0:
@@ -1082,6 +1414,7 @@ class MfUsgOc(Package):
                             hdsv, ddsv = int(lnlst[2]), int(lnlst[3])
                             cnpr = type_from_iterable(lnlst, index=4)
                             cnsv = type_from_iterable(lnlst, index=5)
+                            ioflg += [hdpr, ddpr, hdsv, ddsv]
                             if hdpr != 0:
                                 headprint += f" {k + 1}"
                             if ddpr != 0:
@@ -1106,14 +1439,26 @@ class MfUsgOc(Package):
                             lines.append(f"PRINT CONC{spcprint}")
                         if len(spcsave) > 0:
                             lines.append(f"SAVE CONC{spcsave}")
+                    if kwargs["atsa"]:
+                        atsconv.flags(iperoc, [], incode, ihddfl, icbcfl, ioflg)
                     stress_period_data[iperoc, itsoc] = list(lines)
+            if kwargs["atsa"]:
+                kwargs["npsteps"] = atsconv.npsteps()
 
         # Output Control Using Words
         else:
+            # TIMOT follows the first record (PTIMES1RP)
+            first = f.readline()
+            while first[:1] == "#":
+                first = f.readline()
+            if kwargs["nptimes"] > 0:
+                kwargs["timot"] = _read_timot(f, kwargs["nptimes"])
+            pending = [first]
+            last_period = 0
             iperoc, itsoc = 0, 0
             lines = []
             while True:
-                line = f.readline().upper()
+                line = (pending.pop() if pending else f.readline()).upper()
                 if not line:
                     if len(lines) > 0:
                         stress_period_data[iperoc, itsoc] = list(lines)
@@ -1129,12 +1474,9 @@ class MfUsgOc(Package):
 
                 # dataset 1 values
 
-                # TIMOT : output time values
+                # TIMOT : output time values (read after the first record)
                 elif lnlst[0].isdigit():
-                    if kwargs["atsa"] and kwargs["nptimes"] > 0:
-                        kwargs["timot"] = [0] * kwargs["nptimes"]
-                        for i in range(kwargs["nptimes"]):
-                            kwargs["timot"][i] = int(lnlst[i])
+                    continue
                 elif (
                     "HEAD" in lnlst[0] and "PRINT" in lnlst[1] and "FORMAT" in lnlst[2]
                 ):
@@ -1180,7 +1522,25 @@ class MfUsgOc(Package):
                 # dataset 2
                 elif "PERIOD" in lnlst[0]:
                     iperoc1 = int(lnlst[1]) - 1
-                    if "STEP" in lnlst:
+                    if kwargs["atsa"]:
+                        # USG-T reads ATS output control once per stress
+                        # period: a period given again (or out of order) would
+                        # be applied to a later period; STEP is skipped and
+                        # DDREFERENCE is read only right after the period
+                        if iperoc1 + 1 <= last_period:
+                            raise NotImplementedError(
+                                "MfUsgOc: with ATS, PERIOD records must give "
+                                "each stress period once and in order; stress "
+                                f"period {iperoc1 + 1} follows {last_period}"
+                            )
+                        last_period = iperoc1 + 1
+                        if "DDREFERENCE" in lnlst[3:]:
+                            raise NotImplementedError(
+                                "MfUsgOc: with ATS, USG-T ignores DDREFERENCE "
+                                f"after STEP (stress period {iperoc1 + 1})"
+                            )
+                        itsoc1 = 0
+                    elif "STEP" in lnlst:
                         itsoc1 = int(lnlst[3]) - 1
                     else:
                         itsoc1 = 0
@@ -1210,16 +1570,9 @@ class MfUsgOc(Package):
                 # (e.g. "SAVE HEAD 1 2") survive the round-trip.
                 elif "PRINT" in lnlst[0] or "SAVE" in lnlst[0]:
                     lines.append(" ".join(lnlst))
-                elif "DELTAT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
-                elif "TMINAT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
-                elif "TMAXAT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
-                elif "TADJAT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
-                elif "TCUTAT" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
+                elif (action := _ats_action(line)) is not None:
+                    # keep the REAL word as written once USG-T can read it
+                    lines.append(action)
                 elif "HCLOSE" in lnlst[0]:
                     lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
                 elif "BTOL" in lnlst[0]:
@@ -1236,9 +1589,6 @@ class MfUsgOc(Package):
                     lines.append(f"{lnlst[0]}")
                 else:
                     continue
-
-        if openfile:
-            f.close()
 
         # reset unit numbers
         unitnumber = cls._defaultunit()

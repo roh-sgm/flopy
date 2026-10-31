@@ -29,6 +29,36 @@ from ._tabrich import (
 from .mfusg import MfUsg
 
 
+def _has_option(options, name):
+    """True if the option keyword is one of the whitespace-separated tokens."""
+    return name in str(options).upper().split()
+
+
+def _laytyp_after_thickstrt(laytyp, thickstrt):
+    """LAYTYP as used by the SY read, after READLPF resets negative values
+    to 0 when THICKSTRT is active (gwf2bcf-lpf-u1.f 3198-3209, 3653)."""
+    laytyp = np.array(laytyp, dtype=np.int32)
+    if thickstrt:
+        laytyp[laytyp < 0] = 0
+    return laytyp
+
+
+def _effective_laycon(laytyp, thickstrt, richards):
+    """LAYCON set by READLPF (gwf2bcf-lpf-u1.f 3166-3180): LAYTYP 0 -> 0,
+    1..3 -> 3, 4 -> 4, 5 -> 5, negative -> 0 with THICKSTRT and 3 without;
+    then the BAS RICHARDS/RICHARDS_HP option turns every LAYCON != 0 into 5
+    (3334-3349). Selects the per-layer Richards arrays (3708, 3955)."""
+    laytyp = np.asarray(laytyp, dtype=np.int32)
+    laycon = np.where(laytyp == 0, 0, 3).astype(np.int32)
+    laycon[laytyp == 4] = 4
+    laycon[laytyp == 5] = 5
+    if thickstrt:
+        laycon[laytyp < 0] = 0
+    if richards:
+        laycon[laycon != 0] = 5
+    return laycon
+
+
 class MfUsgLpf(ModflowLpf):
     """MODFLOW Layer Property Flow Package Class.
 
@@ -444,9 +474,9 @@ class MfUsgLpf(ModflowLpf):
         if dis is None:
             dis = self.parent.get_package("DISU")
 
-        # Open file for writing
-        if f is None:
-            f_obj = open(self.fn_path, "w")
+        # Open file for writing; a handle passed by the caller is left open
+        opened = f is None
+        f_obj = open(self.fn_path, "w") if opened else f
 
         # Item 0: text
         f_obj.write(f"{self.heading}\n")
@@ -485,9 +515,8 @@ class MfUsgLpf(ModflowLpf):
         f_obj.write(self.layvka.string)
         # LAYWET array
         f_obj.write(self.laywet.string)
-        # Item 7: WETFCT, IWETIT, IHDWET
-        iwetdry = self.laywet.sum()
-        if iwetdry > 0:
+        # Item 7: WETFCT, IWETIT, IHDWET, read when any LAYWET != 0
+        if np.any(self.laywet.array != 0):
             f_obj.write(f"{self.wetfct:10f}{self.iwetit:10d}{self.ihdwet:10d}\n")
 
         transient = not dis.steady.all()
@@ -495,6 +524,10 @@ class MfUsgLpf(ModflowLpf):
         anis = any(ch != 1 for ch in self.chani)
         if (not structured) and anis:
             f_obj.write(self.anglex.get_file_entry())
+
+        thickstrt = _has_option(self.options, "THICKSTRT")
+        laytyp_sy = _laytyp_after_thickstrt(self.laytyp.array, thickstrt)
+        laycon = _effective_laycon(self.laytyp.array, thickstrt, self.richards)
 
         for layer in range(nlay):
             if self.ikcflag == 0:  # mfusg
@@ -505,14 +538,16 @@ class MfUsgLpf(ModflowLpf):
 
             if transient:
                 f_obj.write(self.ss[layer].get_file_entry())
-                if self.laytyp[layer] != 0:
+                if laytyp_sy[layer] != 0:
                     f_obj.write(self.sy[layer].get_file_entry())
-                if self.ikcflag == 0 and dis.laycbd[layer] > 0:
-                    f_obj.write(self.vkcb[layer].get_file_entry())
-                if self.laywet[layer] != 0 and self.laytyp[layer] != 0:
-                    f_obj.write(self.wetdry[layer].get_file_entry())
 
-            if self.richards and not self.tabrich:
+            # VKCB and WETDRY are read in steady-state models too
+            if self.ikcflag == 0 and dis.laycbd[layer] > 0:
+                f_obj.write(self.vkcb[layer].get_file_entry())
+            if self.laywet[layer] != 0:
+                f_obj.write(self.wetdry[layer].get_file_entry())
+
+            if laycon[layer] == 5 and not self.tabrich:
                 f_obj.write(self.alpha[layer].get_file_entry())
                 f_obj.write(self.beta[layer].get_file_entry())
                 f_obj.write(self.sr[layer].get_file_entry())
@@ -520,10 +555,11 @@ class MfUsgLpf(ModflowLpf):
                 if self.bubblept:
                     f_obj.write(self.bp[layer].get_file_entry())
 
-        if abs(self.ikcflag == 1):
+        if self.ikcflag != 0:
             f_obj.write(self.ksat.get_file_entry())
 
-        f_obj.close()
+        if opened:
+            f_obj.close()
 
     @classmethod
     def load(cls, f, model, ext_unit_dict=None, check=True):
@@ -639,12 +675,13 @@ class MfUsgLpf(ModflowLpf):
                 bubblept,
                 ext_unit_dict,
                 tabrich,
+                thickstrt,
             )
         )
 
         # Ksat  mfusg
         ksat = 1.0
-        if abs(ikcflag) == 1:
+        if ikcflag != 0:
             if model.verbose:
                 print("   loading ksat...")
             ksat = Util2d.load(f_obj, model, (njag,), np.float32, "ksat", ext_unit_dict)
@@ -791,9 +828,9 @@ class MfUsgLpf(ModflowLpf):
         laywet = np.empty((nlay), dtype=np.int32)
         laywet = read1d(f_obj, laywet)
 
-        # Item 7: WETFCT, IWETIT, IHDWET
+        # Item 7: WETFCT, IWETIT, IHDWET, read when any LAYWET != 0
         wetfct, iwetit, ihdwet = None, None, None
-        iwetdry = laywet.sum()
+        iwetdry = int(np.any(laywet != 0))
         if iwetdry > 0:
             if model.verbose:
                 print("   loading WETFCT, IWETIT, IHDWET...")
@@ -902,6 +939,7 @@ class MfUsgLpf(ModflowLpf):
         bubblept,
         ext_unit_dict,
         tabrich=False,
+        thickstrt=False,
     ):
         """Loads layer properties."""
         # parameters data
@@ -914,6 +952,8 @@ class MfUsgLpf(ModflowLpf):
         bas = model.get_package("BAS6")
         richards = bas.richards
         transient = not dis.steady.all()
+        laytyp_sy = _laytyp_after_thickstrt(laytyp, thickstrt)
+        laycon = _effective_laycon(laytyp, thickstrt, richards)
 
         nlay = model.nlay
         hk = [0] * nlay
@@ -947,7 +987,7 @@ class MfUsgLpf(ModflowLpf):
                 ss[layer], sy[layer] = self._load_storage(
                     f_obj,
                     model,
-                    {"layer": layer, "laytyp": laytyp[layer]},
+                    {"layer": layer, "laytyp": laytyp_sy[layer]},
                     ext_unit_dict,
                     (par_types, parm_dict),
                 )
@@ -967,15 +1007,16 @@ class MfUsgLpf(ModflowLpf):
                     )
 
             # wetdry
-            if laywet[layer] != 0 and not (laytyp[layer] not in {0, 4}):
+            if laywet[layer] != 0:
                 if model.verbose:
                     print(f"   loading wetdry layer {layer + 1:3d}...")
                 wetdry[layer] = Util2d.load(
                     f_obj, model, util2d_shape, np.float32, "wetdry", ext_unit_dict
                 )
 
-            # Richards equation (skipped under TABRICH: RETCRVS replaces these)
-            if richards and not tabrich:
+            # Richards equation for LAYCON 5 layers (skipped under TABRICH:
+            # RETCRVS replaces these)
+            if laycon[layer] == 5 and not tabrich:
                 if model.verbose:
                     print(f"   loading Richards equation layer {layer + 1:3d}...")
                 alpha[layer] = Util2d.load(

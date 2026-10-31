@@ -1,9 +1,14 @@
 """Mfusg module."""
 
+import filecmp
 import os.path
+import shutil
+import sys
 from inspect import getfullargspec
 from os import PathLike, curdir
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Union
+from warnings import warn
 
 import flopy
 
@@ -52,6 +57,15 @@ class MfUsg(Modflow):
 
     Notes
     -----
+    EVS and RTS name-file entries (the ET and recharge time-series files read
+    by EVT with ETS and RCH with RTS) are kept from a loaded name file as
+    references to opaque files: their content is not read or interpreted.
+    ``write_input`` writes them back with their unit, path and the options
+    FLUSH and NO-ARCHIVE. In the original workspace the files are not
+    touched; in a new workspace a relative path inside the original workspace
+    is copied to the same relative path (never replacing a different file),
+    and an absolute path or a path outside the original workspace is written
+    as an absolute reference, so the model still depends on that file.
 
     Examples
     --------
@@ -92,6 +106,8 @@ class MfUsg(Modflow):
         self.iheat = 0  # flag for heat transport
         self.idpf = 0  # flag for dual porosity flow
         self.icln = 0  # flag for CLN package
+        # EVS/RTS name-file entries kept from a loaded name file
+        self._preserved_nam_entries = []
 
         # Create a dictionary to map package with package object.
         # This is used for loading models.
@@ -162,6 +178,253 @@ class MfUsg(Modflow):
                 f"  nodelay = {ncol}\n"
             )
         return msg
+
+    # Name-file types that USG-T opens (SGWF2BAS8OPEN, CUNIT 6 and 9) and that
+    # EVT (ETS option) and RCH (RTS option) read as time series, but that
+    # FloPy does not interpret: kept as references to opaque files.
+    _PRESERVED_NAM_TYPES = ("EVS", "RTS")
+    # Trailing options that SGWF2BAS8OPEN applies to package input files
+    _PRESERVED_NAM_OPTIONS = ("FLUSH", "NO-ARCHIVE")
+    # SGWF2BAS8OPEN reads each line into CHARACTER*300 and URWORD blanks the
+    # last character, so a line can use 299 characters
+    _NAM_LINE_MAX = 299
+
+    @property
+    def preserved_nam_entries(self):
+        """EVS/RTS name-file entries kept from the loaded name file.
+
+        Returns independent copies; changing them does not change the model.
+        """
+        return [
+            {**e, "options": list(e["options"])} for e in self._preserved_nam_entries
+        ]
+
+    @classmethod
+    def _read_preserved_entries(cls, namefile_path):
+        """Read the EVS/RTS entries of a name file with the URWORD rules.
+
+        Returns, per entry, the file type, unit, path (unquoted), supported
+        options, the absolute path of the file and the name-file folder.
+        Malformed entries raise ValueError; a unit <= 0 or a missing file
+        warns (the entry is kept for inspection and rejected on write).
+        """
+        entries = []
+        nam_dir = os.path.dirname(os.path.abspath(namefile_path))
+        with open(namefile_path) as f:
+            lines = f.read().splitlines()
+        for ln, line in enumerate(lines, 1):
+            if line.startswith("#"):
+                continue
+            words = _urwords(line)
+            if not words or words[0][0].upper() not in cls._PRESERVED_NAM_TYPES:
+                continue
+            ftype = words[0][0].upper()
+            msg = f"MfUsg.load: name file line {ln} ({ftype}) "
+            if len(line) > cls._NAM_LINE_MAX:
+                raise ValueError(msg + f"is longer than {cls._NAM_LINE_MAX} characters")
+            if len(words) < 3:
+                raise ValueError(msg + "needs a unit and a file name")
+            unit = int(words[1][0])
+            path, closed = words[2]
+            if not closed:
+                raise ValueError(msg + "has a file name with an unclosed quote")
+            if not path:
+                raise ValueError(msg + "has an empty file name")
+            options, dropped = [], []
+            for word, _ in words[3:]:
+                if word.upper() in cls._PRESERVED_NAM_OPTIONS:
+                    options.append(word.upper())
+                else:
+                    dropped.append(word)
+            if dropped:
+                warn(
+                    msg + f"options {dropped} are not used by USG-T for an input "
+                    "file and are not kept"
+                )
+            if unit <= 0:
+                warn(
+                    msg + f"has unit {unit}; it cannot be written (USG-T opens a "
+                    "negative unit as BINARY and reads the time series as text)"
+                )
+            pure = PureWindowsPath(path) if "\\" in path else PurePosixPath(path)
+            source = os.path.normpath(os.path.join(nam_dir, *pure.parts))
+            if not os.path.isfile(source):
+                warn(msg + f"file {path} does not exist; it cannot be written")
+            inside = not pure.is_absolute() and not os.path.normpath(
+                os.path.join(*pure.parts)
+            ).startswith("..")
+            entries.append(
+                {
+                    "filetype": ftype,
+                    "unit": unit,
+                    "path": path,
+                    "options": options,
+                    "source": source,
+                    "source_ws": nam_dir,
+                    "inside_ws": inside,
+                }
+            )
+        return entries
+
+    @classmethod
+    def _check_preserved_units(cls, namefile_path, packages):
+        """Reject a name file where an EVS/RTS entry shares its unit with
+        another entry. The name-file reader keys entries by unit (unit 0 by
+        the package reserved unit or the file type) and would silently keep
+        only one of them; USG-T stops on a unit already in use."""
+        users = {}
+        with open(namefile_path) as f:
+            lines = f.read().splitlines()
+        for ln, line in enumerate(lines, 1):
+            items = line.strip().split()
+            if len(items) < 3 or items[0].startswith("#"):
+                continue  # skipped or rejected by the name-file reader
+            ftype = items[0].upper()
+            try:
+                unit = int(items[1])
+            except ValueError:
+                continue  # rejected by the name-file reader
+            key = unit
+            if unit == 0:
+                reserved = getattr(packages.get(ftype.lower()), "_reservedunit", None)
+                key = reserved() if reserved is not None else ftype
+            users.setdefault(key, []).append((ln, ftype, unit))
+        for key, entries in users.items():
+            if len(entries) > 1 and any(
+                t in cls._PRESERVED_NAM_TYPES for _, t, _ in entries
+            ):
+                desc = ", ".join(f"{t} unit {u} (line {ln})" for ln, t, u in entries)
+                raise ValueError(
+                    f"MfUsg.load: name-file unit {key} is used by more than one "
+                    f"entry: {desc}"
+                )
+
+    def _name_file_targets(self):
+        """(unit, emitted name, label) of everything write_name_file writes,
+        with the names as written (outputs and REPLACE files as basename)."""
+        targets = [(self.lst.unit_number[0], self.lst.file_name[0], "LIST")]
+        for p in self.packagelist:
+            for i in range(len(p.name)):
+                if p.unit_number[i] != 0:
+                    targets.append((p.unit_number[i], p.file_name[i], p.name[i]))
+        for u, (ftype, fname) in self._skipped_nam_entries.items():
+            targets.append((u, fname, ftype))
+        for u, f, o in zip(
+            self.external_units, self.external_fnames, self.external_output
+        ):
+            if u != 0:
+                targets.append((u, os.path.basename(f) if o else f, "DATA"))
+        for u, f in zip(self.output_units, self.output_fnames):
+            if u != 0:
+                targets.append((u, os.path.basename(f), "DATA output"))
+        return targets
+
+    def _preserved_plan(self, report=False):
+        """Name-file lines and copies for the EVS/RTS entries.
+
+        Every entry is checked before anything is written or copied: unit
+        <= 0, missing file, unit or file shared with what the model writes
+        (LIST, name file, packages, skipped entries, DATA and outputs, as
+        written in the name file) or with another EVS/RTS entry, a different
+        file at the copy destination, and the line length.
+        """
+        lines, copies = [], []
+        if not self._preserved_nam_entries:
+            return lines, copies
+        ws = os.path.realpath(self.model_ws)
+        fold = sys.platform in ("darwin", "win32")  # case-insensitive by default
+
+        def key(path):
+            k = os.path.normcase(os.path.realpath(os.path.join(ws, path)))
+            return k.casefold() if fold else k
+
+        units, names = {}, {key(self.namefile): "name file"}
+        for u, fname, label in self._name_file_targets():
+            units.setdefault(u, label)
+            names.setdefault(key(fname), label)
+        for e in self._preserved_nam_entries:
+            ftype, unit = e["filetype"], e["unit"]
+            if unit <= 0:
+                raise ValueError(
+                    f"MfUsg: the {ftype} entry has unit {unit}; a unit "
+                    "<= 0 is not valid for a text time-series file"
+                )
+            if not os.path.isfile(e["source"]):
+                raise FileNotFoundError(f"MfUsg: {ftype} file {e['source']} not found")
+            if unit in units:
+                raise ValueError(
+                    f"MfUsg: unit {unit} of the {ftype} entry is also "
+                    f"used by {units[unit]}"
+                )
+            units[unit] = ftype
+            if os.path.realpath(e["source_ws"]) == ws:
+                text, dest = e["path"], e["source"]
+            elif e["inside_ws"]:
+                rel = os.path.relpath(e["source"], e["source_ws"])
+                text, dest = e["path"], os.path.join(ws, rel)
+                if os.path.exists(dest):
+                    if not os.path.isfile(dest) or not filecmp.cmp(
+                        e["source"], dest, shallow=False
+                    ):
+                        raise FileExistsError(
+                            f"MfUsg: {dest} exists with different content; "
+                            f"the {ftype} file is not replaced"
+                        )
+                else:
+                    copies.append((e["source"], dest))
+            else:
+                text = dest = e["source"]
+                if report:
+                    warn(
+                        f"MfUsg: the {ftype} entry refers to {text} outside the "
+                        "model workspace; the model still depends on that file"
+                    )
+            if key(dest) in names:
+                raise ValueError(
+                    f"MfUsg: the {ftype} file {dest} is also written "
+                    f"by {names[key(dest)]}"
+                )
+            names[key(dest)] = ftype
+            if "'" in text:
+                raise ValueError(
+                    f"MfUsg: the {ftype} file name {text} contains a quote"
+                )
+            if any(c in text for c in " ,\t"):
+                text = f"'{text}'"
+            line = f"{ftype:14s} {unit:5d}  {text}"
+            line += "".join(f" {o}" for o in e["options"])
+            if len(line) > self._NAM_LINE_MAX:
+                raise ValueError(
+                    f"MfUsg: the {ftype} name-file line is longer than "
+                    f"{self._NAM_LINE_MAX} characters"
+                )
+            lines.append(line + "\n")
+        return lines, copies
+
+    def write_input(self, SelPackList=False, check=False):
+        """Write the input; EVS/RTS entries are checked before any file is
+        written (see Notes of the class)."""
+        self._preserved_plan()
+        super().write_input(SelPackList=SelPackList, check=check)
+
+    def write_name_file(self):
+        """Write the name file, with the EVS/RTS entries of a loaded model.
+
+        Their files are copied first when the workspace changed (exclusive
+        creation; an identical destination is left as is). This is not a
+        transaction: an I/O error during the copies or the name file can
+        leave the files already copied.
+        """
+        lines, copies = self._preserved_plan(report=True)
+        for src, dest in copies:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with open(src, "rb") as fs, open(dest, "xb") as fd:
+                shutil.copyfileobj(fs, fd)
+            shutil.copystat(src, dest)
+        super().write_name_file()
+        if lines:
+            with open(os.path.join(self.model_ws, self.namefile), "a") as f:
+                f.writelines(lines)
 
     @classmethod
     def load(
@@ -236,6 +499,10 @@ class MfUsg(Modflow):
             **attribs,
         )
 
+        # an EVS/RTS unit shared with another entry would be lost by the
+        # unit-keyed name-file reader: reject it before reading
+        cls._check_preserved_units(namefile_path, model.mfnam_packages)
+
         # read name file
         ext_unit_dict = mfreadnam.parsenamefile(
             namefile_path, model.mfnam_packages, verbose=verbose
@@ -279,6 +546,9 @@ class MfUsg(Modflow):
             bas.filehandle.seek(start)
         if verbose:
             print(f"ModflowBas6 free format:{model.free_format_input}\n")
+
+        # EVS/RTS entries are kept with any load_only (not interpreted)
+        model._preserved_nam_entries = cls._read_preserved_entries(namefile_path)
 
         files_successfully_loaded, files_not_loaded = cls._load_packages(
             model, ext_unit_dict, ext_pkg_d, load_only, forgive
@@ -573,6 +843,32 @@ class MfUsg(Modflow):
                 )
                 for fname in files_not_loaded:
                     print(f"      {os.path.basename(fname)}")
+
+
+def _urwords(line):
+    """Split a name-file line like URWORD (utl7u1.f): words end at a space,
+    comma or tab; a word starting with a single quote ends at the next quote
+    and can hold spaces and commas. Returns (word, closed) pairs; closed is
+    False for a quoted word without its closing quote."""
+    words, i, n = [], 0, len(line)
+    while i < n:
+        if line[i] in " ,\t":
+            i += 1
+            continue
+        if line[i] == "'":
+            j = line.find("'", i + 1)
+            if j < 0:
+                words.append((line[i + 1 :], False))
+                break
+            words.append((line[i + 1 : j], True))
+            i = j + 1
+        else:
+            j = i
+            while j < n and line[j] not in " ,\t":
+                j += 1
+            words.append((line[i:j], True))
+            i = j
+    return words
 
 
 def fmt_string(array, free=False):

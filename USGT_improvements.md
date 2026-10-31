@@ -2,17 +2,223 @@
 
 This fork of [modflowpy/flopy](https://github.com/modflowpy/flopy) carries
 USG-Transport additions on `develop`, aimed at improving how
-`MfUsg.load(...).write_input()` round-trips existing USG-T models and
-extending post-processing utilities for transport output. Nothing else is
-changed.
+`MfUsg.load(...).write_input()` round-trips existing USG-T models, adding
+from-scratch authoring for USG-T packages, and extending post-processing
+utilities for transport output. Most changes are in `flopy/mfusg`; some
+stages also change other modules (in Stage 5, for example,
+`flopy/utils/util_array.py` and `flopy/utils/voronoi.py`). The sections below
+describe the changes stage by stage; they are not a complete list of the
+differences from upstream.
 
-Tested against **USG-T 1.8** and **USG-T 2.7** binaries on both structured and
-unstructured grids.
+The real-model validations under "Validation" used USG-T 1.8 and 2.7 binaries
+on structured and unstructured grids. Stage 5 sections state the Fortran
+source they were audited against, the executables they were run with, if
+any, and their limits.
 
 These are incremental improvements on top of the USG-T work already in
 upstream flopy. They live here while testing continues.
 
 ## What's added
+
+### Stage 5.VORONOI — DISU arrays for extruded Voronoi grids
+
+- `flopy.utils.voronoi.get_disu5_gridprops(verts, iverts, xcyc, top, botm)` and
+  `VoronoiGrid.get_disu5_gridprops(top, botm)` return the `MfUsgDisU` keyword
+  arguments (IVSD=0, IDSYMRD=0, zero-based `ja`) for a 2D Voronoi grid
+  extruded into contiguous layers with the same plan view, for LPF flow. The
+  function needs numpy only; building a `VoronoiGrid` still needs scipy.
+- `VoronoiGrid.get_gridprops_unstructuredgrid(top=None, botm=None)`: without
+  arguments the output is unchanged; with both it returns layered
+  `UnstructuredGrid` properties; with only one of them it raises.
+- Rejected: fractional or invalid indices, self-intersecting, duplicated or
+  overlapping cells, non-orthogonal faces, non-positive thickness, holes and
+  separate regions. Collinear segments of one face are summed.
+- Source audited: USG-T 2.8.1 (DISU reading, FILLGFU, LPF conductances).
+  Run with USG-T 2.8.1 and 2.7.0: linear flow, a vertical series and two
+  layers against an independent solution, and the 7,062-node Voronoi USG
+  example (same input files and heads as the hand-built arrays). Not run
+  with 2.6.2.
+- Not supported: holes, separate regions, pinch-outs or different plan views
+  per layer, LAYCBD, CLN/GNC, anisotropy angles (CHANI other than 1),
+  IDSYMRD=1, DISU6. Transport was not validated. Cell centers must be the
+  Voronoi generators; gaps along the outer boundary are not detected.
+  `MfUsgDisU` converts the `ja` it receives in place (pass a copy). See
+  `USGT_roadmap.md` (Gap §14).
+
+### Stage 5.G01 (partial) — RCH SELEV/IZNRCH arrays and RTS zone count
+
+- `MfUsgRch` now stores the `selev` and `iznrch` arrays it is given (they
+  were filled with `rech`) and writes the `RTS` zone count of item 2 as an
+  integer (the format string raised an error, F39/F40). Same change as
+  modflowpy/flopy#2770.
+- Source audited: USG-T 2.8.1 (`gwf2rch8u1.f`). Run with USG-T 2.8.1 and
+  2.7.0: a SEEPELEV model and a model with one RTS zone, each compared with
+  a hand-written control (load and write, and from-scratch construction).
+- The RTS time-series file itself stays an opaque name-file entry (Stage
+  5.G03); FloPy does not read its contents. Rewriting RCH with more than one
+  RTS zone still writes `INRCHZONES 1` (F42), so multi-zone RTS models are
+  not rewritten correctly.
+- Still open (G01): per-component IRCHCONC flags (F41), INRCHZONES/INSELEV
+  flags fixed at 1 (F42), IZNRCH written without RTS (F43), loading with
+  INSELEV -1/0, DISU with NRCHOP=2 and INCONC given once. See
+  `USGT_roadmap.md` (RCH and RTS rows).
+
+### Stage 5.G05 — OC with ATS: NPTIMES/TIMOT and numeric ATS records
+
+- `MfUsgOc` reads TIMOT as USG-T does (decimals, exponents, several lines,
+  commas) and writes it once after the first line with its DOUBLE value;
+  ATS parameters keep their REAL text (blanks, tabs or commas between name
+  and value); NPTIMES/NPSTPS turn ATS on.
+- With ATS: `PERIOD k [DDREFERENCE]` without STEP; repeated or unordered
+  periods and DDREFERENCE after STEP are rejected; settings are checked
+  before the file is opened.
+- Numeric ATS records are written as words with the values USG-T uses, or
+  rejected when the word form cannot represent them (see Gap §13).
+- Checked with hand-written models against USG-T 2.8.1 and 2.7.0 (rewrite =
+  control). The constructor is unchanged. See `USGT_roadmap.md` (OC row,
+  Gap §13).
+
+### Stage 5.G04 — SMS options, NUMTRACK records and REAL values
+
+- `MfUsgSms.load` keeps SHIFT (it used to be written as DAMPBOT) and the other
+  record 1b options in any case and order, with or without a preset; reads
+  item 2 with five values when NUMTRACK <= 0; accepts D/Q exponents.
+- REALs are written with 9.2e when that keeps the REAL USG-T reads, otherwise
+  with the shortest text that does; invalid REALs are rejected before the
+  file is opened. STRESSPERIODSETTINGS is rejected; SOLVEROUTPUTFILE warns
+  and is not kept.
+- `options2` is checked on write like on load (space, tab and comma
+  separators; every TRUNCATEDNEWTONCUTOFF value).
+- Checked with hand-written models against USG-T 2.8.1 and 2.7.0 (rewrite =
+  control). The constructor is unchanged. See `USGT_roadmap.md` (SMS row,
+  Gap §12).
+
+### Stage 5.G06 — TRTOSS stress periods in DIS/DISU
+
+- `MfUsgDis`/`MfUsgDisU` keep `steady` and add `trtoss` (last argument):
+  storage fraction per period, None/NaN = not TRTOSS; a TRTOSS period needs
+  `steady=False`. Records are written as `SS`, `TR` or `TRTOSS stofrac`;
+  they used to be loaded as `SS`, losing TRTOSS and its fraction.
+- Load follows URWORD (case-insensitive flags, E/D/Q or letterless
+  exponents, 30-character words); unknown flags, NaN/Inf and out-of-range
+  fractions are rejected; a missing fraction loads as 0.0 with a warning.
+  The fraction is written so that USG-T reads the same single-precision
+  value.
+- SS + TRTOSS without TR is rejected (construction, load, write): USG-T
+  2.8.1 reads no storage arrays then, 2.7.0 reads them. Checks run again
+  before the file is opened. `period_type`/`itrss` (2.8.1 rule) are
+  read-only; the old `Trtoss` argument has no effect and warns when set.
+- Checked with hand-written fixtures against USG-T 2.8.1 and 2.7.0 (early
+  end one step after the criterion, sensitivity to the fraction, no early
+  end without ATS, rewrite = control). Open: ATS not checked, LAK with every
+  period TRTOSS, DPF/CLN/transport with TRTOSS. See `USGT_roadmap.md`
+  (Gap §11).
+
+### Stage 5.G03 — EVS/RTS name-file entries kept
+
+- `MfUsg.load` keeps the `EVS`/`RTS` name-file entries (ET and recharge
+  time-series files read by EVT `ETS` and RCH `RTS`) with any `load_only`, and
+  `write_input`/`write_name_file` write them back once, with unit, path
+  (single-quoted names with spaces, as URWORD reads them) and the options
+  `FLUSH`/`NO-ARCHIVE`; other options are dropped with a warning. They used to
+  be dropped, and USG-T stopped when RCH/EVT read the series.
+- The files are opaque: not read or rewritten. Same workspace: untouched. New
+  workspace: a relative path inside the original workspace is copied with
+  exclusive creation (identical destination kept, different one rejected
+  before writing); an absolute or outside path stays an absolute reference,
+  so the model still depends on that file.
+- Rejected before writing: unit <= 0, missing file, unit or file shared with
+  what the name file lists (outputs by basename) or between EVS and RTS,
+  lines over 299 characters. `preserved_nam_entries` returns copies.
+- Rejected on load: an EVS/RTS unit shared with another entry of the
+  original name file (the unit-keyed reader would drop one entry silently).
+- Checked with hand-written fixtures against USG-T 2.8.1 and 2.7.0
+  (analytical rates, ATS step ends, rewrite = control). The RTS file stays
+  opaque. Writing the RCH `RTS` option no longer fails since Stage 5.G01
+  (F39); multi-zone RTS rewrites still write `INRCHZONES 1` (F42). Still
+  open: EVT `ETS` loading, copying entries skipped by `load_only`, the `UZF`
+  entry. Not a transaction. See `USGT_roadmap.md` (EVS/RTS rows, Gap §10).
+
+### Stage 5.01 — DPF layer-by-layer material arrays
+
+- `MfUsgDpf.write_file`/`load` now follow `GWF2DPFU1AR` (`gwf2dpf1u1.f`,
+  USG-T 2.8.1, lines 111–191): `IUZONTABIM`, all `IBOUNDIM` layers, all
+  `HNEWIM` layers, then per layer `PHIF`, `DDFTR`, `SC1IM`, conditional
+  `SC2IM` and conditional immobile Richards arrays. The previous
+  property-by-property order was mis-read by USG-T for any multi-layer model;
+  such files must be regenerated.
+- Conditions use the effective LAYCON (LPF `LAYTYP` mapping with `THICKSTRT`,
+  BAS `RICHARDS`/`RICHARDS_HP` promotion to 5); `TABRICH`/`BUBBLEPT` are read
+  from BCF or LPF; the default DPF unit now reaches the name file.
+- Richards DPF runs: FloPy-written and hand-written inputs match. In the
+  small LPF/Richards/DPF case with CHD cells studied with USG-T 2.8.1, the
+  9–13 % printed budget residual `D = IN - OUT` coincides within 2e-4 L3/T
+  with the signed IMMOBILE STORAGE `q` of the CHD cells, which the CONSTANT
+  HEAD term does not include; the engine budget is left unchanged. Executable
+  characterization tests were added. See `USGT_roadmap.md` (DPF, Gap §5).
+
+### Stage 5.D7-1 — double-precision `HNEWIM` with BAS `DPIN`/`DPIO`
+
+- `Util2d`/`Util3d`/`ArrayFormat` accept `np.float64` (default `E24.16`,
+  17 significant digits); int32/float32/bool behaviour is unchanged.
+  For float64 arrays `cnstnt` is kept REAL (also on assignment), `CONSTANT`
+  is used only for values exact as REAL, and binary output is not
+  implemented. New `Util2d.check_real_fields()` reports those write errors
+  without writing.
+- `Util2d.load_bin(..., header_precision="single")` keeps its default and
+  reads the 52-byte double header with `"double"`; `Util2d.load` uses it for
+  float64 and has `binary_multiplier` / `binary_negative_unit_only` options
+  for the 1-D readers (defaults unchanged). `EXTERNAL` with a negative unit
+  is binary and `FMTIN`/`IPRN` are optional (all dtypes).
+- `MfUsgDpf`: `hnewim` is float64 with `DPIN`/`DPIO`; precision (of the
+  container and of every layer, including layers assigned later) and record
+  checks run before the DPF file is opened; non-negative-unit binary input
+  is rejected; `write_file(f=handle)` no longer closes the caller's handle.
+  See `USGT_roadmap.md` (Gap §5).
+
+### Stage 5.D7-2 — binary `HNEWIM` output
+
+- `MfUsgDpf.write_file` writes HNEWIM layers with `format.binary = True` to a
+  package file read through `EXTERNAL -n` (REAL*8 with `DPIN`/`DPIO`, REAL
+  otherwise; effective values, record multiplier 1.0), registered as
+  `DATA(BINARY)`. Files and name-file entries of other components are never
+  replaced (normalized destinations, exclusive creation, own-entry
+  tracking; an own file is identified by device and inode, so a replaced
+  path, a retargeted directory link or a registered hard link is not
+  rewritten). Technically closed in Gate C (2026-10-07) within these
+  limits: run with USG-T 2.8.1 only (2.7 not run for D7); the other DPF
+  arrays keep the generic binary handling; no full atomicity. DPF is not
+  Full. See `USGT_roadmap.md` (Gap §5).
+
+### Stage 5.02-B2 — BCF header, LAYCON and conditional records
+
+- `MfUsgBcf` write/load follow `READBCF`/`SGWF2BCFU1S`/`SGWF2BCFU1G` (USG-T
+  2.8.1): LAYCON codes as single integers (free) or `40I2` (fixed);
+  fixed-format item 1 with `I10,F10.3,I10,F10.3,4I10`, checked to fit before
+  writing (F10.3 reals carry a decimal point in the mantissa, e.g. `-1.E+30`:
+  an exponent alone keeps the three implied decimals, so `-1E+30` would be
+  read as `-1E+27`; the loader applies the same rule); fixed-format files with header options rejected before the
+  destination is touched; TRPY/ANGLEX/connection array by IKCFLAG (0 on
+  structured grids); SF2, TRAN/HY and WETDRY by the effective LAYCON (BAS
+  `RICHARDS`/`RICHARDS_HP` promotion); optional Richards arrays `alpha`,
+  `beta`, `sr`, `brook`, `bp`; KV for every layer with `IKVFLAG!=0`;
+  `write_file(f=handle)` repaired (the caller's handle is left open).
+- Ex3 (fixed-format BCF) rewritten by FloPy previously ran with LAYCON 0 in
+  layer 2; it now reproduces the original heads.
+- Not covered: DISU `IDSYMRD=1`, option detection when loading fixed-format
+  files, free-format header precision. See `USGT_roadmap.md` (BCF6).
+
+### Stage 5.02-B1 — LPF conditional records
+
+- `MfUsgLpf` write/load follow `READLPF`/`SGWF2LPFU1S`/`SGWF2LPFU1G` (USG-T
+  2.8.1): Richards arrays only where the effective LAYCON is 5 (BAS
+  `RICHARDS`/`RICHARDS_HP` promote convertible layers); `WETDRY` loaded for
+  any `LAYWET!=0`; `VKCB`/`WETDRY` written in steady-state models; `SY` uses
+  `LAYTYP` after the `THICKSTRT` reset; DISU connection array for any
+  `IKCFLAG!=0`; item 7 when any `LAYWET!=0`; `write_file(f=handle)` repaired
+  (the caller's handle is left open).
+- Not covered: DISU `IDSYMRD=1` connection-array lengths, LPF named
+  parameters. See `USGT_roadmap.md` (LPF).
 
 ### Stage 4 — programmatic authoring (in progress)
 
@@ -1028,7 +1234,7 @@ explicitly rather than producing incomplete or mis-parsed files.
 | What | File | What it does |
 |---|---|---|
 | `MfUsgChd` | `flopy/mfusg/mfusgchd.py` | CHD package for unstructured USG-T grids. Node-based (replaces k/i/j), supports AUX concentration variables. Internal `node` values are 0-based and file I/O is 1-based. Full `load` and `write_file` for the USG-T format (`NACT    Stress Period N` headers, `-1` reuse). |
-| `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration and a trailing reach-ID column (`irch`) that is written positionally without being declared as AUX. `irch` is auto-detected from the first data row when loading. |
+| `MfUsgRiv` | `flopy/mfusg/mfusgriv.py` | RIV package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration. G02: the DISU header writes IRIVCB from `ipakcb` (not `irdflag`) and load keeps it with its CBC output entry; `irdflag` is ignored (warning when it differs from `ipakcb`); values after node, stage, cond, rbot and the declared AUX values are not read by USG-T and are ignored on load with a warning; AUX values are written in declaration order; an `irch` field not declared as AUX is rejected before writing, while a declared `AUX IRCH`/`AUXILIARY IRCH` (any case, whole-token match) is kept like any AUX variable and is not declared automatically. |
 | `MfUsgEts` | `flopy/mfusg/mfusgets.py` | Segmented Evapotranspiration (ETS) package for USG-T 2.7. Supports `NETSEG > 1` with per-SP `PXDP`/`PETM` segment arrays and the `IESFACTOR` transport flag. ETSR array parameters are **preserved** (load → write → reload with `NPETS>0`, defs, per-SP activation records, `INSTANCES`; Stage 4.4A) **and authored from scratch** (`parameters=`/`evtr_parm=`, auto `NPETS`/`nclu`, validated before opening; Stage 4.6C-D). Opt-in `expand_parameters=True` keeps the legacy expanded `NPETS=0` write; `npets>0` without defs raises `ValueError`. Only ETSR is parameterizable (Fortran limit). |
 | `MfUsgGhb` | `flopy/mfusg/mfusgghb.py` | GHB package for unstructured USG-T grids. Internal `node` values are 0-based and file I/O is 1-based. Supports AUX concentration variables, stores `ipakcb` (CBC unit). Full `load` and `write_file`. Load registry now maps `"ghb"` to `MfUsgGhb`. |
 | `MfUsgDrn` | `flopy/mfusg/mfusgdrn.py` | DRN package for unstructured USG-T grids. Same pattern as GHB: internal `node` values are 0-based, file I/O is 1-based, AUX support, `ipakcb`. Full `load` and `write_file`. Load registry maps `"drn"` to `MfUsgDrn`. |
@@ -1109,13 +1315,37 @@ semantic implementation verified against `tvmu2.f`:
 
 ## Install
 
+FloPy (the Python package) is installed from the fork. Executables such as
+MODFLOW-USG Transport and Triangle are not part of it and must be obtained
+separately.
+
 ```bash
 conda create -n usgt -y python=3.12 numpy pandas matplotlib jupyter shapely
 conda activate usgt
-git clone --branch develop https://github.com/roh-sgm/flopy.git
-cd flopy
-pip install -e .
+pip install "flopy @ git+https://github.com/roh-sgm/flopy.git@<FULL_COMMIT_SHA>"
 ```
+
+Replace `<FULL_COMMIT_SHA>` with the full 40-character SHA of a published
+commit of the fork; a branch name moves and does not fix the revision. For
+development, clone the fork, check out that commit and run `pip install -e .`.
+
+This is a minimal environment, not a complete one for every test or
+example. Optional Python packages include `scipy` (needed by `VoronoiGrid`),
+and `modflow-devtools`, `pytest`, `flaky` and `syrupy<5` to run the tests.
+External executables: Triangle (Voronoi meshes) and USG-T; the USG-T
+executable tests read its path from `USGT_EXE` and are skipped without it.
+
+To identify the installed revision of a VCS install, read `commit_id` in
+`direct_url.json`, when pip recorded it:
+
+```bash
+python -c "import importlib.metadata as m; print(m.distribution('flopy').read_text('direct_url.json'))"
+```
+
+For an editable install, record `git rev-parse HEAD` together with
+`git status --porcelain` in the clone: a checkout with local changes is not
+the same as that commit. `flopy.__version__` does not identify the fork
+revision.
 
 ## Quick check
 
@@ -1140,8 +1370,10 @@ inc, cum = lst_s1.get_budget()
 df_inc, df_cum = lst_s2.get_dataframes(start_datetime="2000-01-01")
 ```
 
-All other flopy APIs behave exactly as upstream; the patches only change the
-text that `MfUsg.load(...).write_input()` produces for USG-T models.
+The checks in this file cover the USG-T packages and utilities it describes;
+it makes no claim about other flopy modules. For the full set of
+differences from upstream, compare the fork commit with the upstream commit
+it is based on (`git merge-base`).
 
 ## Validation
 

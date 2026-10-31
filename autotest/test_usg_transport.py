@@ -1,12 +1,14 @@
 import io
 import os
 import shutil
+import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pytest
 from flaky import flaky
-from modflow_devtools.markers import requires_exe
+from modflow_devtools.markers import requires_exe, requires_pkg
 
 from autotest.conftest import get_example_data_path
 from flopy.mfusg import (
@@ -1333,7 +1335,9 @@ def test_mfusgchd_aux_roundtrip(function_tmpdir):
 
 
 def test_mfusgriv_roundtrip(function_tmpdir):
-    """MfUsgRiv load + write: IRDFLAG, node/stage/cond/rbot, reuse SP."""
+    """MfUsgRiv load + write on DISU: the second header field is IRIVCB
+    (GWF2RIV7U1AR), loaded as ipakcb; node/stage/cond/rbot; reuse SP.
+    (Formerly asserted irdflag == 50: that field is IRIVCB, not a read flag.)"""
     from flopy.mfusg import MfUsgRiv
     from flopy.modflow import ModflowDis
 
@@ -1351,7 +1355,9 @@ def test_mfusgriv_roundtrip(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
     riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
 
-    assert riv.irdflag == 50
+    assert riv.ipakcb == 50
+    assert riv.irdflag is None
+    assert 50 in ml.output_units  # CBC output registered for IRIVCB > 0
     sp0 = riv.stress_period_data[0]
     assert len(sp0) == 2
     assert sp0["node"][0] == 100
@@ -1368,6 +1374,7 @@ def test_mfusgriv_roundtrip(function_tmpdir):
     riv.fn_path = str(riv_out)
     riv.write_file()
     text = riv_out.read_text()
+    assert text.splitlines()[1].split()[:2] == ["2", "50"]
     assert "Stress Period 1" in text
     assert "Stress Period 2" in text
     assert "\n 101" in text
@@ -1375,17 +1382,21 @@ def test_mfusgriv_roundtrip(function_tmpdir):
     ml2 = MfUsg(structured=False)
     ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
     riv2 = MfUsgRiv.load(str(riv_out), ml2, nper=2, ext_unit_dict={})
+    assert riv2.ipakcb == 50
     assert np.isclose(riv2.stress_period_data[0]["stage"][0], 15.0, atol=0.01)
 
 
-def test_mfusgriv_irch_detection(function_tmpdir):
-    """MfUsgRiv auto-detects trailing irch column on load and preserves it on write."""
+def test_mfusgriv_trailing_values_ignored(function_tmpdir):
+    """Values after node, stage, cond and rbot are not read by USG-T
+    (ULSTRDU reads NAUX values only): load ignores them with a warning and
+    the rewrite has no extra column. (Formerly they were kept as an 'irch'
+    column, which no USG-T 2.8.1 RIV routine reads.)"""
     from flopy.mfusg import MfUsgRiv
     from flopy.modflow import ModflowDis
 
-    riv_in = function_tmpdir / "irch.riv"
+    riv_in = function_tmpdir / "trailing.riv"
     riv_in.write_text(
-        "# MfUsgRiv irch test\n"
+        "# MfUsgRiv trailing value test\n"
         " 2 50\n"
         " 2 0    Stress Period 1\n"
         " 101  15.000000  1.000000e-04  12.000000  5\n"
@@ -1395,50 +1406,337 @@ def test_mfusgriv_irch_detection(function_tmpdir):
 
     ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=2)
-    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+    with pytest.warns(UserWarning, match="not read by USG-T"):
+        riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
 
-    assert "irch" in riv.dtype.names
+    assert riv.dtype.names == ("node", "stage", "cond", "rbot")
     sp0 = riv.stress_period_data[0]
-    assert sp0["irch"][0] == 5
-    assert sp0["irch"][1] == 7
-
-    # irch must NOT appear as AUX in options
+    assert sp0["node"].tolist() == [100, 101]
+    assert np.allclose(sp0["rbot"], [12.0, 17.0])
     assert not any("irch" in o.lower() for o in riv.options)
 
-    # Round-trip: irch values survive write → load
-    riv_out = function_tmpdir / "out_irch.riv"
+    riv_out = function_tmpdir / "out_trailing.riv"
     riv.fn_path = str(riv_out)
     riv.write_file()
-
-    ml2 = MfUsg(structured=False)
-    ModflowDis(ml2, nlay=1, nrow=1, ncol=1, nper=2)
-    riv2 = MfUsgRiv.load(str(riv_out), ml2, nper=2, ext_unit_dict={})
-    assert "irch" in riv2.dtype.names
-    assert riv2.stress_period_data[0]["irch"][0] == 5
-    assert riv2.stress_period_data[0]["irch"][1] == 7
+    rows = [ln.split() for ln in riv_out.read_text().splitlines()[3:5]]
+    assert [len(r) for r in rows] == [4, 4]
 
 
-def test_mfusgriv_aux_and_irch(function_tmpdir):
-    """MfUsgRiv with both AUX concentration and trailing irch."""
+def test_mfusgriv_aux_with_trailing_value(function_tmpdir):
+    """AUX values are kept; a value after them is ignored like USG-T does.
+    (Formerly the trailing value was kept as 'irch'.)"""
     from flopy.mfusg import MfUsgRiv
 
-    riv_in = function_tmpdir / "aux_irch.riv"
+    riv_in = function_tmpdir / "aux_trailing.riv"
     riv_in.write_text(
-        "# MfUsgRiv aux+irch test\n"
+        "# MfUsgRiv aux test\n"
         " 1 50 AUX C01\n"
         " 1 0    Stress Period 1\n"
         " 101  15.000000  1.000000e-04  12.000000  5.000000e-02  3\n"
     )
 
     ml = MfUsg(structured=False)
-    riv = MfUsgRiv.load(str(riv_in), ml, nper=1, ext_unit_dict={})
+    with pytest.warns(UserWarning, match="not read by USG-T"):
+        riv = MfUsgRiv.load(str(riv_in), ml, nper=1, ext_unit_dict={})
 
     # Field names are preserved as-is from file header (uppercase 'C01')
-    assert "C01" in riv.dtype.names
-    assert "irch" in riv.dtype.names
+    assert riv.dtype.names == ("node", "stage", "cond", "rbot", "C01")
     sp0 = riv.stress_period_data[0]
     assert np.isclose(sp0["C01"][0], 0.05, atol=1e-5)
-    assert sp0["irch"][0] == 3
+    assert riv.options == ["AUX C01"]
+
+
+def _riv_disu_model(ws):
+    """DISU line of 3 nodes (1 layer); CHD at node 1, RIV at node 3."""
+    ml = MfUsg(modelname="r", model_ws=str(ws), structured=False)
+    MfUsgDisU(
+        ml,
+        nodes=3,
+        nlay=1,
+        njag=7,
+        iac=np.array([2, 3, 2]),
+        ja=np.array([0, 1, 1, 0, 2, 2, 1]),
+        ivsd=0,
+        cl12=5.0,
+        fahl=10.0,
+        area=100.0,
+        top=[10.0] * 3,
+        bot=[0.0] * 3,
+        nper=1,
+        perlen=1.0,
+        nstp=1,
+        steady=True,
+    )
+    MfUsgBas(ml, ibound=1, strt=10.0)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ipakcb=0)
+    return ml
+
+
+def _riv_header(path):
+    return next(
+        ln for ln in Path(path).read_text().splitlines() if not ln.startswith("#")
+    ).split()
+
+
+@pytest.mark.parametrize(
+    "ipakcb, irivcb", [(55, 55), (61, 61), (0, 0), (None, 0), (-1, -1)]
+)
+def test_mfusgriv_disu_header_irivcb(function_tmpdir, ipakcb, irivcb):
+    """DISU header is MXACTR IRIVCB [options]; IRIVCB = ipakcb (None → 0);
+    a CBC output is registered only for IRIVCB > 0; load + rewrite keep it."""
+    from flopy.mfusg import MfUsgRiv
+    from flopy.utils.mfreadnam import parsenamefile
+
+    ml = _riv_disu_model(function_tmpdir / "w")
+    MfUsgRiv(
+        ml,
+        ipakcb=ipakcb,
+        options=["NOPRINT", "AUX C01"],
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0, 0.25]]},
+        dtype=MfUsgRiv.get_empty(0, aux_names=["C01"], structured=False).dtype,
+    )
+    ml.write_input()
+    ws = function_tmpdir / "w"
+    assert _riv_header(ws / "r.riv") == ["1", str(irivcb), "NOPRINT", "AUX", "C01"]
+    assert (ws / "r.riv").read_text().splitlines()[3].split() == [
+        "3",
+        "12.000000",
+        "5.000000e+00",
+        "8.000000",
+        "2.500000e-01",
+    ]
+    data = [
+        ln.split()
+        for ln in (ws / "r.nam").read_text().splitlines()
+        if ln.startswith("DATA")
+    ]
+    assert any(int(d[1]) == irivcb for d in data) == (irivcb > 0)
+
+    other = _riv_disu_model(function_tmpdir / "l")
+    ext = parsenamefile(str(ws / "r.nam"), other.mfnam_packages, verbose=False)
+    try:
+        riv = MfUsgRiv.load(ext[18].filehandle, other, ext_unit_dict=ext)
+    finally:
+        for item in ext.values():
+            if item.filehandle is not None and not item.filehandle.closed:
+                item.filehandle.close()
+    assert riv.ipakcb == irivcb
+    assert riv.options == ["NOPRINT", "AUX C01"]
+    assert (irivcb in other.output_units) == (irivcb > 0)
+    if irivcb > 0:
+        fname = other.output_fnames[other.output_units.index(irivcb)]
+        assert fname == "r.cbc"
+    riv.fn_path = str(function_tmpdir / "rewrite.riv")
+    riv.write_file()
+    assert _riv_header(function_tmpdir / "rewrite.riv")[:2] == ["1", str(irivcb)]
+
+
+def test_mfusgriv_irdflag_ignored(function_tmpdir):
+    """irdflag stays in the signature but does not control IRIVCB; an explicit
+    value different from ipakcb warns and is not used as a CBC unit."""
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir)
+    spd = {0: [[2, 12.0, 5.0, 8.0]]}
+    with pytest.warns(UserWarning, match="irdflag=50 is ignored"):
+        riv = MfUsgRiv(ml, 55, spd, None, 50)  # positional call still valid
+    riv.write_file()
+    assert _riv_header(riv.fn_path)[:2] == ["1", "55"]
+    ml = _riv_disu_model(function_tmpdir / "b")  # no unit 55 registered yet
+    with pytest.warns(UserWarning, match="irdflag=55 is ignored"):
+        riv = MfUsgRiv(ml, stress_period_data=spd, irdflag=55)
+    assert riv.ipakcb == 0 and 55 not in ml.output_units
+    riv.write_file()
+    assert _riv_header(riv.fn_path)[:2] == ["1", "0"]
+    ml = _riv_disu_model(function_tmpdir / "c")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        MfUsgRiv(ml, ipakcb=55, stress_period_data=spd, irdflag=55)
+    assert not [x for x in w if "irdflag" in str(x.message)]  # consistent value
+
+
+def test_mfusgriv_irch_dtype_rejected_before_writing(function_tmpdir):
+    """A dtype with 'irch' (not read by USG-T) is rejected before the RIV
+    file is opened."""
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir)
+    dtype = np.dtype(
+        list(MfUsgRiv.get_default_dtype(structured=False).descr) + [("irch", np.int32)]
+    )
+    riv = MfUsgRiv(
+        ml, ipakcb=55, dtype=dtype, stress_period_data={0: [[2, 12.0, 5.0, 8.0, 3]]}
+    )
+    assert not any("irch" in o.lower() for o in riv.options)
+    Path(riv.fn_path).write_text("SENTINEL\n")
+    with pytest.raises(ValueError, match="irch"):
+        riv.write_file()
+    assert Path(riv.fn_path).read_text() == "SENTINEL\n"
+
+
+@pytest.mark.parametrize(
+    "decl", ["AUX IRCH", "AUXILIARY IRCH", "aux irch", "Auxiliary Irch"]
+)
+def test_mfusgriv_declared_aux_irch_load_write(function_tmpdir, decl):
+    """A variable declared as AUX/AUXILIARY IRCH (any case) is an ordinary AUX
+    variable: kept on load, write and reload."""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "aux_irch.riv"
+    riv_in.write_text(f"# manual\n 1 55 {decl}\n 1 0\n 3 12.0 5.0 8.0 7.0\n")
+    ml = _riv_disu_model(function_tmpdir / "l")
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        riv = MfUsgRiv.load(str(riv_in), ml, ext_unit_dict={})
+    assert not [x for x in w if "not read by USG-T" in str(x.message)]
+    name = decl.split()[1]
+    assert riv.options == [decl]
+    assert riv.dtype.names[4:] == (name,)
+    assert riv.stress_period_data[0][name][0] == 7.0
+    riv.fn_path = str(function_tmpdir / "out.riv")
+    riv.write_file()
+    lines = Path(riv.fn_path).read_text().splitlines()
+    assert lines[1].split() == ["1", "55"] + decl.split()
+    assert lines[3].split()[-1] == "7.000000e+00"
+    again = MfUsgRiv.load(
+        riv.fn_path, _riv_disu_model(function_tmpdir / "r"), ext_unit_dict={}
+    )
+    assert again.options == [decl] and again.stress_period_data[0][name][0] == 7.0
+
+
+@pytest.mark.parametrize(
+    "field, decl",
+    [("irch", "AUX IRCH"), ("IRCH", "auxiliary irch"), ("Irch", "AUX irch")],
+)
+def test_mfusgriv_declared_irch_programmatic(function_tmpdir, field, decl):
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir)
+    dtype = np.dtype(
+        list(MfUsgRiv.get_default_dtype(structured=False).descr) + [(field, np.float32)]
+    )
+    riv = MfUsgRiv(
+        ml,
+        ipakcb=55,
+        dtype=dtype,
+        options=[decl],
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0, 7.0]]},
+    )
+    assert riv.options == [decl]  # not declared a second time
+    riv.write_file()
+    lines = Path(riv.fn_path).read_text().splitlines()
+    assert lines[1].split() == ["1", "55"] + decl.split()
+    assert lines[3].split()[-1] == "7.000000e+00"
+
+
+def test_mfusgriv_aux_order_with_irch(function_tmpdir):
+    """AUX values are written in the order of the declarations, whatever the
+    dtype order, and reload in that order."""
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir / "w")
+    base = list(MfUsgRiv.get_default_dtype(structured=False).descr)
+    dtype = np.dtype(
+        base + [("C02", np.float32), ("IRCH", np.float32), ("C01", np.float32)]
+    )
+    options = ["AUX C01", "AUXILIARY IRCH", "AUX C02"]
+    riv = MfUsgRiv(
+        ml,
+        ipakcb=55,
+        dtype=dtype,
+        options=list(options),
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0, 0.2, 7.0, 0.1]]},
+    )
+    riv.write_file()
+    lines = Path(riv.fn_path).read_text().splitlines()
+    assert lines[1].split()[2:] == "AUX C01 AUXILIARY IRCH AUX C02".split()
+    assert lines[3].split()[4:] == ["1.000000e-01", "7.000000e+00", "2.000000e-01"]
+    again = MfUsgRiv.load(
+        riv.fn_path, _riv_disu_model(function_tmpdir / "r"), ext_unit_dict={}
+    )
+    assert again.options == options
+    assert again.dtype.names[4:] == ("C01", "IRCH", "C02")
+    rec = again.stress_period_data[0][0]
+    assert np.allclose([rec["C01"], rec["IRCH"], rec["C02"]], [0.1, 7.0, 0.2])
+
+
+@pytest.mark.parametrize(
+    "options, extra",
+    [
+        ([], []),
+        (["AUX XIRCH"], ["XIRCH"]),
+        (["AUXILIARY IRCHX"], ["IRCHX"]),
+        (["NOPRINT"], []),
+    ],
+)
+def test_mfusgriv_undeclared_irch_rejected(function_tmpdir, options, extra):
+    """An undeclared 'irch' field is rejected before the file is opened; a
+    partial name match (XIRCH, IRCHX) does not declare it, and it is not
+    declared automatically."""
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir)
+    base = list(MfUsgRiv.get_default_dtype(structured=False).descr)
+    dtype = np.dtype(base + [(n, np.float32) for n in extra] + [("irch", np.int32)])
+    riv = MfUsgRiv(
+        ml,
+        ipakcb=55,
+        dtype=dtype,
+        options=list(options),
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0] + [0.5] * len(extra) + [3]]},
+    )
+    assert riv.options == options
+    Path(riv.fn_path).write_text("SENTINEL\n")
+    with pytest.raises(ValueError, match="not declared as AUX"):
+        riv.write_file()
+    assert Path(riv.fn_path).read_text() == "SENTINEL\n"
+
+
+def test_mfusgriv_aux_declaration_whole_tokens(function_tmpdir):
+    """A field is declared by whole-token match: 'AUX C10' does not declare C1;
+    a declared AUX without a data field is rejected before writing."""
+    from flopy.mfusg import MfUsgRiv
+
+    ml = _riv_disu_model(function_tmpdir)
+    base = list(MfUsgRiv.get_default_dtype(structured=False).descr)
+    dtype = np.dtype(base + [("C10", np.float32), ("C1", np.float32)])
+    riv = MfUsgRiv(
+        ml,
+        ipakcb=55,
+        dtype=dtype,
+        options=["AUX C10"],
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0, 0.1, 0.2]]},
+    )
+    assert riv.options == ["AUX C10", "AUX C1"]
+    riv.write_file()
+    assert Path(riv.fn_path).read_text().splitlines()[3].split()[4:] == [
+        "1.000000e-01",
+        "2.000000e-01",
+    ]
+    riv2 = MfUsgRiv(
+        _riv_disu_model(function_tmpdir / "m"),
+        ipakcb=55,
+        options=["AUX C05"],
+        stress_period_data={0: [[2, 12.0, 5.0, 8.0]]},
+    )
+    Path(riv2.fn_path).write_text("SENTINEL\n")
+    with pytest.raises(ValueError, match="no data field"):
+        riv2.write_file()
+    assert Path(riv2.fn_path).read_text() == "SENTINEL\n"
+
+
+def test_mfusgriv_structured_header_unchanged(function_tmpdir):
+    """Control: structured models keep the ModflowRiv writer (IRIVCB=ipakcb)."""
+    from flopy.mfusg import MfUsgRiv
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="s", model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=3, top=10.0, botm=[0.0])
+    MfUsgBas(ml)
+    MfUsgLpf(ml)
+    MfUsgRiv(ml, ipakcb=55, stress_period_data={0: [[0, 0, 2, 12.0, 5.0, 8.0]]})
+    ml.get_package("RIV").write_file()
+    assert _riv_header(function_tmpdir / "s.riv")[:2] == ["1", "55"]
 
 
 def test_mfusgets_construction(function_tmpdir):
@@ -1542,14 +1840,16 @@ def test_mfusg_boundary_programmatic_creation_uses_zero_based_nodes(function_tmp
             ("cond", np.float32),
             ("rbot", np.float32),
             ("C01", np.float32),
-            ("irch", int),
         ]
     )
+    # No 'irch' column: USG-T RIV reads node, stage, cond, rbot and AUX only
+    # (a dtype with 'irch' is rejected, see
+    # test_mfusgriv_irch_dtype_rejected_before_writing)
     riv = MfUsgRiv(
         ml,
         stress_period_data={
             0: np.array(
-                [(2, 10.0, 1.0e-4, 9.0, 0.25, 7)],
+                [(2, 10.0, 1.0e-4, 9.0, 0.25)],
                 dtype=riv_dtype,
             ).view(np.recarray)
         },
@@ -1560,7 +1860,7 @@ def test_mfusg_boundary_programmatic_creation_uses_zero_based_nodes(function_tmp
     riv_text = Path(riv.fn_path).read_text()
     assert "AUX C01" in riv_text
     assert "\n 3  10.000000" in riv_text
-    assert riv_text.splitlines()[3].split()[-1] == "7"
+    assert riv_text.splitlines()[3].split()[-1] == "2.500000e-01"
 
     ghb_dtype = np.dtype(
         [
@@ -1834,6 +2134,1489 @@ def test_mfusgdpf_programmatic_richards_immobile_roundtrip(function_tmpdir):
     assert np.allclose(dpf2.srim[0].array, 0.1)
     assert np.allclose(dpf2.brookim[0].array, 5.0)
     assert np.allclose(dpf2.bpim[0].array, -0.25)
+
+
+# DPF read contract, GWF2DPFU1AR (gwf2dpf1u1.f, USG-Transport 2.8.1):
+# IUZONTABIM if ITABRICH!=0 (111-115), all IBOUNDIM layers (118-124), all
+# HNEWIM layers (131-157), then DO 200 K=1,NLAY (162-191): PHIF, DDFTR, SC1IM,
+# SC2IM if LAYCON(K)!=0, ALPHAIM/BETAIM/SRIM/BROOKIM if LAYCON(K)==5 and
+# ITABRICH==0, and BPIM if additionally IBPN>0.
+
+# one distinct value per property and layer (tuple index = layer)
+_DPF_VALUES = {
+    "iboundim": (1, 1, 1),
+    "hnewim": (5.1, 5.2, 5.3),
+    "phif": (0.11, 0.12, 0.13),
+    "ddftr": (0.021, 0.022, 0.023),
+    "sc1im": (3.1e-05, 3.2e-05, 3.3e-05),
+    "sc2im": (0.41, 0.42, 0.43),
+    "alphaim": (0.51, 0.52, 0.53),
+    "betaim": (6.1, 6.2, 6.3),
+    "srim": (0.071, 0.072, 0.073),
+    "brookim": (8.1, 8.2, 8.3),
+    "bpim": (-0.91, -0.92, -0.93),
+}
+
+
+def _dpf_fortran_sequence(laycon, tabrich=False, bubblept=False):
+    """Restatement of the GWF2DPFU1AR record order, as (name, layer)."""
+    nlay = len(laycon)
+    seq = [("iuzontabim", 0)] if tabrich else []
+    seq += [("iboundim", k + 1) for k in range(nlay)]
+    seq += [("hnewim", k + 1) for k in range(nlay)]
+    for k in range(nlay):
+        seq += [("phif", k + 1), ("ddftr", k + 1), ("sc1im", k + 1)]
+        if laycon[k] != 0:
+            seq.append(("sc2im", k + 1))
+        if laycon[k] == 5 and not tabrich:
+            seq += [(n, k + 1) for n in ("alphaim", "betaim", "srim", "brookim")]
+            if bubblept:
+                seq.append(("bpim", k + 1))
+    return seq
+
+
+def _dpf_records(path):
+    """(name, layer) of every array control record of a DPF file, in order."""
+    records = []
+    for line in Path(path).read_text().splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0] not in ("CONSTANT", "INTERNAL", "OPEN/CLOSE"):
+            continue
+        comment = line.split("#", 1)[1].split()
+        layer = int(comment[2]) if len(comment) > 2 and comment[1] == "layer" else 0
+        records.append((comment[0], layer))
+    return records
+
+
+def _dpf_kwargs(nlay, ncol=2):
+    return {
+        name: [[[values[k]] * ncol] for k in range(nlay)]
+        for name, values in _DPF_VALUES.items()
+    }
+
+
+def _dpf_flow_model(
+    ws,
+    laycon=None,
+    laytyp=None,
+    richards=False,
+    richards_hp=False,
+    tabrich=False,
+    bubblept=False,
+    thickstrt=False,
+):
+    """Structured 1-row, 2-column MfUsg model with BCF (laycon) or LPF."""
+    from flopy.modflow import ModflowDis
+
+    nlay = len(laycon if laycon is not None else laytyp)
+    ml = MfUsg(modelname="dpf", model_ws=str(ws))
+    ModflowDis(
+        ml,
+        nlay=nlay,
+        nrow=1,
+        ncol=2,
+        nper=1,
+        steady=False,
+        top=10.0,
+        botm=[10.0 - 2.0 * (k + 1) for k in range(nlay)],
+    )
+    MfUsgBas(ml, ibound=1, strt=8.0, richards=richards, richards_hp=richards_hp)
+    tab = {"tabrich": True, "nuzones": 1, "nutabrows": 2} if tabrich else {}
+    if laycon is not None:
+        MfUsgBcf(
+            ml,
+            laycon=list(laycon),
+            bubblept=bubblept,
+            tran=1.0,
+            hy=1.0,
+            kv=1.0,
+            sf1=1.0e-5,
+            sf2=0.15,
+            **tab,
+        )
+    else:
+        MfUsgLpf(ml, laytyp=list(laytyp), bubblept=bubblept, thickstrt=thickstrt, **tab)
+    return ml
+
+
+def _assert_dpf_values(dpf, laycon, tabrich=False, bubblept=False):
+    for name, layer in _dpf_fortran_sequence(laycon, tabrich, bubblept):
+        if name == "iuzontabim":
+            continue
+        got = getattr(dpf, name)[layer - 1].array
+        assert np.allclose(got, _DPF_VALUES[name][layer - 1]), (name, layer, got)
+
+
+def test_mfusgdpf_write_order_multilayer_confined(function_tmpdir):
+    """PHIF, DDFTR and SC1IM are written layer by layer (DO 200)."""
+    ml = _dpf_flow_model(function_tmpdir, laycon=[0, 0])
+    dpf = MfUsgDpf(ml, **_dpf_kwargs(2))
+    dpf.write_file()
+
+    assert _dpf_records(dpf.fn_path) == [
+        ("iboundim", 1),
+        ("iboundim", 2),
+        ("hnewim", 1),
+        ("hnewim", 2),
+        ("phif", 1),
+        ("ddftr", 1),
+        ("sc1im", 1),
+        ("phif", 2),
+        ("ddftr", 2),
+        ("sc1im", 2),
+    ]
+
+
+def test_mfusgdpf_load_manual_fortran_order_confined(function_tmpdir):
+    """A hand-written file in GWF2DPFU1AR order loads into the right layers."""
+    path = function_tmpdir / "manual.dpf"
+    path.write_text(
+        "         0         0         0\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 1\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 2\n"
+        "CONSTANT        5.1 (G15.6) -1 #hnewim layer 1\n"
+        "CONSTANT        5.2 (G15.6) -1 #hnewim layer 2\n"
+        "CONSTANT       0.11 (G15.6) -1 #phif layer 1\n"
+        "CONSTANT      0.021 (G15.6) -1 #ddftr layer 1\n"
+        "CONSTANT    3.1e-05 (G15.6) -1 #sc1im layer 1\n"
+        "CONSTANT       0.12 (G15.6) -1 #phif layer 2\n"
+        "CONSTANT      0.022 (G15.6) -1 #ddftr layer 2\n"
+        "CONSTANT    3.2e-05 (G15.6) -1 #sc1im layer 2\n"
+    )
+    ml = _dpf_flow_model(function_tmpdir, laycon=[0, 0])
+    dpf = MfUsgDpf.load(str(path), ml)
+
+    _assert_dpf_values(dpf, [0, 0])
+    # SC2IM is not read for confined layers: placeholders keep the 0 convention
+    assert np.allclose(dpf.sc2im.array, 0.0)
+
+
+@pytest.mark.parametrize("bubblept", [False, True])
+def test_mfusgdpf_two_richards_layers(function_tmpdir, bubblept):
+    """Two LAYCON=5 layers: write order, manual load and round-trip."""
+    laycon = [5, 5]
+    kw = {"laycon": laycon, "richards": True, "bubblept": bubblept}
+    ml = _dpf_flow_model(function_tmpdir, **kw)
+    dpf = MfUsgDpf(ml, **_dpf_kwargs(2))
+    dpf.write_file()
+
+    # FloPy round-trip first: writer and loader must agree on the order
+    ml2 = _dpf_flow_model(function_tmpdir, **kw)
+    _assert_dpf_values(MfUsgDpf.load(str(dpf.fn_path), ml2), laycon, bubblept=bubblept)
+
+    def richards(layer):
+        names = ["phif", "ddftr", "sc1im", "sc2im", "alphaim", "betaim", "srim"]
+        names += ["brookim"] + (["bpim"] if bubblept else [])
+        return [(name, layer) for name in names]
+
+    expected = [("iboundim", 1), ("iboundim", 2), ("hnewim", 1), ("hnewim", 2)]
+    expected += richards(1) + richards(2)
+    assert _dpf_records(dpf.fn_path) == expected
+
+    # hand-written file in GWF2DPFU1AR order
+    lines = [
+        "         0         0         0",
+        "CONSTANT          1 (I10) -1 #iboundim layer 1",
+        "CONSTANT          1 (I10) -1 #iboundim layer 2",
+        "CONSTANT        5.1 (G15.6) -1 #hnewim layer 1",
+        "CONSTANT        5.2 (G15.6) -1 #hnewim layer 2",
+        "CONSTANT       0.11 (G15.6) -1 #phif layer 1",
+        "CONSTANT      0.021 (G15.6) -1 #ddftr layer 1",
+        "CONSTANT    3.1e-05 (G15.6) -1 #sc1im layer 1",
+        "CONSTANT       0.41 (G15.6) -1 #sc2im layer 1",
+        "CONSTANT       0.51 (G15.6) -1 #alphaim layer 1",
+        "CONSTANT        6.1 (G15.6) -1 #betaim layer 1",
+        "CONSTANT      0.071 (G15.6) -1 #srim layer 1",
+        "CONSTANT        8.1 (G15.6) -1 #brookim layer 1",
+        "CONSTANT      -0.91 (G15.6) -1 #bpim layer 1",
+        "CONSTANT       0.12 (G15.6) -1 #phif layer 2",
+        "CONSTANT      0.022 (G15.6) -1 #ddftr layer 2",
+        "CONSTANT    3.2e-05 (G15.6) -1 #sc1im layer 2",
+        "CONSTANT       0.42 (G15.6) -1 #sc2im layer 2",
+        "CONSTANT       0.52 (G15.6) -1 #alphaim layer 2",
+        "CONSTANT        6.2 (G15.6) -1 #betaim layer 2",
+        "CONSTANT      0.072 (G15.6) -1 #srim layer 2",
+        "CONSTANT        8.2 (G15.6) -1 #brookim layer 2",
+        "CONSTANT      -0.92 (G15.6) -1 #bpim layer 2",
+    ]
+    if not bubblept:
+        lines = [line for line in lines if "#bpim" not in line]
+    path = function_tmpdir / "manual.dpf"
+    path.write_text("\n".join(lines) + "\n")
+    ml3 = _dpf_flow_model(function_tmpdir, **kw)
+    _assert_dpf_values(MfUsgDpf.load(str(path), ml3), laycon, bubblept=bubblept)
+
+
+@pytest.mark.parametrize(
+    "flow, codes, richards, tabrich, effective",
+    [
+        ("bcf", [0, 3, 5], False, False, [0, 3, 5]),
+        ("bcf", [0, 3, 5], True, False, [0, 5, 5]),
+        ("bcf", [0, 3, 5], True, True, [0, 5, 5]),
+        ("lpf", [0, 1, 5], True, False, [0, 5, 5]),
+        ("lpf", [0, 1, 5], True, True, [0, 5, 5]),
+    ],
+)
+def test_mfusgdpf_mixed_layers_follow_effective_laycon(
+    function_tmpdir, flow, codes, richards, tabrich, effective
+):
+    """Mixed confined/convertible/Richards layers, TABRICH on and off.
+
+    The records follow the effective LAYCON: with BAS RICHARDS every
+    LAYCON != 0 becomes 5 (gwf2bcf-lpf-u1.f 343-348 and 3345-3348).
+    """
+    kw = {"richards": richards, "tabrich": tabrich, "bubblept": True}
+    kw["laycon" if flow == "bcf" else "laytyp"] = codes
+    ml = _dpf_flow_model(function_tmpdir, **kw)
+    assert MfUsgDpf._get_laycon(ml).tolist() == effective
+
+    arrays = _dpf_kwargs(3)
+    if tabrich:
+        arrays["iuzontabim"] = [7, 8, 9, 10, 11, 12]
+    dpf = MfUsgDpf(ml, **arrays)
+    dpf.write_file()
+    assert _dpf_records(dpf.fn_path) == _dpf_fortran_sequence(effective, tabrich, True)
+
+    ml2 = _dpf_flow_model(function_tmpdir, **kw)
+    dpf2 = MfUsgDpf.load(str(dpf.fn_path), ml2)
+    _assert_dpf_values(dpf2, effective, tabrich, True)
+    assert np.allclose(dpf2.sc2im[0].array, 0.0)
+    if tabrich:
+        assert dpf2.iuzontabim.array.tolist() == [7, 8, 9, 10, 11, 12]
+        assert not hasattr(dpf2, "alphaim")
+
+
+def _dpf_disu_model(ws):
+    """DISU with nodelay=[3, 2]; LPF LAYTYP=[0, 5] with BAS RICHARDS."""
+    ml = MfUsg(modelname="dpfu", model_ws=str(ws), structured=False)
+    MfUsgDisU(
+        ml,
+        nodes=5,
+        nlay=2,
+        njag=15,
+        nodelay=[3, 2],
+        iac=np.array([3, 4, 2, 3, 3]),
+        ja=np.array([0, 1, 3, 1, 0, 2, 4, 2, 1, 3, 0, 4, 4, 1, 3]),
+        ivsd=0,
+        cl12=1.0,
+        fahl=1.0,
+        top=[10.0] * 3 + [5.0] * 2,
+        bot=[5.0] * 3 + [0.0] * 2,
+        area=1.0,
+        steady=False,
+    )
+    MfUsgBas(ml, ibound=1, strt=8.0, richards=True)
+    MfUsgLpf(ml, laytyp=[0, 5])
+    return ml
+
+
+def test_mfusgdpf_disu_irregular_layers(function_tmpdir):
+    """Per-layer node counts (3, 2) are kept by the layer-by-layer loop."""
+    layer_values = {
+        "phif": ([0.11, 0.111, 0.112], [0.12, 0.121]),
+        "ddftr": ([0.021, 0.0211, 0.0212], [0.022, 0.0221]),
+        "sc1im": ([3.1e-5, 3.11e-5, 3.12e-5], [3.2e-5, 3.21e-5]),
+        "sc2im": ([0.0, 0.0, 0.0], [0.42, 0.421]),
+        "alphaim": ([1.0, 1.0, 1.0], [0.52, 0.521]),
+        "betaim": ([7.0, 7.0, 7.0], [6.2, 6.21]),
+        "srim": ([0.05, 0.05, 0.05], [0.072, 0.0721]),
+        "brookim": ([6.0, 6.0, 6.0], [8.2, 8.21]),
+    }
+    ml = _dpf_disu_model(function_tmpdir)
+    arrays = {name: [np.array(v) for v in vals] for name, vals in layer_values.items()}
+    dpf = MfUsgDpf(ml, iboundim=1, hnewim=5.0, **arrays)
+    dpf.write_file()
+
+    assert _dpf_records(dpf.fn_path) == _dpf_fortran_sequence([0, 5])
+
+    def check(loaded):
+        for name, layer in _dpf_fortran_sequence([0, 5]):
+            if name in layer_values:
+                got = np.asarray(getattr(loaded, name)[layer - 1].array).ravel()
+                assert got.size == (3, 2)[layer - 1], (name, layer, got)
+                assert np.allclose(got, layer_values[name][layer - 1]), (name, layer)
+
+    check(MfUsgDpf.load(str(dpf.fn_path), _dpf_disu_model(function_tmpdir)))
+
+    path = function_tmpdir / "manual_disu.dpf"
+    path.write_text(
+        "         0         0         0\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 1\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 2\n"
+        "CONSTANT        5.0 (G15.6) -1 #hnewim layer 1\n"
+        "CONSTANT        5.0 (G15.6) -1 #hnewim layer 2\n"
+        "INTERNAL 1.0 (FREE) -1 #phif layer 1\n0.11 0.111 0.112\n"
+        "INTERNAL 1.0 (FREE) -1 #ddftr layer 1\n0.021 0.0211 0.0212\n"
+        "INTERNAL 1.0 (FREE) -1 #sc1im layer 1\n3.1e-5 3.11e-5 3.12e-5\n"
+        "INTERNAL 1.0 (FREE) -1 #phif layer 2\n0.12 0.121\n"
+        "INTERNAL 1.0 (FREE) -1 #ddftr layer 2\n0.022 0.0221\n"
+        "INTERNAL 1.0 (FREE) -1 #sc1im layer 2\n3.2e-5 3.21e-5\n"
+        "INTERNAL 1.0 (FREE) -1 #sc2im layer 2\n0.42 0.421\n"
+        "INTERNAL 1.0 (FREE) -1 #alphaim layer 2\n0.52 0.521\n"
+        "INTERNAL 1.0 (FREE) -1 #betaim layer 2\n6.2 6.21\n"
+        "INTERNAL 1.0 (FREE) -1 #srim layer 2\n0.072 0.0721\n"
+        "INTERNAL 1.0 (FREE) -1 #brookim layer 2\n8.2 8.21\n"
+    )
+    check(MfUsgDpf.load(str(path), _dpf_disu_model(function_tmpdir)))
+
+
+@pytest.mark.parametrize(
+    "flow, codes, options, effective",
+    [
+        ("bcf", [3, 5], {"richards": True}, [5, 5]),
+        ("bcf", [3, 0], {}, [3, 0]),
+        ("lpf", [1, 2, 3], {}, [3, 3, 3]),
+        ("lpf", [4, 0], {}, [4, 0]),
+        ("lpf", [-1, 0], {"thickstrt": True}, [0, 0]),
+        ("lpf", [-1, 0], {}, [3, 0]),
+        ("lpf", [1, 5], {"richards": True}, [5, 5]),
+        ("lpf", [1, 5], {"richards_hp": True}, [5, 5]),
+        ("lpf", [-1, 0, 5], {"richards": True, "thickstrt": True}, [0, 0, 5]),
+    ],
+)
+def test_mfusgdpf_effective_laycon(function_tmpdir, flow, codes, options, effective):
+    """LAYCON as derived by the Fortran BCF/LPF readers; flow arrays untouched."""
+    kw = dict(options)
+    kw["laycon" if flow == "bcf" else "laytyp"] = codes
+    ml = _dpf_flow_model(function_tmpdir, **kw)
+    pkg = ml.get_package("BCF6") or ml.get_package("LPF")
+    before = np.array(pkg.laycon.array if flow == "bcf" else pkg.laytyp.array)
+
+    assert MfUsgDpf._get_laycon(ml).tolist() == effective
+    after = pkg.laycon.array if flow == "bcf" else pkg.laytyp.array
+    assert np.array_equal(before, after)
+
+    dpf = MfUsgDpf(ml, **_dpf_kwargs(len(codes)))
+    dpf.write_file()
+    records = _dpf_records(dpf.fn_path)
+    sc2im_layers = [layer for name, layer in records if name == "sc2im"]
+    assert sc2im_layers == [k + 1 for k, lc in enumerate(effective) if lc != 0]
+
+
+def test_mfusgdpf_thickstrt_option_token(function_tmpdir):
+    """THICKSTRT is matched as a whole LPF option token, in any letter case."""
+    ml = _dpf_flow_model(function_tmpdir, laytyp=[-1, 0])
+    lpf = ml.get_package("LPF")
+    lpf.options = " NOVFC thickstrt "
+    assert MfUsgDpf._get_laycon(ml).tolist() == [0, 0]
+    lpf.options = " THICKSTRTX "
+    assert MfUsgDpf._get_laycon(ml).tolist() == [3, 0]
+
+
+def test_mfusgdpf_tabrich_from_lpf(function_tmpdir):
+    """TABRICH on LPF: IUZONTABIM is written first and no Richards arrays."""
+    ml = _dpf_flow_model(
+        function_tmpdir, laytyp=[0, 5], richards=True, tabrich=True, bubblept=True
+    )
+    assert MfUsgDpf._has_tabrich(ml)
+    assert MfUsgDpf._has_bubblept(ml)
+    arrays = _dpf_kwargs(2)
+    arrays["iuzontabim"] = [7, 8, 9, 10]
+    dpf = MfUsgDpf(ml, **arrays)
+    dpf.write_file()
+    records = _dpf_records(dpf.fn_path)
+    assert records[0] == ("iuzontabim", 0)
+    assert records == _dpf_fortran_sequence([0, 5], tabrich=True, bubblept=True)
+
+
+def test_mfusgdpf_load_open_close_and_shared_external(function_tmpdir):
+    """OPEN/CLOSE and a shared EXTERNAL unit are consumed in DO 200 order."""
+    from flopy.utils.mfreadnam import parsenamefile
+
+    (function_tmpdir / "phif_l1.txt").write_text("0.11 0.11\n")
+    # four distinct blocks read in sequence from unit 71, then a sentinel line
+    (function_tmpdir / "dpf_ext71.dat").write_text(
+        "0.021 0.021\n3.1e-05 3.1e-05\n0.12 0.12\n0.022 0.022\nEND-OF-DPF-BLOCKS\n"
+    )
+    (function_tmpdir / "manual.dpf").write_text(
+        "         0         0         0\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 1\n"
+        "CONSTANT          1 (I10) -1 #iboundim layer 2\n"
+        "CONSTANT        5.1 (G15.6) -1 #hnewim layer 1\n"
+        "CONSTANT        5.2 (G15.6) -1 #hnewim layer 2\n"
+        "OPEN/CLOSE phif_l1.txt 1.0 (FREE) -1 #phif layer 1\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #ddftr layer 1\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #sc1im layer 1\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #phif layer 2\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #ddftr layer 2\n"
+        "CONSTANT    3.2e-05 (G15.6) -1 #sc1im layer 2\n"
+    )
+    nam = function_tmpdir / "manual.nam"
+    nam.write_text("DPF 57 manual.dpf\nDATA 71 dpf_ext71.dat\n")
+
+    ml = _dpf_flow_model(function_tmpdir, laycon=[0, 0])
+    ext_unit_dict = parsenamefile(str(nam), ml.mfnam_packages, verbose=False)
+    try:
+        dpf = MfUsgDpf.load(
+            str(function_tmpdir / "manual.dpf"), ml, ext_unit_dict=ext_unit_dict
+        )
+        remaining = ext_unit_dict[71].filehandle.readline().strip()
+    finally:
+        for item in ext_unit_dict.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+
+    _assert_dpf_values(dpf, [0, 0])
+    assert remaining == "END-OF-DPF-BLOCKS"
+
+
+@pytest.mark.parametrize("unitnumber, expected_unit", [(None, 157), (57, 57)])
+def test_mfusgdpf_write_input_name_file_unit(
+    function_tmpdir, unitnumber, expected_unit
+):
+    """write_input() works with the default DPF unit and with an explicit one."""
+    ml = _dpf_flow_model(function_tmpdir, laytyp=[0, 0])
+    MfUsgDpf(ml, unitnumber=unitnumber, **_dpf_kwargs(2))
+    ml.write_input()
+
+    nam = (function_tmpdir / "dpf.nam").read_text().splitlines()
+    assert [ln.split() for ln in nam if ln.split()[:1] == ["DPF"]] == [
+        ["DPF", str(expected_unit), "dpf.dpf"]
+    ]
+    assert _dpf_records(function_tmpdir / "dpf.dpf") == _dpf_fortran_sequence([0, 0])
+
+
+# D7 stage 1: HNEWIM precision. With BAS DPIN or DPIO (IDPIN=1) GWF2DPFU1AR
+# reads HNEWIM with U1DREL8 (REAL*8 values; REAL CNSTNT and CONSTANT; binary
+# only through a negative unit, with a 52-byte header and no multiplier);
+# otherwise with U1DREL (REAL). Expected values below come from the Fortran
+# contract, not from FloPy.
+
+_D7_HNEWIM = np.array(
+    [
+        [23.1234567890123, 23.1234567890124, 22.75],
+        [21.987654321098765, 22.000000123456789, 21.5],
+    ]
+)  # the first two values of each layer are equal in float32
+_D7_NOT_REAL = 23.1234567890123
+
+
+def _d7_model(ws, options=("dpio",), array_free_format=True):
+    """Structured 2-layer 1x3 confined model (LPF LAYTYP 0, LAYCON 0)."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="d7", model_ws=str(ws))
+    ml.array_free_format = array_free_format
+    ModflowDis(
+        ml, nlay=2, nrow=1, ncol=3, nper=1, steady=False, top=30.0, botm=[20.0, 10.0]
+    )
+    flags = {"dpin": "double_prec", "dpout": "double_out", "dpio": "double_io"}
+    MfUsgBas(ml, ibound=1, strt=25.0, **{flags[o]: True for o in options})
+    MfUsgLpf(ml, laytyp=0)
+    return ml
+
+
+def _d7_dpf(ml, hnewim=_D7_HNEWIM.reshape(2, 1, 3), **kwargs):
+    return MfUsgDpf(
+        ml, iboundim=1, hnewim=hnewim, phif=0.2, ddftr=0.0, sc1im=1.0e-4, **kwargs
+    )
+
+
+def _d7_manual_dpf(path, hnewim_records):
+    """Hand-written DPF in the GWF2DPFU1AR order (LAYCON 0)."""
+    lines = [
+        "         0         0         0",
+        "CONSTANT 1 #iboundim layer 1",
+        "CONSTANT 1 #iboundim layer 2",
+    ]
+    lines += hnewim_records
+    for k in (1, 2):
+        lines += [
+            f"CONSTANT 0.2 #phif layer {k}",
+            f"CONSTANT 0.0 #ddftr layer {k}",
+            f"CONSTANT 1.0E-4 #sc1im layer {k}",
+        ]
+    Path(path).write_text("\n".join(lines) + "\n")
+
+
+def _d7_text_records(values=_D7_HNEWIM, cnstnt="1.0"):
+    out = []
+    for k, row in enumerate(values, start=1):
+        out += [
+            f"INTERNAL {cnstnt} (FREE) -1 #hnewim layer {k}",
+            " ".join(repr(float(v)) for v in row),
+        ]
+    return out
+
+
+def _d7_binary(values=_D7_HNEWIM, double=True):
+    """U1DREL8 (double) / U1DREL stream layout, one header per layer."""
+    import struct
+
+    real = "d" if double else "f"
+    out = b""
+    nstrt = 1
+    for k, row in enumerate(values, start=1):
+        out += struct.pack(
+            f"<ii{real}{real}16siii",
+            1,
+            1,
+            0.0,
+            0.0,
+            b"  IMMOBILE HEAD ",
+            nstrt,
+            nstrt + len(row) - 1,
+            k,
+        )
+        out += struct.pack(f"<{len(row)}{real}", *row)
+        nstrt += len(row)
+    return out
+
+
+def _d7_written_hnewim(path):
+    """HNEWIM values as written in free-format text records (independent
+    of FloPy's reader): INTERNAL values or CONSTANT, per layer."""
+    lines = Path(path).read_text().splitlines()
+    layers = []
+    for i, line in enumerate(lines):
+        if "hnewim" not in line.lower():
+            continue
+        tokens = line.split()
+        if tokens[0] == "CONSTANT":
+            layers.append(("CONSTANT", [float(tokens[1])]))
+        elif tokens[0] == "INTERNAL":
+            layers.append(("INTERNAL", [float(v) for v in lines[i + 1].split()]))
+        else:
+            layers.append((tokens[0], None))
+    return layers
+
+
+def _d7_load(ws, dpf_file, options=("dpio",), nam_lines=None):
+    """Load a DPF file into a new model; ext_unit_dict from nam_lines."""
+    from flopy.utils.mfreadnam import parsenamefile
+
+    ml = _d7_model(ws, options)
+    if not nam_lines:
+        return MfUsgDpf.load(str(dpf_file), ml)
+    nam = Path(dpf_file).parent / "d7_manual.nam"
+    nam.write_text("\n".join(nam_lines) + "\n")
+    ext = parsenamefile(str(nam), ml.mfnam_packages, verbose=False)
+    try:
+        return MfUsgDpf.load(str(dpf_file), ml, ext_unit_dict=ext)
+    finally:
+        for item in ext.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+
+
+@pytest.mark.parametrize(
+    "options, dtype",
+    [
+        ((), np.float32),
+        (("dpout",), np.float32),
+        (("dpin",), np.float64),
+        (("dpio",), np.float64),
+        (("dpin", "dpout"), np.float64),
+    ],
+)
+def test_mfusgdpf_hnewim_precision_follows_bas(function_tmpdir, options, dtype):
+    dpf = _d7_dpf(_d7_model(function_tmpdir, options))
+    assert dpf.hnewim.dtype == dtype
+    assert all(u2d.dtype == dtype for u2d in dpf.hnewim.util_2ds)
+    hn = dpf.hnewim.array.reshape(2, 3)
+    assert hn.dtype == dtype
+    np.testing.assert_array_equal(hn, _D7_HNEWIM.astype(dtype))
+    assert (hn[0, 0] != hn[0, 1]) == (dtype == np.float64)
+    for name in ("phif", "ddftr", "sc1im"):
+        assert getattr(dpf, name).dtype == np.float32
+
+
+def test_mfusgdpf_hnewim_double_text_write_load_rewrite(function_tmpdir):
+    ml = _d7_model(function_tmpdir / "w")
+    dpf = _d7_dpf(ml)
+    dpf.write_file()
+    written = _d7_written_hnewim(dpf.fn_path)
+    assert [kind for kind, _ in written] == ["INTERNAL", "INTERNAL"]
+    assert "(3E24.16)" in Path(dpf.fn_path).read_text()
+    np.testing.assert_array_equal([v for _, v in written], _D7_HNEWIM)
+
+    loaded = _d7_load(function_tmpdir / "l", dpf.fn_path)
+    assert loaded.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(loaded.hnewim.array.reshape(2, 3), _D7_HNEWIM)
+    loaded.write_file()  # the loaded package itself, (FREE) layers
+    rewritten = _d7_written_hnewim(loaded.fn_path)
+    np.testing.assert_array_equal([v for _, v in rewritten], _D7_HNEWIM)
+
+
+def test_mfusgdpf_hnewim_assignments_keep_double(function_tmpdir):
+    dpf = _d7_dpf(_d7_model(function_tmpdir))
+    dpf.hnewim = _D7_HNEWIM[::-1].reshape(2, 1, 3)  # Package.__setattr__
+    assert dpf.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM[::-1])
+    dpf.hnewim[0] = _D7_HNEWIM[:1]  # Util3d.__setitem__
+    assert dpf.hnewim[0].dtype == np.float64
+    np.testing.assert_array_equal(dpf.hnewim[0].array, _D7_HNEWIM[:1])
+    dpf.hnewim.cnstnt = 0.1  # REAL multiplier, as U1DREL8 applies it
+    factor = np.float64(np.float32(0.1))
+    assert dpf.hnewim[0].array[0, 0] == _D7_HNEWIM[0, 0] * factor
+    dpf.hnewim[1].cnstnt = 1.0
+    assert dpf.hnewim[1].array[0, 0] == _D7_HNEWIM[0, 0]
+
+
+def test_mfusgdpf_hnewim_uniform_constants(function_tmpdir):
+    dpf = _d7_dpf(_d7_model(function_tmpdir / "exact"), hnewim=[22.75, 21.5])
+    dpf.write_file()
+    assert _d7_written_hnewim(dpf.fn_path) == [
+        ("CONSTANT", [22.75]),
+        ("CONSTANT", [21.5]),
+    ]
+    dpf = _d7_dpf(_d7_model(function_tmpdir / "not_real"), hnewim=_D7_NOT_REAL)
+    dpf.write_file()
+    assert _d7_written_hnewim(dpf.fn_path) == [("INTERNAL", [_D7_NOT_REAL] * 3)] * 2
+
+
+def _d7_sentinel_checks(ws, dpf, error, match):
+    """The error is raised before the DPF file or a caller's handle is
+    touched, and without writing external files."""
+    target = Path(dpf.fn_path)
+    target.write_text("SENTINEL\n")
+    before = sorted(p.name for p in Path(ws).rglob("*"))
+    with pytest.raises(error, match=match):
+        dpf.write_file()
+    assert target.read_text() == "SENTINEL\n"
+    handle = io.StringIO("CALLER\n")
+    handle.seek(0, io.SEEK_END)
+    with pytest.raises(error, match=match):
+        dpf.write_file(f=handle)
+    assert handle.getvalue() == "CALLER\n" and not handle.closed
+    assert sorted(p.name for p in Path(ws).rglob("*")) == before
+
+
+def test_mfusgdpf_hnewim_explicit_constant_not_real_rejected(function_tmpdir):
+    dpf = _d7_dpf(_d7_model(function_tmpdir), hnewim=_D7_NOT_REAL)
+    dpf.hnewim.how = "constant"
+    _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "REAL")
+
+
+def test_mfusgdpf_hnewim_dpf_before_bas_rejected(function_tmpdir):
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="d7", model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=2, nrow=1, ncol=3, top=30.0, botm=[20.0, 10.0])
+    MfUsgLpf(ml, laytyp=0)
+    dpf = _d7_dpf(ml)
+    assert dpf.hnewim.dtype == np.float32  # no BAS6 yet
+    MfUsgBas(ml, double_io=True)
+    _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "single precision")
+
+
+@pytest.mark.parametrize("flag", ["double_prec", "double_io"])
+def test_mfusgdpf_hnewim_dpin_set_later_rejected(function_tmpdir, flag):
+    ml = _d7_model(function_tmpdir, ())
+    dpf = _d7_dpf(ml)
+    setattr(ml.get_package("BAS6"), flag, True)
+    _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "single precision")
+
+
+def test_mfusgdpf_hnewim_dpin_cleared_later_warns(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    dpf = _d7_dpf(ml)
+    ml.get_package("BAS6").double_io = False
+    with pytest.warns(UserWarning, match="single precision"):
+        dpf.write_file()
+    np.testing.assert_array_equal(
+        [v for _, v in _d7_written_hnewim(dpf.fn_path)], _D7_HNEWIM
+    )
+
+
+@pytest.mark.parametrize("options, dtype", [((), np.float64), (("dpio",), np.float32)])
+def test_mfusgdpf_hnewim_binary_precision_rejected(function_tmpdir, options, dtype):
+    """Binary HNEWIM records are REAL*8 with DPIN/DPIO and REAL otherwise; a
+    layer of the other precision is rejected before anything is written
+    (stage 2 replaces the stage-1 rejection of every binary output)."""
+    ml = _d7_model(function_tmpdir, options)
+    ml.external_path = "ext"
+    (function_tmpdir / "ext").mkdir()
+    dpf = _d7_dpf(ml)
+    dpf.hnewim[1] = Util2d(ml, (1, 3), dtype, _D7_HNEWIM[1:], name="hnewim layer 2")
+    for u2d in dpf.hnewim.util_2ds:
+        u2d.format.binary = True
+    externals = list(ml.external_fnames)
+    if dtype == np.float64:
+        # the double-precision warning of stage 1 precedes the rejection
+        with pytest.warns(UserWarning, match="double precision"):
+            _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "REAL binary record")
+    else:
+        _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "single precision")
+    assert list((function_tmpdir / "ext").iterdir()) == []
+    assert ml.external_fnames == externals
+
+
+# D7 stage 2: binary HNEWIM output. U1DREL/U1DREL8 read binary arrays only
+# through a negative unit: per layer a header (KSTP, KPER, PERTIM, TOTIM,
+# TEXT, NSTRT, NNDLAY, ILAY; 52 bytes with REAL*8 times, 44 with REAL) and the
+# values, without applying CNSTNT. Files are parsed here with struct.
+
+
+def _d7_binary_dpf(ml, hnewim=_D7_HNEWIM.reshape(2, 1, 3), layers=(0, 1)):
+    dpf = _d7_dpf(ml, hnewim=hnewim)
+    for k in layers:
+        dpf.hnewim[k].format.binary = True
+    return dpf
+
+
+def _d7_parse_binary(path, double, counts):
+    import struct
+
+    real = "d" if double else "f"
+    hfmt = f"<ii{real}{real}16siii"
+    data = Path(path).read_bytes()
+    out, off = [], 0
+    for n in counts:
+        h = struct.unpack_from(hfmt, data, off)
+        off += struct.calcsize(hfmt)
+        out.append((h, np.array(struct.unpack_from(f"<{n}{real}", data, off))))
+        off += struct.calcsize(f"<{n}{real}")
+    return out, data[off:]
+
+
+def _d7_nam(ws, name="d7.nam"):
+    return [
+        ln.split()
+        for ln in (Path(ws) / name).read_text().splitlines()
+        if ln.strip() and not ln.startswith("#")
+    ]
+
+
+def _d7_unit_of(ws, fname, name="d7.nam"):
+    rows = [e for e in _d7_nam(ws, name) if e[-1] == fname]
+    assert len(rows) == 1 and rows[0][0] == "DATA(BINARY)", rows
+    return int(rows[0][1])
+
+
+def _d7_hnewim_lines(path):
+    return [ln for ln in Path(path).read_text().splitlines() if "hnewim" in ln]
+
+
+@pytest.mark.parametrize("options, double", [(("dpio",), True), ((), False)])
+def test_mfusgdpf_hnewim_binary_layout(function_tmpdir, options, double):
+    ml = _d7_model(function_tmpdir, options)
+    dpf = _d7_binary_dpf(ml)
+    dpf.hnewim[1].cnstnt = 0.1
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    assert unit > 0
+    lines = _d7_hnewim_lines(function_tmpdir / "d7.dpf")
+    assert [ln.split()[:3] for ln in lines] == [["EXTERNAL", str(-unit), "1.0"]] * 2
+    size = 52 + 24 if double else 44 + 12
+    assert (function_tmpdir / "d7.hnewim.bin").stat().st_size == 2 * size
+    layers, rest = _d7_parse_binary(function_tmpdir / "d7.hnewim.bin", double, [3, 3])
+    assert rest == b""
+    assert [h[4].strip() for h, _ in layers] == [b"HNEWIM"] * 2
+    assert [h[5:] for h, _ in layers] == [(1, 3, 1), (4, 6, 2)]
+    effective = dpf.hnewim.array.reshape(2, 3)  # CNSTNT applied once
+    real = np.float64 if double else np.float32
+    np.testing.assert_array_equal([v for _, v in layers], effective.astype(real))
+    if double:
+        assert layers[0][1][0] != layers[0][1][1]
+        np.testing.assert_array_equal(
+            layers[1][1], _D7_HNEWIM[1] * np.float64(np.float32(0.1))
+        )
+
+
+def test_mfusgdpf_hnewim_binary_mixed_and_disu(function_tmpdir):
+    ml = _d7_model(function_tmpdir / "mixed")
+    _d7_binary_dpf(ml, layers=(1,))
+    ml.write_input()
+    lines = _d7_hnewim_lines(function_tmpdir / "mixed" / "d7.dpf")
+    assert lines[0].startswith("INTERNAL") and lines[1].startswith("EXTERNAL")
+    layers, rest = _d7_parse_binary(
+        function_tmpdir / "mixed" / "d7.hnewim.bin", True, [3]
+    )
+    assert rest == b"" and layers[0][0][5:] == (4, 6, 2)
+
+    values = np.array(
+        [
+            23.1234567890123,
+            23.1234567890124,
+            22.75,
+            21.987654321098765,
+            22.000000123456789,
+        ]
+    )
+    mu = _dpf_disu_model(function_tmpdir / "disu")
+    mu.get_package("BAS6").double_io = True
+    dpf = MfUsgDpf(
+        mu,
+        iboundim=1,
+        hnewim=[values[:3], values[3:]],
+        phif=0.2,
+        ddftr=0.0,
+        sc1im=1.0e-4,
+    )
+    for u2d in dpf.hnewim.util_2ds:
+        u2d.format.binary = True
+    dpf.write_file()
+    path = function_tmpdir / "disu" / "dpfu.hnewim.bin"
+    assert path.stat().st_size == (52 + 24) + (52 + 16)
+    layers, rest = _d7_parse_binary(path, True, [3, 2])
+    assert rest == b"" and [h[5:] for h, _ in layers] == [(1, 3, 1), (4, 5, 2)]
+    np.testing.assert_array_equal(np.concatenate([v for _, v in layers]), values)
+
+
+def test_mfusgdpf_hnewim_binary_scalar_and_fixed(function_tmpdir):
+    ml = _d7_model(function_tmpdir, array_free_format=False)
+    _d7_binary_dpf(ml, hnewim=_D7_NOT_REAL)
+    ml.array_free_format = True
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    lines = _d7_hnewim_lines(function_tmpdir / "d7.dpf")
+    assert all(int(ln[0:10]) == -unit and float(ln[10:20]) == 1.0 for ln in lines)
+    layers, _ = _d7_parse_binary(function_tmpdir / "d7.hnewim.bin", True, [3, 3])
+    np.testing.assert_array_equal([v for _, v in layers], np.full((2, 3), _D7_NOT_REAL))
+
+
+def test_mfusgdpf_hnewim_binary_reload_with_loader(function_tmpdir):
+    from flopy.utils.mfreadnam import parsenamefile
+
+    ml = _d7_model(function_tmpdir)
+    dpf = _d7_binary_dpf(ml)
+    dpf.hnewim[0].cnstnt = 0.1
+    ml.write_input()
+    expected = dpf.hnewim.array.reshape(2, 3)
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    other = _d7_model(function_tmpdir / "load")
+    ext = parsenamefile(
+        str(function_tmpdir / "d7.nam"), other.mfnam_packages, verbose=False
+    )
+    try:
+        loaded = MfUsgDpf.load(
+            str(function_tmpdir / "d7.dpf"), other, ext_unit_dict=ext
+        )
+        assert ext[unit].filehandle.read() == b""  # cursor at the end
+    finally:
+        for item in ext.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+    assert all(u.cnstnt == 1.0 for u in loaded.hnewim.util_2ds)
+    np.testing.assert_array_equal(loaded.hnewim.array.reshape(2, 3), expected)
+
+
+def test_mfusgdpf_hnewim_binary_write_file_caller_handle(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    dpf = _d7_binary_dpf(ml)
+    handle = io.StringIO()
+    dpf.write_file(f=handle)
+    assert not handle.closed and handle.getvalue().count("EXTERNAL") == 2
+    assert (function_tmpdir / "d7.hnewim.bin").stat().st_size == 152
+    assert "d7.hnewim.bin" in ml.external_fnames  # name file not written
+    assert not (function_tmpdir / "d7.nam").exists()
+
+
+def test_mfusgdpf_hnewim_binary_repeated_own_writes(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    first = (function_tmpdir / "d7.hnewim.bin").read_bytes()
+    ml.write_input()
+    assert _d7_unit_of(function_tmpdir, "d7.hnewim.bin") == unit
+    assert ml.external_units.count(unit) == 1
+    assert (function_tmpdir / "d7.hnewim.bin").read_bytes() == first
+    assert not (function_tmpdir / "d7.hnewim_1.bin").exists()
+
+
+def _d7_foreign(ws, name="d7.hnewim.bin", content=b"FOREIGN"):
+    (Path(ws) / name).write_bytes(content)
+
+
+@pytest.mark.parametrize("registered", [True, False])
+def test_mfusgdpf_hnewim_binary_foreign_file_kept(function_tmpdir, registered):
+    """A file of another component, registered (unit 777) or not, is never
+    overwritten nor its entry replaced; a free name of this package is used."""
+    ml = _d7_model(function_tmpdir)
+    _d7_foreign(function_tmpdir)
+    if registered:
+        ml.add_external("d7.hnewim.bin", 777, binflag=True)
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    assert (function_tmpdir / "d7.hnewim.bin").read_bytes() == b"FOREIGN"
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim_1.bin")
+    assert unit != 777
+    if registered:
+        assert _d7_unit_of(function_tmpdir, "d7.hnewim.bin") == 777
+    else:
+        assert not any(e[-1] == "d7.hnewim.bin" for e in _d7_nam(function_tmpdir))
+    lines = _d7_hnewim_lines(function_tmpdir / "d7.dpf")
+    assert all(ln.split()[1] == str(-unit) for ln in lines)
+    layers, rest = _d7_parse_binary(function_tmpdir / "d7.hnewim_1.bin", True, [3, 3])
+    assert rest == b""
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM)
+
+
+@pytest.mark.parametrize("form", ["relative", "absolute", "symlink", "case"])
+def test_mfusgdpf_hnewim_binary_foreign_entry_without_file(function_tmpdir, form):
+    """An entry of another component for the same destination (literal,
+    absolute, through a symbolic link or, on case-insensitive file systems,
+    another case) is kept although the file does not exist yet."""
+    ml = _d7_model(function_tmpdir)
+    target = function_tmpdir / "d7.hnewim.bin"
+    if form == "relative":
+        fname = "d7.hnewim.bin"
+    elif form == "absolute":
+        fname = str(target)
+    elif form == "symlink":
+        os.symlink(target, function_tmpdir / "alias.bin")
+        fname = "alias.bin"
+    else:
+        probe = Path(str(function_tmpdir).swapcase())
+        if not probe.exists():
+            pytest.skip("case-sensitive file system")
+        fname = "D7.HNEWIM.BIN"
+    ml.add_external(fname, 778, binflag=True)
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    assert not target.exists()
+    assert ml.external_units[ml.external_fnames.index(fname)] == 778
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim_1.bin")
+    assert unit != 778
+
+
+@pytest.mark.parametrize("kind", ["output", "package"])
+def test_mfusgdpf_hnewim_binary_avoids_output_and_package_paths(function_tmpdir, kind):
+    ml = _d7_model(function_tmpdir)
+    if kind == "output":
+        ml.add_output_file(90, fname="d7.hnewim.bin", binflag=True, package="DPF")
+    else:
+        ml.get_package("LPF").file_name[0] = "d7.hnewim.bin"
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim_1.bin")
+    assert unit not in (90,) and unit not in ml.package_units
+    assert not (function_tmpdir / "d7.hnewim.bin").exists()  # not written here
+
+
+def test_mfusgdpf_hnewim_binary_unit_collisions(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    (function_tmpdir / "user.dat").write_text("1\n")
+    ml.add_external("user.dat", 1001, binflag=False)
+    ml.add_output_file(1002, fname="extra.out", package="DPF")
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    assert unit not in (1001, 1002) and unit not in ml.package_units
+    assert next(e for e in _d7_nam(function_tmpdir) if e[1] == "1001")[-1] == "user.dat"
+
+
+def test_mfusgdpf_hnewim_binary_unit_reassigned_by_other(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    unit = _d7_unit_of(function_tmpdir, "d7.hnewim.bin")
+    (function_tmpdir / "other.dat").write_text("1\n")
+    ml.add_external("other.dat", unit)  # another component takes the unit
+    ml.write_input()
+    rows = {e[-1]: int(e[1]) for e in _d7_nam(function_tmpdir)}
+    assert rows["other.dat"] == unit
+    assert rows["d7.hnewim.bin"] != unit  # own file kept, new unit
+    assert list(rows).count("d7.hnewim.bin") == 1
+
+
+@pytest.mark.parametrize("change", ["external_path", "name", "workspace"])
+def test_mfusgdpf_hnewim_binary_destination_changes(function_tmpdir, change):
+    """After a change of external_path, model name or workspace the new
+    destination is used, the previous file is kept and no stale entry
+    remains; disabling binary output afterwards drops only the own entry."""
+    ws = function_tmpdir / "a"
+    ml = _d7_model(ws)
+    dpf = _d7_binary_dpf(ml)
+    ml.write_input()
+    first = (ws / "d7.hnewim.bin").read_bytes()
+    if change == "external_path":
+        (ws / "ext").mkdir()
+        ml.external_path = "ext"
+        new_ws, new_fname, nam = ws, os.path.join("ext", "d7.hnewim.bin"), "d7.nam"
+    elif change == "name":
+        ml.name = "d8"
+        new_ws, new_fname, nam = ws, "d8.hnewim.bin", "d8.nam"
+    else:
+        ml.change_model_ws(str(function_tmpdir / "b"))
+        new_ws, new_fname, nam = function_tmpdir / "b", "d7.hnewim.bin", "d7.nam"
+    ml.write_input()
+    assert (ws / "d7.hnewim.bin").read_bytes() == first  # previous file kept
+    assert (Path(new_ws) / new_fname).read_bytes() == first
+    entries = [e for e in _d7_nam(new_ws, nam) if "hnewim" in e[-1]]
+    assert [e[-1] for e in entries] == [new_fname]
+    for u2d in dpf.hnewim.util_2ds:
+        u2d.format.binary = False
+    ml.write_input()
+    assert not any("hnewim" in e[-1] for e in _d7_nam(new_ws, nam))
+    assert (Path(new_ws) / new_fname).read_bytes() == first  # not deleted
+
+
+# Ownership is the identity of the file the package created, not its path:
+# a path replaced by a symbolic link or by another file, a directory link
+# that now resolves elsewhere, or an own file shared through a registered
+# hard link is not rewritten. Originals are kept under new names.
+
+
+def _d7_bytes(paths):
+    return {str(p): Path(p).read_bytes() for p in paths}
+
+
+@pytest.mark.parametrize("replacement", ["symlink", "regular"])
+def test_mfusgdpf_hnewim_binary_replaced_own_path_not_truncated(
+    function_tmpdir, replacement
+):
+    ws = function_tmpdir
+    ml = _d7_model(ws)
+    dpf = _d7_binary_dpf(ml)
+    ml.write_input()
+    own = ws / "d7.hnewim.bin"
+    original = own.read_bytes()
+    os.rename(own, ws / "preserved.bin")  # keep the original
+    if replacement == "symlink":
+        (ws / "foreign.bin").write_bytes(b"FOREIGN")
+        os.symlink("foreign.bin", own)
+        kept = [ws / "foreign.bin", ws / "preserved.bin"]
+    else:
+        own.write_bytes(b"FOREIGN REGULAR")
+        kept = [own, ws / "preserved.bin"]
+    before = _d7_bytes(kept)
+    handle = io.StringIO()
+    dpf.write_file(f=handle)  # the caller's handle stays open
+    assert not handle.closed
+    assert _d7_bytes(kept) == before
+    assert (ws / "preserved.bin").read_bytes() == original
+    if replacement == "symlink":
+        assert own.is_symlink()
+    ml.write_input()
+    assert _d7_bytes(kept) == before
+    unit = _d7_unit_of(ws, "d7.hnewim_1.bin")
+    assert not any(e[-1] == "d7.hnewim.bin" for e in _d7_nam(ws))
+    lines = _d7_hnewim_lines(ws / "d7.dpf")
+    assert all(ln.split()[1] == str(-unit) for ln in lines)
+    assert all(
+        f"EXTERNAL {-unit:>10d}" in ln
+        for ln in handle.getvalue().splitlines()
+        if "hnewim" in ln
+    )
+    layers, rest = _d7_parse_binary(ws / "d7.hnewim_1.bin", True, [3, 3])
+    assert rest == b""
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM)
+
+
+def test_mfusgdpf_hnewim_binary_registered_hard_link_not_truncated(function_tmpdir):
+    ws = function_tmpdir
+    ml = _d7_model(ws)
+    dpf = _d7_binary_dpf(ml)
+    ml.write_input()
+    own = ws / "d7.hnewim.bin"
+    original = own.read_bytes()
+    os.link(own, ws / "alias.bin")  # another component's name for the file
+    ml.add_external("alias.bin", 779, binflag=True)
+    dpf.hnewim[0] = _D7_HNEWIM[1:]  # new values must not reach alias.bin
+    ml.write_input()
+    assert (ws / "alias.bin").read_bytes() == original
+    assert own.read_bytes() == original
+    assert _d7_unit_of(ws, "alias.bin") == 779
+    layers, rest = _d7_parse_binary(ws / "d7.hnewim_1.bin", True, [3, 3])
+    assert rest == b""
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM[[1, 1]])
+
+
+def test_mfusgdpf_hnewim_binary_directory_link_retargeted(function_tmpdir):
+    ws = function_tmpdir
+    (ws / "dirA").mkdir()
+    (ws / "dirB").mkdir()
+    os.symlink("dirA", ws / "ext")
+    ml = _d7_model(ws)
+    ml.external_path = "ext"
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    own_a = ws / "dirA" / "d7.hnewim.bin"
+    original = own_a.read_bytes()
+    os.rename(ws / "ext", ws / "ext_old")  # keep the first link
+    (ws / "dirB" / "d7.hnewim.bin").write_bytes(b"FOREIGN IN B")
+    os.symlink("dirB", ws / "ext")
+    ml.write_input()
+    assert (ws / "dirB" / "d7.hnewim.bin").read_bytes() == b"FOREIGN IN B"
+    assert own_a.read_bytes() == original
+    assert _d7_unit_of(ws, os.path.join("ext", "d7.hnewim_1.bin")) > 0
+    layers, rest = _d7_parse_binary(ws / "dirB" / "d7.hnewim_1.bin", True, [3, 3])
+    assert rest == b""
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM)
+
+
+def test_mfusgdpf_hnewim_binary_own_rewrite_keeps_identity(function_tmpdir):
+    """Control: an unchanged own file is rewritten in place (same inode,
+    same unit, new values, no extra file)."""
+    ws = function_tmpdir
+    ml = _d7_model(ws)
+    dpf = _d7_binary_dpf(ml)
+    ml.write_input()
+    own = ws / "d7.hnewim.bin"
+    ino, unit = own.stat().st_ino, _d7_unit_of(ws, "d7.hnewim.bin")
+    dpf.hnewim[0] = _D7_HNEWIM[1:]
+    ml.write_input()
+    assert own.stat().st_ino == ino and _d7_unit_of(ws, "d7.hnewim.bin") == unit
+    assert not (ws / "d7.hnewim_1.bin").exists()
+    layers, _ = _d7_parse_binary(own, True, [3, 3])
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM[[1, 1]])
+
+
+def test_mfusgdpf_hnewim_binary_load_and_rewrite_same_folder(function_tmpdir):
+    """A loaded package writes binary output to a new file: the file of the
+    original package is not adopted."""
+    ml = _d7_model(function_tmpdir)
+    _d7_binary_dpf(ml)
+    ml.write_input()
+    original = (function_tmpdir / "d7.hnewim.bin").read_bytes()
+    loaded = MfUsg.load("d7.nam", model_ws=str(function_tmpdir), check=False)
+    assert not any("hnewim" in f for f in loaded.external_fnames)
+    for u2d in loaded.get_package("DPF").hnewim.util_2ds:
+        u2d.format.binary = True
+    loaded.write_input()
+    assert (function_tmpdir / "d7.hnewim.bin").read_bytes() == original
+    layers, rest = _d7_parse_binary(function_tmpdir / "d7.hnewim_1.bin", True, [3, 3])
+    assert rest == b""
+    np.testing.assert_array_equal([v for _, v in layers], _D7_HNEWIM)
+
+
+def test_mfusgdpf_hnewim_binary_validation_before_writing(function_tmpdir):
+    """A failing text layer, or a missing folder, stops the write before the
+    binary file, the name-file entry or the DPF file are created."""
+    ml = _d7_model(function_tmpdir)
+    dpf = _d7_dpf(ml, hnewim=_D7_NOT_REAL)
+    dpf.hnewim[0].how = "constant"  # not exact as REAL: rejected
+    dpf.hnewim[1].format.binary = True
+    externals = list(ml.external_fnames)
+    _d7_sentinel_checks(function_tmpdir, dpf, ValueError, "REAL")
+    assert not (function_tmpdir / "d7.hnewim.bin").exists()
+    assert ml.external_fnames == externals
+
+    ml2 = _d7_model(function_tmpdir / "m")
+    dpf2 = _d7_binary_dpf(ml2)
+    ml2.external_path = "missing"  # assigned later: the folder is not created
+    _d7_sentinel_checks(function_tmpdir / "m", dpf2, FileNotFoundError, "binary hnewim")
+    assert ml2.external_fnames == []
+
+
+def test_mfusgdpf_hnewim_single_layers_rejected_under_dpin(function_tmpdir):
+    ml = _d7_model(function_tmpdir)
+    layers = [
+        Util2d(ml, (1, 3), np.float32, _D7_HNEWIM[k : k + 1], "hnewim")
+        for k in range(2)
+    ]
+    with pytest.raises(ValueError, match="float64"):
+        _d7_dpf(ml, hnewim=layers)
+    single = Util3d(ml, (2, 1, 3), np.float32, _D7_HNEWIM.reshape(2, 1, 3), "hnewim")
+    with pytest.raises(ValueError, match="float64"):
+        _d7_dpf(ml, hnewim=single)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "EXTERNAL -71 1.0 (BINARY) -1",
+        "EXTERNAL -71 1.0",
+        "EXTERNAL -71 1.0 (FREE) -1",
+        f"{-71:10d}{'1.0':>10s}{'':>20s}{-1:10d}",
+    ],
+)
+def test_mfusgdpf_load_double_binary(function_tmpdir, record):
+    _d7_manual_dpf(
+        function_tmpdir / "m.dpf", [f"{record} #hnewim layer {k}" for k in (1, 2)]
+    )
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary())
+    dpf = _d7_load(
+        function_tmpdir / "l",
+        function_tmpdir / "m.dpf",
+        nam_lines=["DPF 57 m.dpf", "DATA(BINARY) 71 h.bin"],
+    )
+    assert dpf.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM)
+
+
+def test_mfusgdpf_load_double_binary_ignores_multiplier(function_tmpdir):
+    _d7_manual_dpf(
+        function_tmpdir / "m.dpf",
+        [f"EXTERNAL -71 2.0 #hnewim layer {k}" for k in (1, 2)],
+    )
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary())
+    with pytest.warns(UserWarning, match="not applied"):
+        dpf = _d7_load(
+            function_tmpdir / "l",
+            function_tmpdir / "m.dpf",
+            nam_lines=["DPF 57 m.dpf", "DATA(BINARY) 71 h.bin"],
+        )
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM)
+
+
+def test_mfusgdpf_load_double_binary_shared_and_truncated(function_tmpdir):
+    from flopy.utils.mfreadnam import parsenamefile
+
+    _d7_manual_dpf(
+        function_tmpdir / "m.dpf",
+        [f"EXTERNAL -71 1.0 #hnewim layer {k}" for k in (1, 2)],
+    )
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary() + b"LATER-DATA")
+    (function_tmpdir / "m.nam").write_text("DPF 57 m.dpf\nDATA(BINARY) 71 h.bin\n")
+    ml = _d7_model(function_tmpdir / "l")
+    ext = parsenamefile(
+        str(function_tmpdir / "m.nam"), ml.mfnam_packages, verbose=False
+    )
+    try:
+        dpf = MfUsgDpf.load(str(function_tmpdir / "m.dpf"), ml, ext_unit_dict=ext)
+        assert ext[71].filehandle.read() == b"LATER-DATA"  # cursor after layer 2
+    finally:
+        for item in ext.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM)
+
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary()[:-8])
+    with pytest.raises(ValueError, match="expected array size"):
+        _d7_load(
+            function_tmpdir / "t",
+            function_tmpdir / "m.dpf",
+            nam_lines=["DPF 57 m.dpf", "DATA(BINARY) 71 h.bin"],
+        )
+
+
+@pytest.mark.parametrize(
+    "record, nam",
+    [
+        ("OPEN/CLOSE ../h.bin 1.0 (BINARY) -1", ["DPF 57 m.dpf"]),
+        ("EXTERNAL 71 1.0 (BINARY) -1", ["DPF 57 m.dpf", "DATA(BINARY) 71 h.bin"]),
+    ],
+)
+def test_mfusgdpf_load_hnewim_binary_needs_negative_unit(function_tmpdir, record, nam):
+    """U1DREL/U1DREL8 read binary only through a negative unit."""
+    _d7_manual_dpf(
+        function_tmpdir / "m.dpf", [f"{record} #hnewim layer {k}" for k in (1, 2)]
+    )
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary())
+    with pytest.raises(ValueError, match="1-D array readers"):
+        _d7_load(function_tmpdir / "l", function_tmpdir / "m.dpf", nam_lines=nam)
+
+
+@pytest.mark.parametrize("cnstnt", ["0.0", "1.0", "0.1"])
+def test_mfusgdpf_load_text_multiplier_is_real(function_tmpdir, cnstnt):
+    _d7_manual_dpf(function_tmpdir / "m.dpf", _d7_text_records(cnstnt=cnstnt))
+    dpf = _d7_load(function_tmpdir / "l", function_tmpdir / "m.dpf")
+    c = float(cnstnt)
+    factor = 1.0 if c in (0.0, 1.0) else np.float64(np.float32(c))
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM * factor)
+
+
+def test_mfusgdpf_load_constant_under_dpin_is_real(function_tmpdir):
+    _d7_manual_dpf(
+        function_tmpdir / "m.dpf",
+        [f"CONSTANT {_D7_NOT_REAL!r} #hnewim layer {k}" for k in (1, 2)],
+    )
+    dpf = _d7_load(function_tmpdir / "l", function_tmpdir / "m.dpf")
+    assert dpf.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(
+        dpf.hnewim.array, np.float64(np.float32(_D7_NOT_REAL))
+    )
+
+
+def test_mfusgdpf_load_without_dpin_stays_single(function_tmpdir):
+    _d7_manual_dpf(function_tmpdir / "m.dpf", _d7_text_records())
+    dpf = _d7_load(function_tmpdir / "l", function_tmpdir / "m.dpf", options=())
+    assert dpf.hnewim.dtype == np.float32
+    np.testing.assert_array_equal(
+        dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM.astype(np.float32)
+    )
+    (function_tmpdir / "h.bin").write_bytes(_d7_binary(double=False))
+    _d7_manual_dpf(
+        function_tmpdir / "b.dpf",
+        [f"EXTERNAL -71 1.0 (BINARY) -1 #hnewim layer {k}" for k in (1, 2)],
+    )
+    dpf = _d7_load(
+        function_tmpdir / "lb",
+        function_tmpdir / "b.dpf",
+        options=(),
+        nam_lines=["DPF 57 b.dpf", "DATA(BINARY) 71 h.bin"],
+    )
+    np.testing.assert_array_equal(
+        dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM.astype(np.float32)
+    )
+
+
+def test_mfusgdpf_direct_load_reads_bas_options_and_keeps_cursor(function_tmpdir):
+    """MfUsgDpf.load into a model without BAS6: the precision comes from the
+    BAS6 options line in ext_unit_dict; the BAS6 handle keeps its position,
+    also when the DPF load fails."""
+    from flopy.modflow import ModflowDis
+    from flopy.utils.mfreadnam import parsenamefile
+
+    _d7_manual_dpf(function_tmpdir / "m.dpf", _d7_text_records())
+    _d7_manual_dpf(function_tmpdir / "bad.dpf", _d7_text_records()[:3])
+    (function_tmpdir / "m.bas").write_text("# BAS6\nFREE DPIN\n")
+    (function_tmpdir / "m.nam").write_text("DPF 57 m.dpf\nBAS6 13 m.bas\n")
+    for dpf_file, error in (("m.dpf", None), ("bad.dpf", Exception)):
+        ml = MfUsg(modelname="d7", model_ws=str(function_tmpdir / "l"))
+        ModflowDis(ml, nlay=2, nrow=1, ncol=3, top=30.0, botm=[20.0, 10.0])
+        MfUsgLpf(ml, laytyp=0)
+        ext = parsenamefile(
+            str(function_tmpdir / "m.nam"), ml.mfnam_packages, verbose=False
+        )
+        bas_fh = ext[13].filehandle
+        try:
+            if error is None:
+                dpf = MfUsgDpf.load(
+                    str(function_tmpdir / dpf_file), ml, ext_unit_dict=ext
+                )
+            else:
+                with pytest.raises(error):
+                    MfUsgDpf.load(
+                        str(function_tmpdir / dpf_file), ml, ext_unit_dict=ext
+                    )
+            assert bas_fh.tell() == 0
+        finally:
+            for item in ext.values():
+                if item.filehandle is not None:
+                    item.filehandle.close()
+    assert dpf.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM)
+
+
+def test_mfusgdpf_load_closes_own_file_on_error(function_tmpdir):
+    _d7_manual_dpf(function_tmpdir / "bad.dpf", _d7_text_records()[:3])
+    before = len(os.listdir("/dev/fd"))
+    with pytest.raises(Exception):
+        _d7_load(function_tmpdir / "l", function_tmpdir / "bad.dpf")
+    assert len(os.listdir("/dev/fd")) == before
+
+
+def test_mfusgdpf_write_file_leaves_caller_handle_open(function_tmpdir):
+    dpf = _d7_dpf(_d7_model(function_tmpdir))
+    handle = io.StringIO()
+    dpf.write_file(f=handle)
+    assert not handle.closed
+    assert "(3E24.16)" in handle.getvalue()
+
+
+def test_mfusgdpf_hnewim_fixed_format_records(function_tmpdir):
+    """Fixed control records (I10,F10.0,A20,I10) for float64 HNEWIM."""
+    ml = _d7_model(function_tmpdir, array_free_format=False)
+    dpf = _d7_dpf(ml)
+    dpf.hnewim.cnstnt = 0.1
+    dpf.write_file()
+    lines = Path(dpf.fn_path).read_text().splitlines()
+    records = [ln for ln in lines if "hnewim" in ln]
+    externals = dict(zip(ml.external_units, ml.external_fnames))
+    assert len(records) == 2
+    factor = np.float64(np.float32(0.1))
+    for k, line in enumerate(records):
+        locat, cnstnt, fmtin = int(line[0:10]), float(line[10:20]), line[20:40].strip()
+        assert locat > 0 and fmtin == "(3E24.16)"
+        assert np.float32(cnstnt) == np.float32(0.1)
+        text = (function_tmpdir / externals[locat]).read_text()
+        values = [float(text[i : i + 24]) for i in range(0, 72, 24)]
+        np.testing.assert_array_equal(np.array(values) * factor, dpf.hnewim[k].array[0])
+        assert values == _D7_HNEWIM[k].tolist()
+
+
+@pytest.mark.parametrize("form", ["flat", "layers"])
+def test_mfusgdpf_hnewim_disu_irregular_double(function_tmpdir, form):
+    values = np.array(
+        [
+            23.1234567890123,
+            23.1234567890124,
+            22.75,
+            21.987654321098765,
+            22.000000123456789,
+        ]
+    )
+    ml = _dpf_disu_model(function_tmpdir)
+    ml.get_package("BAS6").double_io = True
+    hnewim = values if form == "flat" else [values[:3], values[3:]]
+    dpf = MfUsgDpf(ml, iboundim=1, hnewim=hnewim, phif=0.2, ddftr=0.0, sc1im=1.0e-4)
+    assert dpf.hnewim.dtype == np.float64
+    assert [u.shape for u in dpf.hnewim.util_2ds] == [(3,), (2,)]
+    np.testing.assert_array_equal(dpf.hnewim.array, values)
+    dpf.write_file()
+    written = _d7_written_hnewim(dpf.fn_path)
+    assert [len(v) for _, v in written] == [3, 2]
+    np.testing.assert_array_equal(np.concatenate([v for _, v in written]), values)
+    other = _dpf_disu_model(function_tmpdir / "l")
+    other.get_package("BAS6").double_io = True
+    loaded = MfUsgDpf.load(dpf.fn_path, other)
+    assert loaded.hnewim.dtype == np.float64
+    np.testing.assert_array_equal(loaded.hnewim.array, values)
+
+
+# HNEWIM layers can be replaced after construction; with DPIN/DPIO every
+# layer must hold float64 values (U1DREL8), not only the Util3d container.
+
+_D7_LAYER = np.array([[21.987654321098765, 22.000000123456789, 21.5]])
+_D7_ASSIGN = {
+    "util2d": lambda dpf, k, u: dpf.hnewim.__setitem__(k, u),
+    "list": lambda dpf, k, u: setattr(
+        dpf, "hnewim", [u if i == k else dpf.hnewim[i] for i in range(2)]
+    ),
+    "util_2ds": lambda dpf, k, u: dpf.hnewim.util_2ds.__setitem__(k, u),
+}
+
+
+@pytest.mark.parametrize("path", list(_D7_ASSIGN))
+@pytest.mark.parametrize("layer", [0, 1])
+@pytest.mark.parametrize("options", [("dpin",), ("dpio",)])
+def test_mfusgdpf_hnewim_single_layer_assignment_rejected(
+    function_tmpdir, options, layer, path
+):
+    ml = _d7_model(function_tmpdir, options)
+    dpf = _d7_dpf(ml)
+    single = Util2d(ml, (1, 3), np.float32, _D7_LAYER, name="replacement")
+    _D7_ASSIGN[path](dpf, layer, single)
+    assert dpf.hnewim.dtype == np.float64  # the container alone looks fine
+    assert dpf.hnewim[layer].dtype == np.float32
+    _d7_sentinel_checks(
+        function_tmpdir, dpf, ValueError, rf"layer\(s\) {layer + 1} are stored"
+    )
+
+
+def test_mfusgdpf_hnewim_all_single_layers_reported(function_tmpdir):
+    ml = _d7_model(function_tmpdir, ("dpio",))
+    dpf = _d7_dpf(ml)
+    for k in range(2):
+        dpf.hnewim[k] = Util2d(ml, (1, 3), np.float32, _D7_LAYER, name="r")
+    _d7_sentinel_checks(function_tmpdir, dpf, ValueError, r"layer\(s\) 1, 2 are")
+
+
+@pytest.mark.parametrize("options", [("dpin",), ("dpio",)])
+def test_mfusgdpf_hnewim_double_layer_assignments_kept(function_tmpdir, options):
+    """Float64 Util2d, ndarray and list replacements and multiplier
+    assignments keep values that are distinct only in float64."""
+    ml = _d7_model(function_tmpdir, options)
+    dpf = _d7_dpf(ml)
+    dpf.hnewim[1] = Util2d(ml, (1, 3), np.float64, _D7_HNEWIM[:1], name="r")
+    dpf.hnewim[0] = _D7_HNEWIM[1:]
+    dpf.write_file()
+    written = [v for _, v in _d7_written_hnewim(dpf.fn_path)]
+    np.testing.assert_array_equal(written, _D7_HNEWIM[::-1])
+    assert written[1][0] != written[1][1]
+
+    dpf.hnewim = [
+        Util2d(
+            ml, (1, 3), np.float64, _D7_HNEWIM[k : k + 1], name=f"hnewim layer {k + 1}"
+        )
+        for k in range(2)
+    ]
+    dpf.hnewim[1].cnstnt = 0.1
+    dpf.write_file()
+    written = [v for _, v in _d7_written_hnewim(dpf.fn_path)]
+    np.testing.assert_array_equal(written, _D7_HNEWIM)
+    np.testing.assert_array_equal(
+        dpf.hnewim[1].array, _D7_HNEWIM[1:] * np.float64(np.float32(0.1))
+    )
+
+
+def test_mfusgdpf_hnewim_layer_assignments_without_dpin(function_tmpdir):
+    """Control: without DPIN/DPIO a float32 layer is the expected precision;
+    a float64 layer is written but warns (the model reads REAL)."""
+    ml = _d7_model(function_tmpdir, ())
+    dpf = _d7_dpf(ml)
+    dpf.hnewim[0] = Util2d(ml, (1, 3), np.float32, _D7_LAYER, name="r")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        dpf.write_file()
+    dpf.hnewim[1] = Util2d(ml, (1, 3), np.float64, _D7_LAYER, name="r")
+    with pytest.warns(UserWarning, match="single precision"):
+        dpf.write_file()
 
 
 def test_mfusghfb_static_fortran_layout(function_tmpdir):
@@ -5347,6 +7130,1083 @@ def test_mfusglpf_tabrich_authoring_roundtrip(function_tmpdir):
     assert lpf2.tabrich and lpf2.nuzones == 2 and lpf2.nutabrows == 2
     assert list(lpf2.iuzontab.array) == [1, 2]
     assert np.allclose(lpf2.retcrvs, _RETCRVS_2x2)
+
+
+# LPF read contract, READLPF + SGWF2LPFU1S/G (gwf2bcf-lpf-u1.f, USG-T 2.8.1).
+# Per layer: HK, HANI if CHANI<=0, VKA (DISU: only if IKCFLAG=0); SS if
+# transient; SY if transient and LAYTYP!=0 after the THICKSTRT reset
+# (3198-3209, 3653/3918); VKCB if LAYCBD!=0 (DISU: and IKCFLAG=0) (3676/3934);
+# WETDRY if LAYWET!=0 (3698/3950); ALPHA, BETA, SR, BROOK (+BP with BUBBLEPT)
+# if the effective LAYCON is 5 and TABRICH is off (3708/3955), where LAYCON
+# follows 3166-3180 and BAS RICHARDS/RICHARDS_HP turns LAYCON!=0 into 5
+# (3334-3349). WETFCT/IWETIT/IHDWET if any LAYWET!=0 (3286-3299). Connection
+# array after the layer loop if IKCFLAG!=0 (3974).
+
+# one distinct value per property and layer (tuple index = layer)
+_LPF_VALUES = {
+    "hk": (21.0, 22.0),
+    "hani": (0.81, 0.82),
+    "vka": (3.1, 3.2),
+    "ss": (1.1e-5, 1.2e-5),
+    "sy": (0.051, 0.052),
+    "vkcb": (0.061, 0.062),
+    "wetdry": (-0.61, -0.62),
+    "alpha": (0.71, 0.72),
+    "beta": (8.1, 8.2),
+    "sr": (0.091, 0.092),
+    "brook": (10.1, 10.2),
+    "bp": (-0.111, -0.112),
+}
+
+
+def _lpf_contract(case):
+    """Restatement of the READLPF record order, as (name, layer 1-based)."""
+    laytyp, nlay = case["laytyp"], len(case["laytyp"])
+    thickstrt = case.get("thickstrt", False)
+    richards = case.get("richards", False) or case.get("richards_hp", False)
+    disu, ikc = case.get("disu", False), case.get("ikcflag", 0)
+    laywet = case.get("laywet", [0] * nlay)
+    laycbd = case.get("laycbd", [0] * nlay)
+    seq = [("iuzontab", 0)] if case.get("tabrich") else []
+    for k in range(nlay):
+        t = laytyp[k]
+        if t == 0 or (t < 0 and thickstrt):
+            laycon = 0
+        else:
+            laycon = t if t in (4, 5) else 3
+        if richards and laycon != 0:
+            laycon = 5
+        if not disu or ikc == 0:
+            seq += [("hk", k + 1), ("vka", k + 1)]
+        if case.get("transient", True):
+            seq.append(("ss", k + 1))
+            if t != 0 and not (t < 0 and thickstrt):
+                seq.append(("sy", k + 1))
+        if laycbd[k] != 0 and (not disu or ikc == 0):
+            seq.append(("vkcb", k + 1))
+        if laywet[k] != 0:
+            seq.append(("wetdry", k + 1))
+        if laycon == 5 and not case.get("tabrich"):
+            seq += [(n, k + 1) for n in ("alpha", "beta", "sr", "brook")]
+            if case.get("bubblept"):
+                seq.append(("bp", k + 1))
+    if disu and ikc != 0:
+        seq.append(("ksat", 0))
+    return seq
+
+
+_LPF_KSAT = np.array([2.01, 2.02, 2.03, 2.04, 2.05, 2.06, 2.07], dtype=np.float32)
+
+
+def _lpf_disu_line(ml, nlay, steady):
+    """DISU line of 3 cells per layer, IVSD=1, IDSYMRD=0 (NJAG-long arrays)."""
+    iac, ja, ivc, cl12, fahl = [], [], [], [], []
+    for k in range(nlay):
+        for j in range(3):
+            n = 3 * k + j
+            nb = [(m, 1) for m in (n - 3,) if k > 0] + [(n - 1, 0)] * (j > 0)
+            nb += [(n + 1, 0)] * (j < 2) + [(n + 3, 1)] * (k < nlay - 1)
+            iac.append(len(nb) + 1)
+            ja.append(n)
+            ivc.append(0)
+            cl12.append(0.0)
+            fahl.append(0.0)
+            for m, vert in nb:
+                ja.append(m)
+                ivc.append(vert)
+                cl12.append(5.0)
+                fahl.append(100.0 if vert else 10.0)
+    MfUsgDisU(
+        ml,
+        nodes=3 * nlay,
+        nlay=nlay,
+        njag=len(ja),
+        nodelay=[3] * nlay,
+        iac=np.array(iac),
+        ja=np.array(ja),
+        ivsd=1,
+        ivc=np.array(ivc),
+        idsymrd=0,
+        cl12=np.array(cl12),
+        fahl=np.array(fahl),
+        top=[30.0 - 10.0 * k for k in range(nlay) for _ in range(3)],
+        bot=[20.0 - 10.0 * k for k in range(nlay) for _ in range(3)],
+        area=100.0,
+        steady=steady,
+    )
+
+
+def _lpf_model(ws, case):
+    from flopy.modflow import ModflowDis
+
+    laytyp, nlay = case["laytyp"], len(case["laytyp"])
+    disu = case.get("disu", False)
+    ml = MfUsg(modelname="lpf", model_ws=str(ws), structured=not disu)
+    steady = not case.get("transient", True)
+    if disu:
+        _lpf_disu_line(ml, nlay, steady)
+        ncell = 3
+    else:
+        laycbd = case.get("laycbd", [0] * nlay)
+        nbot = nlay + sum(laycbd)
+        ModflowDis(
+            ml,
+            nlay=nlay,
+            nrow=1,
+            ncol=2,
+            nper=1,
+            steady=steady,
+            top=30.0,
+            botm=[30.0 - 10.0 * (i + 1) for i in range(nbot)],
+            laycbd=laycbd,
+        )
+        ncell = 2
+    MfUsgBas(
+        ml,
+        ibound=1,
+        strt=25.0,
+        richards=case.get("richards", False),
+        richards_hp=case.get("richards_hp", False),
+    )
+    values = {
+        name: [
+            np.full((1, ncell), vals[k]) if not disu else np.full(ncell, vals[k])
+            for k in range(nlay)
+        ]
+        for name, vals in _LPF_VALUES.items()
+    }
+    tab = {}
+    if case.get("tabrich"):
+        tab = {
+            "tabrich": True,
+            "nuzones": 2,
+            "nutabrows": 2,
+            "iuzontab": [1] * (ncell * nlay),
+            "retcrvs": _RETCRVS_2x2,
+        }
+    MfUsgLpf(
+        ml,
+        laytyp=laytyp,
+        laywet=case.get("laywet", 0),
+        ikcflag=case.get("ikcflag", 0),
+        thickstrt=case.get("thickstrt", False),
+        bubblept=case.get("bubblept", False),
+        ksat=_LPF_KSAT if (disu and nlay == 1) else 1.0,  # NJAG=7 for one layer
+        **values,
+        **tab,
+    )
+    return ml
+
+
+def _lpf_manual_text(case):
+    """Hand-built LPF file in the READLPF order (independent of the writer)."""
+    nlay = len(case["laytyp"])
+    head = "0 -1.0E+30 0"
+    if case.get("disu"):
+        head += f" {case.get('ikcflag', 0)}"
+    if case.get("thickstrt"):
+        head += " THICKSTRT"
+    if case.get("bubblept"):
+        head += " BUBBLEPT"
+    lines = ["# hand-written LPF in READLPF order"]
+    if case.get("tabrich"):
+        lines.append(head + " TABRICH 2 2")
+        ncell = 3 if case.get("disu") else 2
+        lines.append("INTERNAL 1 (FREE) -1 #iuzontab")
+        lines.append(" ".join(["1"] * ncell * nlay))
+        for zone in _RETCRVS_2x2:
+            lines += [" ".join(str(v) for v in row) for row in zone]
+    else:
+        lines.append(head)
+    laywet = case.get("laywet", [0] * nlay)
+    lines += [
+        " ".join(str(t) for t in case["laytyp"]),
+        " ".join("0" for _ in range(nlay)),
+        " ".join("1.0" for _ in range(nlay)),
+        " ".join("0" for _ in range(nlay)),
+        " ".join(str(w) for w in laywet),
+    ]
+    if any(w != 0 for w in laywet):
+        lines.append("0.1 1 0")
+    for name, layer in _lpf_contract(case):
+        if name == "iuzontab":
+            continue
+        if name == "ksat":
+            lines.append("INTERNAL 1.0 (FREE) -1 #ksat")
+            lines.append(" ".join(f"{v:.2f}" for v in _LPF_KSAT))
+        else:
+            value = _LPF_VALUES[name][layer - 1]
+            lines.append(f"CONSTANT {value:.6E} #{name} layer {layer}")
+    return "\n".join(lines) + "\n"
+
+
+def _lpf_records(path):
+    """(name, layer) of each array record identified by its distinct value."""
+    lookup = [
+        ((n, k + 1), v) for n, vals in _LPF_VALUES.items() for k, v in enumerate(vals)
+    ]
+    lookup.append((("ksat", 0), float(_LPF_KSAT[0])))
+    lookup.append((("iuzontab", 0), 1.0))
+    text = Path(path).read_text().splitlines()
+    out = []
+    for i, line in enumerate(text):
+        tokens = line.split()
+        if not tokens or tokens[0].upper() not in ("CONSTANT", "INTERNAL"):
+            continue
+        is_constant = tokens[0].upper() == "CONSTANT"
+        value = float(tokens[1] if is_constant else text[i + 1].split()[0])
+        hits = [key for key, v in lookup if np.isclose(value, v, rtol=1e-5)]
+        out.append(hits[0] if len(hits) == 1 else ("?", value))
+    return out
+
+
+def _assert_lpf_values(lpf, case):
+    for name, layer in _lpf_contract(case):
+        if name == "iuzontab":
+            continue
+        if name == "ksat":
+            assert np.allclose(lpf.ksat.array, _LPF_KSAT), lpf.ksat.array
+            continue
+        got = np.asarray(getattr(lpf, name)[layer - 1].array)
+        assert np.allclose(got, _LPF_VALUES[name][layer - 1]), (name, layer, got)
+
+
+def _lpf_write_load_check(ws, case):
+    """Writer order, independent manual load, and FloPy round-trip."""
+    ml = _lpf_model(ws / "written", case)
+    lpf = ml.get_package("LPF")
+    lpf.write_file(check=False)
+    assert _lpf_records(lpf.fn_path) == _lpf_contract(case)
+
+    manual = ws / "manual.lpf"
+    manual.write_text(_lpf_manual_text(case))
+    loaded = MfUsgLpf.load(str(manual), _lpf_model(ws / "m1", case), check=False)
+    _assert_lpf_values(loaded, case)
+
+    reloaded = MfUsgLpf.load(lpf.fn_path, _lpf_model(ws / "m2", case), check=False)
+    _assert_lpf_values(reloaded, case)
+    return lpf, loaded
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"laytyp": [0, 5], "richards": True, "bubblept": True},
+        {"laytyp": [0, 1], "richards": True},  # LAYTYP 1 promoted to LAYCON 5
+        {"laytyp": [0, 1], "richards_hp": True, "bubblept": True},
+        {"laytyp": [0, 5], "disu": True, "richards": True, "bubblept": True},
+        {"laytyp": [0, 5], "richards": True, "tabrich": True},  # control
+        {"laytyp": [5, 5], "richards": True},  # control: all layers LAYCON 5
+    ],
+    ids=[
+        "dis-0-5-bp",
+        "dis-0-1-promoted",
+        "dis-0-1-richards_hp",
+        "disu-0-5-bp",
+        "tabrich-control",
+        "all5-control",
+    ],
+)
+def test_mfusglpf_richards_arrays_follow_effective_laycon(function_tmpdir, case):
+    """F06: ALPHA/BETA/SR/BROOK(/BP) only where the effective LAYCON is 5."""
+    lpf, _ = _lpf_write_load_check(function_tmpdir, case)
+    assert list(lpf.laytyp.array) == case["laytyp"]
+
+
+def test_mfusglpf_wetdry_loaded_for_convertible_layers(function_tmpdir):
+    """F07: WETDRY is read whenever LAYWET != 0 (two convertible layers)."""
+    case = {"laytyp": [1, 1], "laywet": [1, 1]}
+    _lpf_write_load_check(function_tmpdir, case)
+
+
+def test_mfusglpf_wetdry_open_close_and_shared_external(function_tmpdir):
+    """F07 with external records: values and EXTERNAL stream position."""
+    from flopy.utils.mfreadnam import parsenamefile
+
+    (function_tmpdir / "wetdry_l1.txt").write_text("-0.61 -0.61\n")
+    (function_tmpdir / "lpf_ext71.dat").write_text(
+        "22.0 22.0\n3.2 3.2\nEND-OF-LPF-BLOCKS\n"
+    )
+    (function_tmpdir / "manual.lpf").write_text(
+        "# hand-written LPF in READLPF order\n0 -1.0E+30 0\n1 1\n0 0\n1.0 1.0\n"
+        "0 0\n1 1\n0.1 1 0\n"
+        "CONSTANT 21.0 #hk layer 1\nCONSTANT 3.1 #vka layer 1\n"
+        "CONSTANT 1.1e-5 #ss layer 1\nCONSTANT 0.051 #sy layer 1\n"
+        "OPEN/CLOSE wetdry_l1.txt 1.0 (FREE) -1 #wetdry layer 1\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #hk layer 2\n"
+        "EXTERNAL 71 1.0 (FREE) -1 #vka layer 2\n"
+        "CONSTANT 1.2e-5 #ss layer 2\nCONSTANT 0.052 #sy layer 2\n"
+        "CONSTANT -0.62 #wetdry layer 2\n"
+    )
+    nam = function_tmpdir / "manual.nam"
+    nam.write_text("LPF 15 manual.lpf\nDATA 71 lpf_ext71.dat\n")
+    case = {"laytyp": [1, 1], "laywet": [1, 1]}
+    ml = _lpf_model(function_tmpdir, case)
+    ext_unit_dict = parsenamefile(str(nam), ml.mfnam_packages, verbose=False)
+    try:
+        lpf = MfUsgLpf.load(
+            str(function_tmpdir / "manual.lpf"),
+            ml,
+            ext_unit_dict=ext_unit_dict,
+            check=False,
+        )
+        remaining = ext_unit_dict[71].filehandle.readline().strip()
+    finally:
+        for item in ext_unit_dict.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+    _assert_lpf_values(lpf, case)
+    assert remaining == "END-OF-LPF-BLOCKS"
+
+
+@pytest.mark.parametrize("transient", [False, True], ids=["steady", "transient"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"laytyp": [1, 0], "laycbd": [1, 0]},  # confining bed
+        {"laytyp": [1, 0], "laywet": [1, 0]},  # wetting
+    ],
+    ids=["vkcb", "wetdry"],
+)
+def test_mfusglpf_vkcb_wetdry_not_gated_by_transient(function_tmpdir, case, transient):
+    """F08: VKCB and WETDRY are written in steady-state models too."""
+    _lpf_write_load_check(function_tmpdir, dict(case, transient=transient))
+
+
+@pytest.mark.parametrize("thickstrt", [True, False], ids=["thickstrt", "no-thickstrt"])
+def test_mfusglpf_sy_uses_laytyp_after_thickstrt(function_tmpdir, thickstrt):
+    """SY is read only where LAYTYP != 0 after the THICKSTRT reset."""
+    case = {"laytyp": [-1, 1], "thickstrt": thickstrt}
+    lpf, loaded = _lpf_write_load_check(function_tmpdir, case)
+    # public LAYTYP values are not mutated by the derivation
+    assert list(lpf.laytyp.array) == [-1, 1]
+    assert list(loaded.laytyp.array) == [-1, 1]
+
+
+@pytest.mark.parametrize("ikcflag", [0, 1, -1, 2])
+def test_mfusglpf_connection_array_for_nonzero_ikcflag(function_tmpdir, ikcflag):
+    """F09: the DISU connection array (IDSYMRD=0, NJAG values) is written and
+    read whenever IKCFLAG != 0. IKCFLAG=2 is not a documented option; it is
+    included only because the 2.8.1 reader treats any non-zero value alike."""
+    case = {"laytyp": [0], "disu": True, "ikcflag": ikcflag, "transient": False}
+    lpf, _ = _lpf_write_load_check(function_tmpdir, case)
+    has_ksat = any(name == "ksat" for name, _ in _lpf_records(lpf.fn_path))
+    assert has_ksat == (ikcflag != 0)
+
+
+@pytest.mark.parametrize(
+    "laywet, item7",
+    [([-1, 1], True), ([0, 0], False), ([1, 1], True)],
+    ids=["mixed-sign", "no-wetting", "positive"],
+)
+def test_mfusglpf_item7_when_any_laywet_nonzero(function_tmpdir, laywet, item7):
+    """L7: WETFCT/IWETIT/IHDWET are present when any LAYWET != 0."""
+    case = {"laytyp": [1, 1], "laywet": laywet}
+    lpf, loaded = _lpf_write_load_check(function_tmpdir, case)
+    # heading, item 1, then LAYTYP, LAYAVG, CHANI, LAYVKA, LAYWET (lines 2-6)
+    lines = Path(lpf.fn_path).read_text().splitlines()
+    assert lines[6].split() == [str(w) for w in laywet]
+    next_is_array = lines[7].split()[0].upper() in ("CONSTANT", "INTERNAL")
+    assert next_is_array != item7
+    if item7:
+        assert np.isclose(loaded.wetfct, 0.1) and loaded.iwetit == 1
+
+
+def test_mfusglpf_write_file_to_open_handle(function_tmpdir):
+    """WF: write_file(f=handle) writes to the handle and leaves it open."""
+    case = {"laytyp": [0, 5], "richards": True, "laywet": [0, 0]}
+    ml = _lpf_model(function_tmpdir, case)
+    lpf = ml.get_package("LPF")
+    lpf.write_file(check=False)
+    expected = Path(lpf.fn_path).read_text()
+
+    target = function_tmpdir / "via_handle.lpf"
+    with open(target, "w") as fh:
+        lpf.write_file(check=False, f=fh)
+        assert not fh.closed
+        fh.write("# caller content after the package\n")
+    assert target.read_text() == expected + "# caller content after the package\n"
+
+
+# BCF read contract, READBCF + SGWF2BCFU1S/G (gwf2bcf-lpf-u1.f, USG-T 2.8.1).
+# Item 1: free format, or FORMAT(I10,F10.3,I10,F10.3,4I10) with IFREFM=0
+# (91-113); IKCFLAG only for unstructured grids. LAYCON codes
+# 10*INTERCELLT+LAYCON with READ(IN,*) or FORMAT(40I2) (231-237); RICHARDS or
+# RICHARDS_HP turns every LAYCON!=0 into 5 (335-350). TRPY if IKCFLAG=0
+# (353-361); DISU ANGLEX if IKCFLAG=0 and some |TRPY-1|>1e-6 (747-749). Per
+# layer: SF1 if transient; with IKCFLAG=0, TRAN if LAYCON is 0 or 2 else HY,
+# then VCONT (IKVFLAG=0, K<NLAY) or KV (IKVFLAG!=0, NLAY>1); SF2 if transient
+# and LAYCON is 2-5; WETDRY if IWDFLG!=0 and LAYCON is 1 or 3; ALPHA, BETA,
+# SR, BROOK (+BP with BUBBLEPT) if LAYCON is 5 and TABRICH is off (S 558-687,
+# G 753-816). DISU connection array if IKCFLAG!=0 (819).
+
+_BCF_VALUES = {
+    "sf1": (1.1e-5, 1.2e-5, 1.3e-5),
+    "tran": (11.0, 12.0, 13.0),
+    "hy": (21.0, 22.0, 23.0),
+    "vcont": (0.031, 0.032, 0.033),
+    "kv": (41.0, 42.0, 43.0),
+    "sf2": (0.051, 0.052, 0.053),
+    "wetdry": (-0.61, -0.62, -0.63),
+    "alpha": (0.71, 0.72, 0.73),
+    "beta": (8.1, 8.2, 8.3),
+    "sr": (0.091, 0.092, 0.093),
+    "brook": (10.1, 10.2, 10.3),
+    "bp": (-0.111, -0.112, -0.113),
+}
+_BCF_KSAT = np.array([3.01, 3.02, 3.03, 3.04, 3.05, 3.06, 3.07], dtype=np.float32)
+_BCF_TRPY_ANISO = 0.5
+_BCF_ANGLEX = 0.25
+
+
+def _bcf_contract(case):
+    """Restatement of the READBCF record order, as (name, layer 1-based)."""
+    laycon, nlay = case["laycon"], len(case["laycon"])
+    richards = case.get("richards", False) or case.get("richards_hp", False)
+    disu = case.get("disu", False)
+    ikc = case.get("ikcflag", 0) if disu else 0
+    ikv = case.get("ikvflag", 0)
+    seq = [("iuzontab", 0)] if case.get("tabrich") else []
+    if ikc == 0:
+        seq.append(("trpy", 0))
+        if disu and case.get("trpy", 1.0) != 1.0:
+            seq.append(("anglex", 0))
+    for k in range(nlay):
+        lc = 5 if (richards and laycon[k] != 0) else laycon[k]
+        if case.get("transient", True):
+            seq.append(("sf1", k + 1))
+        if ikc == 0:
+            seq.append(("tran" if lc in (0, 2) else "hy", k + 1))
+            if ikv == 0 and k < nlay - 1:
+                seq.append(("vcont", k + 1))
+            elif ikv != 0 and nlay > 1:
+                seq.append(("kv", k + 1))
+        if case.get("transient", True) and lc in (2, 3, 4, 5):
+            seq.append(("sf2", k + 1))
+        if case.get("iwdflg", 0) != 0 and lc in (1, 3):
+            seq.append(("wetdry", k + 1))
+        if lc == 5 and not case.get("tabrich"):
+            seq += [(n, k + 1) for n in ("alpha", "beta", "sr", "brook")]
+            if case.get("bubblept"):
+                seq.append(("bp", k + 1))
+    if disu and ikc != 0:
+        seq.append(("ksat", 0))
+    return seq
+
+
+def _bcf_disu_irregular(ml, steady):
+    """DISU with NODELAY=[3, 2] (cells 4-5 under cells 1-2), IVSD=1, IDSYMRD=0."""
+    nbrs = {0: [1, 3], 1: [0, 2, 4], 2: [1], 3: [0, 4], 4: [1, 3]}
+    iac, ja, ivc, cl12, fahl = [], [], [], [], []
+    for n in range(5):
+        iac.append(len(nbrs[n]) + 1)
+        ja.append(n)
+        ivc.append(0)
+        cl12.append(0.0)
+        fahl.append(0.0)
+        for m in nbrs[n]:
+            vert = (n < 3) != (m < 3)
+            ja.append(m)
+            ivc.append(int(vert))
+            cl12.append(5.0)
+            fahl.append(100.0 if vert else 10.0)
+    MfUsgDisU(
+        ml,
+        nodes=5,
+        nlay=2,
+        njag=len(ja),
+        nodelay=[3, 2],
+        iac=np.array(iac),
+        ja=np.array(ja),
+        ivsd=1,
+        ivc=np.array(ivc),
+        idsymrd=0,
+        cl12=np.array(cl12),
+        fahl=np.array(fahl),
+        top=[30.0] * 3 + [20.0] * 2,
+        bot=[20.0] * 3 + [10.0] * 2,
+        area=100.0,
+        steady=steady,
+    )
+
+
+def _bcf_model(ws, case):
+    from flopy.modflow import ModflowDis
+
+    laycon, nlay = case["laycon"], len(case["laycon"])
+    disu = case.get("disu", False)
+    steady = not case.get("transient", True)
+    ml = MfUsg(modelname="bcf", model_ws=str(ws), structured=not disu)
+    if case.get("irregular"):
+        _bcf_disu_irregular(ml, steady)
+        ncells = [3, 2]
+    elif disu:
+        _lpf_disu_line(ml, nlay, steady)
+        ncells = [3] * nlay
+    else:
+        ModflowDis(
+            ml,
+            nlay=nlay,
+            nrow=1,
+            ncol=2,
+            nper=1,
+            steady=steady,
+            top=30.0,
+            botm=[30.0 - 10.0 * (k + 1) for k in range(nlay)],
+        )
+        ncells = [2] * nlay
+    MfUsgBas(
+        ml,
+        ibound=1,
+        strt=25.0,
+        richards=case.get("richards", False),
+        richards_hp=case.get("richards_hp", False),
+        ifrefm=case.get("ifrefm", True),
+    )
+
+    def layered(name):
+        vals = _BCF_VALUES[name]
+        if disu:
+            return [np.full(ncells[k], vals[k % 3]) for k in range(nlay)]
+        return [np.full((1, 2), vals[k % 3]) for k in range(nlay)]
+
+    tab = {}
+    if case.get("tabrich"):
+        tab = {
+            "tabrich": True,
+            "nuzones": 2,
+            "nutabrows": 2,
+            "iuzontab": [1] * sum(ncells),
+            "retcrvs": _RETCRVS_2x2,
+        }
+    # the Richards arrays are passed only when some layer reads them, so the
+    # other cases also run with versions that lack these parameters
+    richards = case.get("richards", False) or case.get("richards_hp", False)
+    needs_richards = not case.get("tabrich") and any(
+        c == 5 or (richards and c != 0) for c in laycon
+    )
+    names = [n for n in _BCF_VALUES if n != "vcont"]
+    if not needs_richards:
+        names = [n for n in names if n not in ("alpha", "beta", "sr", "brook", "bp")]
+    MfUsgBcf(
+        ml,
+        laycon=laycon,
+        intercellt=case.get("intercellt", 0),
+        trpy=case.get("trpy", 1.0),
+        iwdflg=case.get("iwdflg", 0),
+        ikvflag=case.get("ikvflag", 0),
+        ikcflag=case.get("ikcflag", 0),
+        bubblept=case.get("bubblept", False),
+        anglex=_BCF_ANGLEX,
+        ksat=_BCF_KSAT if (disu and nlay == 1) else 1.0,  # NJAG=7 for one layer
+        vcont=layered("vcont")[: max(nlay - 1, 1)],
+        **{n: layered(n) for n in names},
+        **tab,
+    )
+    return ml
+
+
+def _bcf_manual_text(case):
+    """Hand-built free-format BCF file in the READBCF order."""
+    nlay = len(case["laycon"])
+    disu = case.get("disu", False)
+    head = f"0 -1.0E+30 {case.get('iwdflg', 0)} 0.1 1 0 {case.get('ikvflag', 0)}"
+    if disu:
+        head += f" {case.get('ikcflag', 0)}"
+    if case.get("tabrich"):
+        head += " TABRICH 2 2"
+    if case.get("bubblept"):
+        head += " BUBBLEPT"
+    lines = [head]
+    if case.get("tabrich"):
+        ncell = 5 if case.get("irregular") else (3 if disu else 2) * nlay
+        lines += ["INTERNAL 1 (FREE) -1 #iuzontab", " ".join(["1"] * ncell)]
+        for zone in _RETCRVS_2x2:
+            lines += [" ".join(str(v) for v in row) for row in zone]
+    ic = case.get("intercellt", [0] * nlay)
+    ic = ic if isinstance(ic, list) else [ic] * nlay
+    lines.append(" ".join(str(10 * i + c) for i, c in zip(ic, case["laycon"])))
+    ncol = 3 if disu else case.get("ncol", 2)
+    ncells = [3, 2] if case.get("irregular") else [ncol] * nlay
+    for name, layer in _bcf_contract(case):
+        if name == "iuzontab":
+            continue
+        if name == "trpy":
+            lines.append(f"CONSTANT {case.get('trpy', 1.0)} #trpy")
+        elif name == "anglex":
+            lines.append(f"CONSTANT {_BCF_ANGLEX} #anglex")
+        elif name == "ksat":
+            lines.append("INTERNAL 1.0 (FREE) -1 #ksat")
+            lines.append(" ".join(f"{v:.2f}" for v in _BCF_KSAT))
+        else:
+            value = _BCF_VALUES[name][(layer - 1) % 3]
+            n = ncells[layer - 1]
+            lines += [
+                f"INTERNAL 1.0 (FREE) -1 #{name} layer {layer}",
+                " ".join([f"{value:.6E}"] * n),
+            ]
+    return "\n".join(lines) + "\n"
+
+
+def _bcf_records(path):
+    """(name, layer) of each array record identified by its distinct value."""
+    lookup = [
+        ((n, k + 1), v) for n, vals in _BCF_VALUES.items() for k, v in enumerate(vals)
+    ]
+    lookup += [(("ksat", 0), float(_BCF_KSAT[0])), (("anglex", 0), _BCF_ANGLEX)]
+    lookup += [(("trpy", 0), 1.0), (("trpy", 0), _BCF_TRPY_ANISO)]
+    text = Path(path).read_text().splitlines()
+    out = []
+    for i, line in enumerate(text):
+        tokens = line.split()
+        if not tokens or tokens[0].upper() not in ("CONSTANT", "INTERNAL"):
+            continue
+        is_constant = tokens[0].upper() == "CONSTANT"
+        value = float(tokens[1] if is_constant else text[i + 1].split()[0])
+        if "#iuzontab" in line:
+            out.append(("iuzontab", 0))
+            continue
+        hits = [key for key, v in lookup if np.isclose(value, v, rtol=1e-5)]
+        out.append(hits[0] if len(hits) == 1 else ("?", value))
+    return out
+
+
+def _assert_bcf_values(bcf, case):
+    for name, layer in _bcf_contract(case):
+        if name in ("iuzontab", "trpy", "anglex"):
+            continue
+        if name == "ksat":
+            assert np.allclose(bcf.ksat.array, _BCF_KSAT), bcf.ksat.array
+            continue
+        got = np.asarray(getattr(bcf, name)[layer - 1].array)
+        assert np.allclose(got, _BCF_VALUES[name][(layer - 1) % 3]), (name, layer, got)
+
+
+def _bcf_write_load_check(ws, case):
+    """Writer order, independent manual load, and FloPy round-trip."""
+    ml = _bcf_model(ws / "written", case)
+    bcf = ml.get_package("BCF6")
+    bcf.write_file()
+    assert _bcf_records(bcf.fn_path) == _bcf_contract(case)
+
+    manual = ws / "manual.bcf"
+    manual.write_text(_bcf_manual_text(case))
+    loaded = MfUsgBcf.load(str(manual), _bcf_model(ws / "m1", case))
+    _assert_bcf_values(loaded, case)
+
+    reloaded = MfUsgBcf.load(bcf.fn_path, _bcf_model(ws / "m2", case))
+    _assert_bcf_values(reloaded, case)
+    return bcf, loaded
+
+
+def test_mfusgbcf_laycon_codes_free_format(function_tmpdir):
+    """B01: each code 10*INTERCELLT+LAYCON is one integer for READ(IN,*)."""
+    case = {"laycon": [3, 0, 0], "intercellt": [1, 0, 2], "transient": False}
+    bcf, loaded = _bcf_write_load_check(function_tmpdir, case)
+    lines = Path(bcf.fn_path).read_text().splitlines()
+    assert [int(t) for t in lines[1].split()] == [13, 0, 20]
+    for pkg in (bcf, loaded):
+        assert list(pkg.intercellt.array) == [1, 0, 2]
+        assert list(pkg.laycon.array) == [3, 0, 0]
+
+
+@pytest.mark.parametrize("nlay", [3, 45])
+def test_mfusgbcf_fixed_format_header_and_laycon(function_tmpdir, nlay):
+    """B01f: fixed-format item 1 fields and FORMAT(40I2) LAYCON lines."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="bcf", model_ws=str(function_tmpdir))
+    ModflowDis(
+        ml,
+        nlay=nlay,
+        nrow=1,
+        ncol=2,
+        nper=1,
+        steady=True,
+        top=30.0,
+        botm=[30.0 - 0.5 * (k + 1) for k in range(nlay)],
+    )
+    MfUsgBas(ml, ibound=1, strt=25.0, ifrefm=False)
+    intercellt = [(k % 3) for k in range(nlay)]
+    laycon = [3 if k == 0 else (k % 2) * 3 for k in range(nlay)]
+    bcf = MfUsgBcf(
+        ml,
+        ipakcb=0,
+        hdry=-1.0e30,
+        wetfct=0.1,
+        iwetit=7,
+        ihdwet=1,
+        laycon=laycon,
+        intercellt=intercellt,
+    )
+    bcf.write_file()
+    lines = Path(bcf.fn_path).read_text().splitlines()
+
+    # seven I10/F10.3 fields for a structured grid; HDRY keeps a decimal point
+    # in the mantissa so that F10.3 does not divide it by 1000
+    assert lines[0] == (
+        "         0   -1.E+30         0       0.1         7         1         0"
+    )
+    nlines = (nlay + 39) // 40
+    codes = []
+    for line in lines[1 : 1 + nlines]:
+        assert len(line) <= 80
+        codes += [
+            int(line[i : i + 2].replace(" ", "") or 0) for i in range(0, len(line), 2)
+        ]
+    assert codes == [10 * i + c for i, c in zip(intercellt, laycon)]
+
+    ml2 = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(
+        ml2,
+        nlay=nlay,
+        nrow=1,
+        ncol=2,
+        nper=1,
+        steady=True,
+        top=30.0,
+        botm=[30.0 - 0.5 * (k + 1) for k in range(nlay)],
+    )
+    MfUsgBas(ml2, ibound=1, strt=25.0, ifrefm=False)
+    bcf2 = MfUsgBcf.load(bcf.fn_path, ml2)
+    assert list(bcf2.intercellt.array) == intercellt
+    assert list(bcf2.laycon.array) == laycon
+    assert np.isclose(bcf2.hdry, -1.0e30) and np.isclose(bcf2.wetfct, 0.1)
+    assert (bcf2.iwetit, bcf2.ihdwet) == (7, 1)
+
+
+# F10.3 input of the item 1 real fields. Expected values are literal and were
+# checked with an F10.3 read compiled with gfortran (default REAL); rtol=1e-6
+# covers the single-precision rounding of that read (about 6e-8 relative).
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("    -1E+30", -1.0e27),  # no decimal point: the 3 implied decimals apply
+        ("    123E+2", 12.3),
+        ("    123D+2", 12.3),
+        ("  -25E-1  ", -0.0025),
+        ("   1.0+30 ", 1.0e30),  # exponent without letter
+        ("   -1.E+30", -1.0e30),  # decimal point in the mantissa
+        ("    -1000.", -1000.0),
+        (" 1.2345678", 1.2345678),
+        ("      1500", 1.5),  # no exponent, no decimal point
+        ("  15 00   ", 1.5),  # blanks are ignored
+        ("          ", 0.0),  # empty field
+    ],
+)
+def test_mfusgbcf_fixed_format_real_fields_read_as_f10_3(field, value):
+    """HDRY and WETFCT of a fixed-format item 1 follow the F10.3 input rules."""
+    line = f"{50:10d}{field}{0:10d}{field}{1:10d}{0:10d}{0:10d}"
+    header = MfUsgBcf._load_fixed_header(line, True)
+    assert np.isclose(header[1], value, rtol=1e-6, atol=0)
+    assert np.isclose(header[3], value, rtol=1e-6, atol=0)
+
+
+@pytest.mark.parametrize(
+    "value, field",
+    [
+        (-1.0e30, "   -1.E+30"),
+        (1.0e30, "    1.E+30"),
+        (1.0e38, "    1.E+38"),
+        (3.0e-8, "    3.E-08"),
+        (-2.5e-30, "  -2.5E-30"),
+        (1.2345678, " 1.2345678"),
+        (-1.2345678, "-1.2345678"),
+        (-12345.678, "-12345.678"),
+        (999.99, "    999.99"),
+        (0.0, "        0."),
+    ],
+)
+def test_mfusgbcf_fixed_format_real_fields_written_for_f10_3(
+    function_tmpdir, value, field
+):
+    """Item 1 reals are written with a decimal point in the mantissa, within
+    ten characters and with the same single-precision value."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="bcf", model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=2, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, ifrefm=False)
+    bcf = MfUsgBcf(ml, ipakcb=0, laycon=0, hdry=value, wetfct=value)
+    bcf.write_file()
+    header = Path(bcf.fn_path).read_text().splitlines()[0]
+    assert header[10:20] == field and header[30:40] == field
+
+    ml2 = MfUsg(model_ws=str(function_tmpdir))
+    ModflowDis(ml2, nlay=1, nrow=1, ncol=2, nper=1, steady=True)
+    MfUsgBas(ml2, ibound=1, strt=1.0, ifrefm=False)
+    bcf2 = MfUsgBcf.load(bcf.fn_path, ml2)
+    assert np.float32(bcf2.hdry) == np.float32(value)
+    assert np.float32(bcf2.wetfct) == np.float32(value)
+
+
+def test_mfusgbcf_fixed_format_unrepresentable_real_fails(function_tmpdir):
+    """A value that needs more than ten characters to keep its
+    single-precision value fails before the destination is touched."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="bcf", model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=2, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, ifrefm=False)
+    bcf = MfUsgBcf(ml, laycon=0, hdry=-1.2345679e-30)
+    target = Path(bcf.fn_path)
+    target.write_text("pre-existing content\n")
+    with pytest.raises(ValueError, match="single-precision"):
+        bcf.write_file()
+    assert target.read_text() == "pre-existing content\n"
+
+
+def test_mfusgbcf_fixed_format_manual_load(function_tmpdir):
+    """B01f load: hand-written fixed-format item 1 (DISU, eight fields, an
+    implied-decimal real) and 40I2 LAYCON codes."""
+    case = {"laycon": [3, 0], "disu": True, "transient": False}
+    ml = _bcf_model(function_tmpdir, dict(case, ifrefm=False))
+    (function_tmpdir / "manual.bcf").write_text(
+        "        50    -1000.         1      1500         3         0         0"
+        "         0\n"
+        "13 0\n"
+        "CONSTANT 1.0 #trpy\n"
+        "CONSTANT 21.0 #hy layer 1\nCONSTANT 0.031 #vcont layer 1\n"
+        "CONSTANT -0.61 #wetdry layer 1\nCONSTANT 12.0 #tran layer 2\n"
+    )
+    bcf = MfUsgBcf.load(str(function_tmpdir / "manual.bcf"), ml)
+    assert (bcf.ipakcb, bcf.iwdflg, bcf.iwetit, bcf.ikcflag) == (50, 1, 3, 0)
+    assert np.isclose(bcf.hdry, -1000.0) and np.isclose(bcf.wetfct, 1.5)
+    assert list(bcf.intercellt.array) == [1, 0]
+    assert list(bcf.laycon.array) == [3, 0]
+    assert np.allclose(bcf.hy[0].array, 21.0) and np.allclose(bcf.tran[1].array, 12.0)
+    assert np.allclose(bcf.wetdry[0].array, -0.61)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"bubblept": True}, {"fullydry": True}, {"altsto": True}, {"ipakcb": 10**10}],
+    ids=["bubblept", "fullydry", "altsto", "field-overflow"],
+)
+def test_mfusgbcf_fixed_format_rejected_before_writing(function_tmpdir, kwargs):
+    """Options (or values) a fixed-format BCF cannot carry fail before the
+    destination file or a supplied handle is touched."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="bcf", model_ws=str(function_tmpdir))
+    ModflowDis(ml, nlay=1, nrow=1, ncol=2, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, ifrefm=False)
+    bcf = MfUsgBcf(ml, laycon=0, **kwargs)
+    target = Path(bcf.fn_path)
+    target.write_text("pre-existing content\n")
+    with pytest.raises(ValueError, match=r"fixed-format|fit"):
+        bcf.write_file()
+    assert target.read_text() == "pre-existing content\n"
+    handle = io.StringIO()
+    with pytest.raises(ValueError):
+        bcf.write_file(f=handle)
+    assert handle.getvalue() == ""
+
+    # the same options are accepted in free format
+    ml.get_package("BAS6").ifrefm = True
+    if "ipakcb" not in kwargs:
+        bcf.write_file()
+        assert kwargs.popitem()[0].upper() in target.read_text().splitlines()[0]
+
+
+@pytest.mark.parametrize("ikcflag", [0, 1, -1, 2])
+def test_mfusgbcf_trpy_and_connection_array_by_ikcflag(function_tmpdir, ikcflag):
+    """B02/F35: TRPY only with IKCFLAG=0; DISU connection array (IDSYMRD=0,
+    NJAG values) for any IKCFLAG != 0. IKCFLAG=2 is not a documented option;
+    the 2.8.1 reader treats any non-zero value as connection input."""
+    case = {"laycon": [0], "disu": True, "ikcflag": ikcflag, "transient": False}
+    bcf, _ = _bcf_write_load_check(function_tmpdir, case)
+    names = [name for name, _ in _bcf_records(bcf.fn_path)]
+    assert ("trpy" in names) == (ikcflag == 0)
+    assert ("ksat" in names) == (ikcflag != 0)
+
+
+@pytest.mark.parametrize("ikcflag", [0, -1])
+def test_mfusgbcf_anglex_condition_disu(function_tmpdir, ikcflag):
+    """ANGLEX follows IHANISO, evaluated only when TRPY is read (IKCFLAG=0)."""
+    case = {
+        "laycon": [0],
+        "disu": True,
+        "ikcflag": ikcflag,
+        "transient": False,
+        "trpy": _BCF_TRPY_ANISO,
+    }
+    bcf, _ = _bcf_write_load_check(function_tmpdir, case)
+    names = [name for name, _ in _bcf_records(bcf.fn_path)]
+    assert ("anglex" in names) == (ikcflag == 0)
+
+
+def test_mfusgbcf_structured_ikcflag_treated_as_zero(function_tmpdir):
+    """IKCFLAG is not read for structured grids: HY/TRAN/VCONT stay in the file."""
+    case = {"laycon": [3, 0], "ikcflag": 1, "transient": False}
+    bcf, loaded = _bcf_write_load_check(function_tmpdir, dict(case))
+    header = Path(bcf.fn_path).read_text().splitlines()[0].split()
+    assert len(header) == 7
+    assert loaded.ikcflag == 0
+
+
+@pytest.mark.parametrize(
+    "nlay, ikvflag",
+    [(3, 0), (3, 1), (3, 2), (1, 1)],
+    ids=["vcont", "kv", "kv-ikvflag2", "single-layer"],
+)
+def test_mfusgbcf_kv_vcont_by_ikvflag(function_tmpdir, nlay, ikvflag):
+    """F36: VCONT for K<NLAY with IKVFLAG=0; KV for every layer with IKVFLAG!=0
+    and NLAY>1 (IKVFLAG=2 behaves as 1 in the 2.8.1 reader)."""
+    case = {"laycon": [0] * nlay, "ikvflag": ikvflag, "transient": False}
+    _bcf_write_load_check(function_tmpdir, case)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {"laycon": [3, 5], "richards": True, "bubblept": True},
+        {"laycon": [0, 2], "richards": True},  # LAYCON 2 -> 5: HY, not TRAN
+        {"laycon": [3, 0], "richards": True, "iwdflg": 1, "transient": False},
+        {"laycon": [0, 3], "richards_hp": True, "bubblept": True},
+        {
+            "laycon": [0, 5],
+            "richards": True,
+            "disu": True,
+            "irregular": True,
+            "bubblept": True,
+        },
+        # TABRICH variants: no Richards arrays, isolate SF2, HY/TRAN and WETDRY
+        {"laycon": [0, 5], "richards": True, "tabrich": True},
+        {"laycon": [0, 2], "richards": True, "tabrich": True},
+        {"laycon": [3, 0], "richards": True, "tabrich": True, "iwdflg": 1},
+        {"laycon": [1, 3], "iwdflg": 1},  # control: WETDRY without RICHARDS
+    ],
+    ids=[
+        "sf2-richards-bp",
+        "hy-after-promotion",
+        "no-wetdry-after-promotion",
+        "richards_hp",
+        "disu-irregular",
+        "tabrich-sf2",
+        "tabrich-hy",
+        "tabrich-no-wetdry",
+        "wetdry-control",
+    ],
+)
+def test_mfusgbcf_effective_laycon_records(function_tmpdir, case):
+    """B04/B05/B08/B09: SF2, HY/TRAN, WETDRY and the Richards arrays follow
+    the effective LAYCON; public LAYCON values are not modified."""
+    bcf, loaded = _bcf_write_load_check(function_tmpdir, case)
+    assert list(bcf.laycon.array) == case["laycon"]
+    assert list(loaded.laycon.array) == case["laycon"]
+
+
+def test_mfusgbcf_richards_open_close_and_shared_external(function_tmpdir):
+    """Richards arrays from OPEN/CLOSE and a shared EXTERNAL unit."""
+    from flopy.utils.mfreadnam import parsenamefile
+
+    (function_tmpdir / "alpha_l1.txt").write_text("0.71 0.71\n")
+    (function_tmpdir / "bcf_ext72.dat").write_text("8.1 8.1\n0.091 0.091\nEND-OF-BCF\n")
+    (function_tmpdir / "manual.bcf").write_text(
+        "0 -1.0E+30 0 0.1 1 0 0\n05\nCONSTANT 1.0 #trpy\n"
+        "CONSTANT 21.0 #hy layer 1\n"
+        "OPEN/CLOSE alpha_l1.txt 1.0 (FREE) -1 #alpha layer 1\n"
+        "EXTERNAL 72 1.0 (FREE) -1 #beta layer 1\n"
+        "EXTERNAL 72 1.0 (FREE) -1 #sr layer 1\n"
+        "CONSTANT 10.1 #brook layer 1\n"
+    )
+    nam = function_tmpdir / "manual.nam"
+    nam.write_text("BCF6 15 manual.bcf\nDATA 72 bcf_ext72.dat\n")
+    case = {"laycon": [5], "richards": True, "transient": False}
+    ml = _bcf_model(function_tmpdir, case)
+    ext_unit_dict = parsenamefile(str(nam), ml.mfnam_packages, verbose=False)
+    try:
+        bcf = MfUsgBcf.load(
+            str(function_tmpdir / "manual.bcf"), ml, ext_unit_dict=ext_unit_dict
+        )
+        remaining = ext_unit_dict[72].filehandle.readline().strip()
+    finally:
+        for item in ext_unit_dict.values():
+            if item.filehandle is not None:
+                item.filehandle.close()
+    _assert_bcf_values(bcf, case)
+    assert remaining == "END-OF-BCF"
+
+
+def test_mfusgbcf_positional_arguments_unchanged():
+    """The Richards parameters are appended after all existing arguments."""
+    import inspect
+
+    params = list(inspect.signature(MfUsgBcf.__init__).parameters)
+    assert params == [
+        "self",
+        "model",
+        "ipakcb",
+        "intercellt",
+        "laycon",
+        "trpy",
+        "hdry",
+        "iwdflg",
+        "wetfct",
+        "iwetit",
+        "ihdwet",
+        "ikvflag",
+        "ikcflag",
+        "tabrich",
+        "nuzones",
+        "nutabrows",
+        "iuzontab",
+        "retcrvs",
+        "bubblept",
+        "fullydry",
+        "altsto",
+        "tran",
+        "hy",
+        "vcont",
+        "kv",
+        "anglex",
+        "ksat",
+        "sf1",
+        "sf2",
+        "wetdry",
+        "extension",
+        "unitnumber",
+        "filenames",
+        "add_package",
+        "alpha",
+        "beta",
+        "sr",
+        "brook",
+        "bp",
+    ]
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg()
+    ModflowDis(ml, nlay=2, nrow=1, ncol=1, nper=1)
+    MfUsgBas(ml)
+    bcf = MfUsgBcf(ml, 0, [1, 0], [3, 0], 1.0, -999.0, 1, 0.2, 2, 1, 1)
+    assert list(bcf.intercellt.array) == [1, 0]
+    assert list(bcf.laycon.array) == [3, 0]
+    assert (bcf.hdry, bcf.iwdflg, bcf.wetfct, bcf.iwetit, bcf.ihdwet, bcf.ikvflag) == (
+        -999.0,
+        1,
+        0.2,
+        2,
+        1,
+        1,
+    )
+    assert np.allclose(bcf.alpha.array, 1.0) and np.allclose(bcf.brook.array, 6.0)
+
+
+def test_mfusgbcf_write_file_to_open_handle(function_tmpdir):
+    """WF: write_file(f=handle) writes to the handle and leaves it open."""
+    case = {"laycon": [3, 0], "intercellt": [1, 0]}
+    bcf = _bcf_model(function_tmpdir, case).get_package("BCF6")
+    bcf.write_file()
+    expected = Path(bcf.fn_path).read_text()
+
+    target = function_tmpdir / "via_handle.bcf"
+    with open(target, "w") as fh:
+        bcf.write_file(f=fh)
+        assert not fh.closed
+        fh.write("# caller content after the package\n")
+    assert target.read_text() == expected + "# caller content after the package\n"
 
 
 def test_mfusgbcf_tabrich_incomplete_write_fails(function_tmpdir):
@@ -8965,3 +11825,3703 @@ def test_mfusg_compat_guard_noop_and_sfr_untouched(function_tmpdir):
     assert reg["sfr"] is ModflowSfr2
     assert reg["fhb"] is ModflowFhb
     assert reg["gage"] is ModflowGage
+
+
+# G03: EVS/RTS name-file entries (ET and recharge time-series files read by
+# EVT with ETS and RCH with RTS) are kept as references to opaque files.
+# Hand-written fixture: 3-node DISU line (area 100), CHD h=10 at node 1, one
+# transient SP of 10, OC ATSA (RTS/ETS need ATS), RCH RTS 2 zones, EVT ETS 1
+# zone. The name file lists the time-series files as given by the caller.
+
+_G03_FILES = {
+    "t.disu": """# DISU
+3 1 7 0 1 4 2 0
+  0
+INTERNAL               1     (1I10) -1 #nodelay
+         3
+INTERNAL               1   (3E15.6) -1 #top layer 1
+   3.000000E+01   3.000000E+01   3.000000E+01
+INTERNAL               1   (3E15.6) -1 #bot layer 1
+   0.000000E+00   0.000000E+00   0.000000E+00
+CONSTANT    1.000000E+02                           #area layer 1
+INTERNAL               1     (3I10) -1 #iac
+         2         3         2
+INTERNAL               1     (7I10) -1 #ja
+         1         2         2         1         3         3         2
+CONSTANT    5.000000E+00                           #cl12
+CONSTANT    1.000000E+01                           #fahl
+     10.000000             1  1.000000  TR
+""",
+    "t.bas": """# BAS6
+UNSTRUCTURED FREE
+CONSTANT          1                                #ibound layer 1
+   -999.99
+CONSTANT    1.000000E+01                           #strt layer 1
+""",
+    "t.lpf": """# LPF
+         0    -1E+30         0         0
+         0
+         0
+   1.000000E+00
+         0
+         0
+CONSTANT    1.000000E+00                           #hk layer 1
+CONSTANT    1.000000E+00                           #vka1
+CONSTANT    1.000000E-03                           #ss layer 1
+""",
+    "t.sms": """# SMS
+  1.00e-09  1.00e-11       100       100         2         1         1
+  7.00e-01  1.00e-01  2.00e-01  1.00e-03        20  1.00e+04  2.00e-01  1.00e+02
+         2         0         7         2         0  0.00e+00         0  1.00e-03
+""",
+    "t.chd": """# CHD
+         1
+ 1    Stress Period 1
+ 1   10.000000  10.000000
+""",
+    "t.oc": """# OC
+ATSA
+HEAD PRINT FORMAT   0
+HEAD SAVE UNIT    51
+DRAWDOWN PRINT FORMAT   0
+COMPACT BUDGET AUX
+period 1 step 1
+  save head
+  print budget
+""",
+}
+# RCH with RTS: zones 0 1 2; rows 0-4 (1e-3, 2e-3), 4-10 (3e-3, 1e-3)
+_G03_RCH = (
+    "# RCH\n 1 0 RTS 2\n 0 INRCHZONES 2\nCONSTANT 0.0\nINTERNAL 1 (FREE) -1\n 0 1 2\n"
+)
+_G03_RTS = (
+    "0.0 4.0 1.0 1.0e-3 2.0e-3\n4.0 10.0 1.0 3.0e-3 1.0e-3\n10.0 1.0e6 1.0 0.0 0.0\n"
+)
+# EVT with ETS: SURF 5 (below heads: maximum rate), zones 0 1 1;
+# rows 0-6 (5e-4), 6-10 (1e-4)
+_G03_EVT = (
+    "# EVT\n 1 0 ETS 1\n 0 0 0 INEVTZONES 1\nCONSTANT 5.0\nCONSTANT 0.0\n"
+    "CONSTANT 1.0\nINTERNAL 1 (FREE) -1\n 0 1 1\n"
+)
+_G03_EVS = "0.0 6.0 1.0 5.0e-4\n6.0 10.0 1.0 1.0e-4\n10.0 1.0e6 1.0 0.0\n"
+# controls without time series
+_G03_RCH_PLAIN = "# RCH\n 1 0\n 0\nCONSTANT 1.0e-3\n"
+_G03_EVT_PLAIN = "# EVT\n 1 0\n 0 0 0\nCONSTANT 5.0\nCONSTANT 2.0e-4\nCONSTANT 1.0\n"
+_G03_BASE = ["DISU", "BAS6", "LPF", "SMS", "CHD", "OC"]
+
+
+def _g03_fixture(
+    ws,
+    rts="RTS               40  ts/rech.rts",
+    evs="EVS               41  et.evs NO-ARCHIVE",
+    extra="",
+):
+    """Write the fixture into ws. rts/evs: name-file line or None (the series
+    file is written at the path given in the line, unquoted; an absolute
+    path is written as given); extra: more name-file lines."""
+    ws = Path(ws)
+    ws.mkdir(parents=True, exist_ok=True)
+    for name, text in _G03_FILES.items():
+        (ws / name).write_text(text)
+    nam = [
+        "# fixture",
+        "LIST               2  t.list",
+        "DISU              11  t.disu",
+        "BAS6              13  t.bas",
+        "LPF               15  t.lpf",
+        "SMS               32  t.sms",
+        "CHD               24  t.chd",
+        "OC                14  t.oc",
+        "DATA(BINARY)      51  t.hds",
+    ]
+    for line, pkg, pkg_text, series in (
+        (rts, "RCH               18  t.rch", _G03_RCH, _G03_RTS),
+        (evs, "EVT               17  t.evt", _G03_EVT, _G03_EVS),
+    ):
+        if line is None:
+            continue
+        nam += [pkg, line]
+        (ws / pkg.split()[-1]).write_text(pkg_text)
+        rest = line.split(None, 2)[2]
+        path = rest[1 : rest.index("'", 1)] if rest.startswith("'") else rest.split()[0]
+        target = ws / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(series)
+    (ws / "t.nam").write_text("\n".join(nam) + "\n" + extra)
+    return ws
+
+
+def _g03_nam_entries(ws):
+    lines = (Path(ws) / "t.nam").read_text().splitlines()
+    return [ln for ln in lines if ln.split() and ln.split()[0] in ("RTS", "EVS")]
+
+
+def _g03_tree(ws):
+    ws = Path(ws)
+    return {
+        str(p.relative_to(ws)): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(ws.rglob("*"))
+        if p.is_file()
+    }
+
+
+def _g03_load(ws, load_only=None):
+    if load_only is None:
+        load_only = list(_G03_BASE)
+    return MfUsg.load("t.nam", model_ws=str(ws), load_only=load_only, check=False)
+
+
+_G03_RTS_LINE = "RTS               40  ts/rech.rts"
+_G03_EVS_LINE = "EVS               41  et.evs NO-ARCHIVE"
+
+
+@pytest.mark.parametrize("series", ["both", "rts", "evs"])
+def test_mfusg_evsrts_same_ws_rewrite(function_tmpdir, series):
+    """Same workspace: entries kept once with unit, path and options; the
+    opaque files (and RCH/EVT, skipped by load_only) keep bytes and mtime;
+    repeated writes give the same name file."""
+    ws = _g03_fixture(
+        function_tmpdir,
+        rts=None if series == "evs" else _G03_RTS_LINE,
+        evs=None if series == "rts" else _G03_EVS_LINE,
+    )
+    before = _g03_tree(ws)
+    ml = _g03_load(ws)
+    expected = {
+        "both": [_G03_RTS_LINE, _G03_EVS_LINE],
+        "rts": [_G03_RTS_LINE],
+        "evs": [_G03_EVS_LINE],
+    }[series]
+    assert [e["filetype"] for e in ml.preserved_nam_entries] == [
+        ln.split()[0] for ln in expected
+    ]
+    ml.write_input()
+    assert _g03_nam_entries(ws) == expected
+    after = _g03_tree(ws)
+    for name in ("ts/rech.rts", "et.evs", "t.rch", "t.evt"):
+        assert after.get(name) == before.get(name)
+    first = (ws / "t.nam").read_bytes()
+    ml.write_input()
+    assert (ws / "t.nam").read_bytes() == first
+
+
+@pytest.mark.parametrize(
+    "load_only", [[], _G03_BASE, _G03_BASE + ["RTS", "EVS"], ["RTS"]]
+)
+def test_mfusg_evsrts_any_load_only(function_tmpdir, load_only):
+    ws = _g03_fixture(function_tmpdir)
+    ml = _g03_load(ws, load_only=list(load_only))
+    assert [e["unit"] for e in ml.preserved_nam_entries] == [40, 41]
+    ml.write_input()
+    assert _g03_nam_entries(ws) == [_G03_RTS_LINE, _G03_EVS_LINE]
+
+
+def test_mfusg_evsrts_new_ws_copies(function_tmpdir):
+    """New workspace: relative paths are copied with their folders; the
+    source is untouched; repeated writes keep the copies (same mtime)."""
+    src = _g03_fixture(function_tmpdir / "src")
+    before = _g03_tree(src)
+    ml = _g03_load(src)
+    new = function_tmpdir / "new"
+    ml.change_model_ws(str(new))
+    ml.write_input()
+    assert _g03_nam_entries(new) == [_G03_RTS_LINE, _G03_EVS_LINE]
+    for name in ("ts/rech.rts", "et.evs"):
+        assert (new / name).read_bytes() == (src / name).read_bytes()
+    assert _g03_tree(src) == before
+    # RCH/EVT skipped by load_only are not copied (existing behaviour)
+    assert not (new / "t.rch").exists() and not (new / "t.evt").exists()
+    copied = _g03_tree(new)
+    ml.write_input()
+    after = _g03_tree(new)
+    for name in ("ts/rech.rts", "et.evs"):
+        assert after[name] == copied[name]
+
+
+def test_mfusg_evsrts_new_ws_identical_destination_kept(function_tmpdir):
+    src = _g03_fixture(function_tmpdir / "src")
+    new = function_tmpdir / "new"
+    (new / "ts").mkdir(parents=True)
+    shutil.copy2(src / "ts" / "rech.rts", new / "ts" / "rech.rts")
+    kept = _g03_tree(new)
+    ml = _g03_load(src)
+    ml.change_model_ws(str(new))
+    ml.write_input()
+    assert _g03_tree(new)["ts/rech.rts"] == kept["ts/rech.rts"]
+
+
+def test_mfusg_evsrts_new_ws_foreign_destination_rejected(function_tmpdir):
+    """A different file at the destination is not replaced, and nothing is
+    written (no package files, no name file)."""
+    src = _g03_fixture(function_tmpdir / "src")
+    new = function_tmpdir / "new"
+    new.mkdir()
+    (new / "et.evs").write_text("SENTINEL\n")
+    ml = _g03_load(src)
+    ml.change_model_ws(str(new))
+    with pytest.raises(FileExistsError, match="not replaced"):
+        ml.write_input()
+    with pytest.raises(FileExistsError, match="not replaced"):
+        ml.write_name_file()
+    assert sorted(p.name for p in new.iterdir()) == ["et.evs"]
+    assert (new / "et.evs").read_text() == "SENTINEL\n"
+
+
+@pytest.mark.parametrize("where", ["relative", "absolute"])
+def test_mfusg_evsrts_quoted_path_with_spaces(function_tmpdir, where):
+    """Quoted names (URWORD: a word starting with a single quote ends at the
+    next quote) keep their spaces through load, same-workspace and
+    new-workspace writes, and reload."""
+    src = function_tmpdir / "src"
+    if where == "relative":
+        name = "ts dir/with spaces.rts"
+    else:
+        name = str(function_tmpdir / "shared dir" / "with spaces.rts")
+    _g03_fixture(src, rts=f"RTS               40  '{name}' flush", evs=None)
+    ml = _g03_load(src)
+    (entry,) = ml.preserved_nam_entries
+    assert (entry["path"], entry["options"]) == (name, ["FLUSH"])
+    line = f"RTS               40  '{name}' FLUSH"
+    ml.write_input()
+    assert _g03_nam_entries(src) == [line]
+    new = function_tmpdir / "new"
+    ml.change_model_ws(str(new))
+    if where == "absolute":
+        with pytest.warns(UserWarning, match="still depends on that file"):
+            ml.write_input()
+    else:
+        ml.write_input()
+    assert _g03_nam_entries(new) == [line]
+    copied = new / "ts dir" / "with spaces.rts"
+    assert copied.exists() == (where == "relative")
+    again = _g03_load(new).preserved_nam_entries
+    assert [(e["path"], e["options"]) for e in again] == [(name, ["FLUSH"])]
+
+
+@pytest.mark.parametrize(
+    "line, match",
+    [
+        ("RTS               40  'ts/rech.rts", "unclosed quote"),
+        ("RTS               40  ''", "empty file name"),
+        # three items for the name-file parser, two words for URWORD
+        ("RTS               40  ,,", "needs a unit and a file name"),
+        # rejected by the name-file parser
+        ("RTS               4x  ts/rech.rts", "not an integer"),
+        ("RTS               40  ts/rech.rts " + "x" * 300, "longer than 299"),
+    ],
+    ids=["unclosed_quote", "empty_name", "no_name", "unit", "too_long"],
+)
+def test_mfusg_evsrts_malformed_entry_rejected(function_tmpdir, line, match):
+    ws = _g03_fixture(function_tmpdir, evs=None)
+    nam = (ws / "t.nam").read_text().replace(_G03_RTS_LINE, line)
+    (ws / "t.nam").write_text(nam)
+    with pytest.raises(ValueError, match=match):
+        _g03_load(ws)
+
+
+def test_mfusg_evsrts_external_reference(function_tmpdir):
+    """A path outside the workspace is kept as written in the same
+    workspace and becomes an absolute reference (not copied) in a new one."""
+    src = function_tmpdir / "proj" / "model"
+    _g03_fixture(src, rts="RTS               40  ../shared/rech.rts", evs=None)
+    assert (function_tmpdir / "proj" / "shared" / "rech.rts").read_text() == _G03_RTS
+    ml = _g03_load(src)
+    ml.write_input()
+    assert _g03_nam_entries(src) == ["RTS               40  ../shared/rech.rts"]
+    new = function_tmpdir / "new"
+    ml.change_model_ws(str(new))
+    with pytest.warns(UserWarning, match="still depends on that file"):
+        ml.write_input()
+    shared = os.path.normpath(str(src / ".." / "shared" / "rech.rts"))
+    assert _g03_nam_entries(new) == [f"RTS               40  {shared}"]
+    assert not (new / "rech.rts").exists() and not (new / "shared").exists()
+
+
+@pytest.mark.parametrize("mode", ["same", "new", "absolute"])
+def test_mfusg_evsrts_missing_source_rejected(function_tmpdir, mode):
+    """A missing time-series file can be inspected after load (warning) but
+    is rejected on write in every mode, before any file is written."""
+    src = function_tmpdir / "src"
+    rts = (
+        f"RTS               40  {function_tmpdir / 'gone.rts'}"
+        if mode == "absolute"
+        else _G03_RTS_LINE
+    )
+    _g03_fixture(src, rts=rts, evs=None)
+    if mode == "absolute":
+        target = function_tmpdir / "gone.rts"
+    else:
+        target = src / "ts" / "rech.rts"
+    target.rename(target.with_suffix(".moved"))  # missing, without deleting
+    with pytest.warns(UserWarning, match="does not exist"):
+        ml = _g03_load(src)
+    assert ml.preserved_nam_entries[0]["unit"] == 40
+    if mode != "same":
+        ml.change_model_ws(str(function_tmpdir / "new"))
+    before = _g03_tree(ml.model_ws)
+    with pytest.raises(FileNotFoundError):
+        ml.write_input()
+    with pytest.raises(FileNotFoundError):
+        ml.write_name_file()
+    assert _g03_tree(ml.model_ws) == before
+
+
+@pytest.mark.parametrize("unit", [-40, 0])
+def test_mfusg_evsrts_non_positive_unit_rejected(function_tmpdir, unit):
+    ws = _g03_fixture(
+        function_tmpdir, rts=f"RTS             {unit:4d}  ts/rech.rts", evs=None
+    )
+    with pytest.warns(UserWarning, match=f"unit {unit}"):
+        ml = _g03_load(ws)
+    assert ml.preserved_nam_entries[0]["unit"] == unit
+    before = _g03_tree(ws)
+    with pytest.raises(ValueError, match="<= 0"):
+        ml.write_input()
+    assert _g03_tree(ws) == before
+
+
+def test_mfusg_evsrts_options(function_tmpdir):
+    """FLUSH and NO-ARCHIVE are kept (upper case); other options are
+    dropped with a warning."""
+    ws = _g03_fixture(
+        function_tmpdir,
+        rts=_G03_RTS_LINE + " flush FOO,Replace",
+        evs="EVS               41  et.evs no-archive",
+    )
+    with pytest.warns(UserWarning, match=r"\['FOO', 'Replace'\]"):
+        ml = _g03_load(ws)
+    ml.write_input()
+    assert _g03_nam_entries(ws) == [
+        _G03_RTS_LINE + " FLUSH",
+        "EVS               41  et.evs NO-ARCHIVE",
+    ]
+
+
+def test_mfusg_evsrts_entries_are_copies(function_tmpdir):
+    ws = _g03_fixture(function_tmpdir)
+    ml = _g03_load(ws)
+    entries = ml.preserved_nam_entries
+    entries[0]["options"].append("FOO")
+    entries[0]["unit"] = 99
+    entries.append({"filetype": "RTS"})
+    assert ml.preserved_nam_entries[0]["options"] == []
+    assert ml.preserved_nam_entries[0]["unit"] == 40
+    assert len(ml.preserved_nam_entries) == 2
+    ml.write_input()
+    assert _g03_nam_entries(ws) == [_G03_RTS_LINE, _G03_EVS_LINE]
+
+
+def _g03_collide(ml, what):
+    ws = Path(ml.model_ws)
+    chd = ml.get_package("CHD")
+    if what == "unit":
+        chd.unit_number = [40]
+        return "unit 40 of the RTS entry is also used by CHD"
+    if what == "rts_evs_unit":
+        ml._preserved_nam_entries[1]["unit"] = 40
+        return "unit 40 of the EVS entry is also used by RTS"
+    if what == "rts_evs_file":
+        ml._preserved_nam_entries[1]["source"] = ml._preserved_nam_entries[0]["source"]
+        return "is also written by RTS"
+    names = {
+        "package": "et.evs",
+        "package_alias": "./ts/../et.evs",
+        "package_case": "ET.EVS",
+    }
+    if what in names:
+        chd.file_name = [names[what]]
+        chd.fn_path = str(ws / names[what])
+        return "is also written by CHD"
+    if what == "list":
+        ml.lst.file_name = ["et.evs"]
+        return "is also written by LIST"
+    if what == "output_basename":
+        # registered with a folder; the name file writes the basename
+        ml.add_output_file(55, fname="out/et.evs", package="LPF")
+        return "is also written by DATA output"
+    raise ValueError(what)
+
+
+@pytest.mark.parametrize(
+    "what",
+    [
+        "unit",
+        "rts_evs_unit",
+        "rts_evs_file",
+        "package",
+        "package_alias",
+        "package_case",
+        "list",
+        "output_basename",
+    ],
+)
+@pytest.mark.parametrize("call", ["write_input", "write_name_file"])
+def test_mfusg_evsrts_collisions_rejected(function_tmpdir, what, call):
+    """Units and files are checked against what the name file actually
+    lists (outputs as basename), before anything is written."""
+    if what == "package_case" and sys.platform not in ("darwin", "win32"):
+        pytest.skip("case-insensitive file names only assumed on macOS/Windows")
+    ws = _g03_fixture(function_tmpdir)
+    ml = _g03_load(ws)
+    match = _g03_collide(ml, what)
+    before = _g03_tree(ws)
+    with pytest.raises(ValueError, match=match):
+        getattr(ml, call)()
+    assert _g03_tree(ws) == before
+
+
+def test_mfusg_evsrts_external_line_too_long(function_tmpdir):
+    """The 299-character limit applies to the final line (quotes, options)."""
+    deep = function_tmpdir / ("d " + "x" * 120) / ("e" * 120)
+    src = function_tmpdir / "src"
+    rel = f"../{deep.parent.name}/{deep.name}/r.rts"
+    _g03_fixture(src, rts=f"RTS               40  '{rel}' flush", evs=None)
+    ml = _g03_load(src)
+    ml.change_model_ws(str(function_tmpdir / "new"))
+    with pytest.raises(ValueError, match="longer than 299"):
+        ml.write_input()
+    assert not (function_tmpdir / "new" / "t.nam").exists()
+
+
+# (case, rts line, evs line, extra name-file lines, line moved after LIST,
+#  expected key, expected "TYPE unit N" users in name-file order)
+_G03_UNIT_CASES = [
+    (
+        "evs_chd",
+        _G03_RTS_LINE,
+        "EVS               24  et.evs NO-ARCHIVE",
+        "",
+        None,
+        24,
+        ["CHD unit 24", "EVS unit 24"],
+    ),
+    (
+        "evs_chd_first",
+        _G03_RTS_LINE,
+        "EVS               24  et.evs NO-ARCHIVE",
+        "",
+        "EVS",
+        24,
+        ["EVS unit 24", "CHD unit 24"],
+    ),
+    (
+        "rts_chd",
+        "RTS               24  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        None,
+        24,
+        ["CHD unit 24", "RTS unit 24"],
+    ),
+    (
+        "rts_chd_first",
+        "RTS               24  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        "RTS",
+        24,
+        ["RTS unit 24", "CHD unit 24"],
+    ),
+    (
+        "rts_output",
+        "RTS               51  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        None,
+        51,
+        ["DATA(BINARY) unit 51", "RTS unit 51"],
+    ),
+    (
+        "rts_output_first",
+        "RTS               51  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        "RTS",
+        51,
+        ["RTS unit 51", "DATA(BINARY) unit 51"],
+    ),
+    (
+        "evs_data",
+        _G03_RTS_LINE,
+        "EVS               62  et.evs",
+        "DATA              62  x.dat\n",
+        None,
+        62,
+        ["EVS unit 62", "DATA unit 62"],
+    ),
+    (
+        "evs_data_first",
+        _G03_RTS_LINE,
+        "EVS               62  et.evs",
+        "DATA              62  x.dat\n",
+        "DATA",
+        62,
+        ["DATA unit 62", "EVS unit 62"],
+    ),
+    (
+        "rts_evs",
+        "RTS               41  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        None,
+        41,
+        ["RTS unit 41", "EVS unit 41"],
+    ),
+    (
+        "rts_evs_first",
+        "RTS               41  ts/rech.rts",
+        _G03_EVS_LINE,
+        "",
+        "EVS",
+        41,
+        ["EVS unit 41", "RTS unit 41"],
+    ),
+    # unit 0 is keyed by the file type in the name-file reader
+    (
+        "evs_evs_unit0",
+        _G03_RTS_LINE,
+        "EVS                0  et.evs",
+        "EVS                0  et.evs\n",
+        None,
+        "EVS",
+        ["EVS unit 0", "EVS unit 0"],
+    ),
+]
+
+
+@pytest.mark.parametrize("load_only", [[], _G03_BASE], ids=["empty", "selected"])
+@pytest.mark.parametrize("case", _G03_UNIT_CASES, ids=[c[0] for c in _G03_UNIT_CASES])
+def test_mfusg_evsrts_nam_unit_collision_rejected(function_tmpdir, case, load_only):
+    """An EVS/RTS unit shared with another entry in the original name file is
+    rejected on load (the unit-keyed name-file reader would drop one entry),
+    in either line order, without touching the files."""
+    _, rts, evs, extra, first, key, users = case
+    ws = _g03_fixture(function_tmpdir, rts=rts, evs=evs, extra=extra)
+    (ws / "x.dat").write_text("1.0\n")
+    lines = (ws / "t.nam").read_text().splitlines()
+    if first is not None:
+        i = max(k for k, ln in enumerate(lines) if ln.startswith(first))
+        lines.insert(2, lines.pop(i))
+        (ws / "t.nam").write_text("\n".join(lines) + "\n")
+    pairs = [u.replace(" unit", "").split() for u in users]
+    found = [
+        (k + 1, *ln.split()[:2])
+        for k, ln in enumerate(lines)
+        if ln.split()[:2] in pairs
+    ]
+    assert [f"{t} unit {u}" for _, t, u in found] == users
+    expected = ", ".join(f"{t} unit {u} (line {n})" for n, t, u in found)
+    before = _g03_tree(ws)
+    with pytest.raises(ValueError) as e:
+        _g03_load(ws, load_only=list(load_only))
+    assert f"name-file unit {key} is used by more than one entry: " in str(e.value)
+    assert expected in str(e.value)
+    assert _g03_tree(ws) == before
+
+
+def test_mfusg_evsrts_other_duplicate_units_unchanged(function_tmpdir):
+    """Units shared only by other types keep the reader's behaviour (no new
+    error)."""
+    extra = "IBS               60  x.ibs\nHOB               60  x.hob\n"
+    ws = _g03_fixture(function_tmpdir, extra=extra)
+    for name in ("x.ibs", "x.hob"):
+        (ws / name).write_text("1.0\n")
+    ml = _g03_load(ws)
+    assert [e["unit"] for e in ml.preserved_nam_entries] == [40, 41]
+
+
+def test_mfusg_evsrts_other_types_unchanged(function_tmpdir):
+    """Without EVS/RTS nothing is kept; IBS/HOB (accepted by the USG-T name
+    file reader, not read by any package) and DATA keep their handling."""
+    ws = _g03_fixture(
+        function_tmpdir,
+        rts=None,
+        evs=None,
+        extra="IBS               60  x.ibs\nHOB               61  x.hob\n"
+        "DATA              62  x.dat\n",
+    )
+    for name in ("x.ibs", "x.hob", "x.dat"):
+        (ws / name).write_text("1.0\n")
+    ml = _g03_load(ws)
+    assert ml.preserved_nam_entries == []
+    ml.write_input()
+    types = [
+        ln.split()[0]
+        for ln in (ws / "t.nam").read_text().splitlines()
+        if ln and not ln.startswith("#")
+    ]
+    assert "IBS" not in types and "HOB" not in types
+    assert types.count("DATA") == 1
+    assert "RTS" not in types and "EVS" not in types
+
+
+# G06: TRTOSS stress periods (SS / TR / TRTOSS stofrac) in DIS and DISU.
+# Hand-written fixture: 5 cells in line (DIS 1x5 or DISU 5 nodes), CHD h=10 at
+# cell 1, WEL -0.5 at cell 5, strt 20, confined LPF (ss 1e-3) or BCF
+# (sf1 3e-2), 3 stress periods given as text records, OC with ATSA.
+
+_G06_DIS = """# DIS
+         1         1         5         3         4         2
+  0
+CONSTANT    1.000000E+01                           #delr
+CONSTANT    1.000000E+01                           #delc
+CONSTANT    3.000000E+01                           #model_top
+CONSTANT    0.000000E+00                           #botm layer 1
+"""
+_G06_DISU = """# DISU
+5 1 13 0 3 4 2 0
+  0
+INTERNAL               1     (1I10) -1 #nodelay
+         5
+INTERNAL               1   (5E15.6) -1 #top layer 1
+   3.000000E+01   3.000000E+01   3.000000E+01   3.000000E+01   3.000000E+01
+INTERNAL               1   (5E15.6) -1 #bot layer 1
+   0.000000E+00   0.000000E+00   0.000000E+00   0.000000E+00   0.000000E+00
+CONSTANT    1.000000E+02                           #area layer 1
+INTERNAL               1     (5I10) -1 #iac
+         2         3         3         3         2
+INTERNAL               1     (FREE) -1 #ja
+ 1 2  2 1 3  3 2 4
+ 4 3 5  5 4
+CONSTANT    5.000000E+00                           #cl12
+CONSTANT    3.000000E+01                           #fahl
+"""
+_G06_LPF = """# LPF
+         0    -1E+30         0         0
+         0
+         0
+   1.000000E+00
+         0
+         0
+CONSTANT    1.000000E+00                           #hk layer 1
+CONSTANT    1.000000E+00                           #vka1
+"""
+_G06_LPF_SS = "CONSTANT    1.000000E-03                           #ss layer 1\n"
+_G06_BCF = {
+    "dis": "         0 -1.000e+30         0 1.000e-01         1         0"
+    "         0\n00\n",
+    "disu": "         0 -1.000e+30         0 1.000e-01         1         0"
+    "         0         0\n00\n",
+}
+_G06_BCF_ARRAYS = (
+    "CONSTANT    1.000000E+00                           #anisotropy factor\n",
+    "CONSTANT    3.000000E-02                           #sf1 layer 1\n",
+    "CONSTANT    3.000000E+01                           #transmissivity layer 1\n",
+)
+_G06_CHD = {
+    "dis": "# CHD\n         1\n         1         0\n         1         1         1"
+    "            10.0            10.0\n"
+    "        -1         0\n        -1         0\n",
+    "disu": "# CHD\n         1\n 1    Stress Period 1\n 1   10.000000  10.000000\n"
+    " -1    Stress Period 2\n -1    Stress Period 3\n",
+}
+_G06_WEL = {
+    "dis": "# WEL\n         1         0\n         1         0\n"
+    "         1         1         5            -0.5\n"
+    "        -1         0\n        -1         0\n",
+    "disu": "# WEL\n         1         0\n         1         0         0\n"
+    "         5            -0.5\n"
+    "        -1         0         0\n        -1         0         0\n",
+}
+_G06_SMS = """# SMS
+  1.00e-09  1.00e-11       100       100         2         1         1
+  7.00e-01  1.00e-01  2.00e-01  1.00e-03        20  1.00e+04  2.00e-01  1.00e+02
+         2         0         7         2         0  0.00e+00         0  1.00e-03
+"""
+
+
+def _g06_oc(ats=True):
+    lines = (
+        ["# OC"]
+        + (["ATSA"] if ats else [])
+        + ["HEAD PRINT FORMAT   0", "HEAD SAVE UNIT    51", "COMPACT BUDGET AUX"]
+    )
+    for k in (1, 2, 3):
+        lines.append(f"period {k} step 1")
+        if ats and k == 1:
+            lines += ["  DELTAT 0.1", "  TADJAT 1.3", "  TMAXAT 1.0E4"]
+        lines += ["  save head", "  print budget"]
+    return "\n".join(lines) + "\n"
+
+
+_G06_E3 = [
+    "100000.0   1   1.0   TRTOSS 1.0E-3",
+    "    10.0   1   1.0   TR",
+    "    10.0   1   1.0   TR",
+]
+
+
+def _g06_model(ws, grid="dis", flow="lpf", periods=_G06_E3, storage=True, ats=True):
+    """Write the hand-written 1-layer fixture into ws; periods are the three
+    stress-period records (text)."""
+    ws = Path(ws)
+    ws.mkdir(parents=True, exist_ok=True)
+    disname = "t.dis" if grid == "dis" else "t.disu"
+    base = _G06_DIS if grid == "dis" else _G06_DISU
+    (ws / disname).write_text(base + "\n".join(periods) + "\n")
+    bas = "UNSTRUCTURED FREE" if grid == "disu" else "FREE"
+    (ws / "t.bas").write_text(
+        f"# BAS6\n{bas}\nCONSTANT          1                                #ibound\n"
+        "   -999.99\nCONSTANT    2.000000E+01                           #strt\n"
+    )
+    if flow == "lpf":
+        (ws / "t.lpf").write_text(_G06_LPF + (_G06_LPF_SS if storage else ""))
+        flowline = "LPF               15  t.lpf"
+    else:
+        anis, sf1, tran = _G06_BCF_ARRAYS
+        bcf = _G06_BCF[grid] + anis + (sf1 if storage else "") + tran
+        (ws / "t.bcf").write_text(bcf)
+        flowline = "BCF6              15  t.bcf"
+    (ws / "t.sms").write_text(_G06_SMS)
+    (ws / "t.oc").write_text(_g06_oc(ats))
+    (ws / "t.chd").write_text(_G06_CHD[grid])
+    (ws / "t.wel").write_text(_G06_WEL[grid])
+    (ws / "t.nam").write_text(
+        "# fixture\nLIST               2  t.list\n"
+        f"{'DIS ' if grid == 'dis' else 'DISU'}              11  {disname}\n"
+        "CHD               24  t.chd\nWEL               20  t.wel\n"
+        f"BAS6              13  t.bas\n{flowline}\nSMS               32  t.sms\n"
+        "OC                14  t.oc\nDATA(BINARY)      51  t.hds\n"
+    )
+    return ws
+
+
+def _g06_records(path):
+    """Words of the stress-period records (last three lines)."""
+    return [ln.split()[3:] for ln in Path(path).read_text().splitlines()[-3:]]
+
+
+def _g06_new(ws, grid, steady, trtoss=None, **kw):
+    ml = MfUsg(modelname="t", model_ws=str(ws), structured=(grid == "dis"))
+    args = dict(nper=len(steady), perlen=10.0, steady=steady, **kw)
+    if trtoss is not None:
+        args["trtoss"] = trtoss
+    if grid == "dis":
+        return MfUsgDis(ml, nlay=1, nrow=1, ncol=3, **args)
+    return MfUsgDisU(
+        ml,
+        nodes=3,
+        nlay=1,
+        njag=7,
+        iac=np.array([2, 3, 2]),
+        ja=np.array([0, 1, 1, 0, 2, 2, 1]),
+        ivsd=0,
+        cl12=5.0,
+        fahl=10.0,
+        area=100.0,
+        top=[10.0] * 3,
+        bot=[0.0] * 3,
+        **args,
+    )
+
+
+def _g06_write(pkg):
+    if isinstance(pkg, MfUsgDis):
+        pkg.write_file(check=False)
+    else:
+        pkg.write_file()
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_three_states(function_tmpdir, grid):
+    dis = _g06_new(
+        function_tmpdir,
+        grid,
+        [True, False, False, False],
+        [None, 1.0e-3, np.nan, -0.25],
+    )
+    assert dis.period_type == ["SS", "TRTOSS", "TR", "TRTOSS"]
+    assert dis.itrss == -1
+    _g06_write(dis)
+    words = [ln.split()[3:] for ln in Path(dis.fn_path).read_text().splitlines()[-4:]]
+    assert words == [["SS"], ["TRTOSS", "1.e-03"], ["TR"], ["TRTOSS", "-2.5e-01"]]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_all_and_scalar(function_tmpdir, grid):
+    dis = _g06_new(function_tmpdir, grid, [False, False], 1.0e-6)
+    assert dis.period_type == ["TRTOSS", "TRTOSS"] and dis.itrss == -1
+    tr = _g06_new(function_tmpdir / "tr", grid, [False, True, False], [None, None, 0.0])
+    assert tr.period_type == ["TR", "SS", "TRTOSS"] and tr.itrss == -1
+    assert _g06_new(function_tmpdir / "t", grid, [False, False]).itrss == 1
+    assert _g06_new(function_tmpdir / "s", grid, [True, True]).itrss == 0
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize(
+    "steady, trtoss, match",
+    [
+        ([True, False], [1.0e-3, None], "need steady=False"),
+        ([True], 1.0e-3, "need steady=False"),  # default steady=True
+        ([True, False], [None, 1.0e-3], "without a TR period"),
+        ([False, False], [np.inf, None], "not a finite"),
+        ([False, False], [-np.inf, None], "not a finite"),
+        ([False, False], [1.0e39, None], "not a finite"),
+        ([False, False], ["1e-3", None], "number or None"),
+        ([False, False], [True, None], "number or None"),
+        ([False, False], [[1.0e-3, None]], "scalar or a sequence"),
+        ([False, False], [1.0e-3, None, None], "scalar or a sequence"),
+    ],
+)
+def test_mfusg_trtoss_api_rejected(function_tmpdir, grid, steady, trtoss, match):
+    with pytest.raises(ValueError, match=match):
+        _g06_new(function_tmpdir, grid, steady, trtoss)
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize("change", ["ss_trtoss", "steady_true", "length", "inf"])
+def test_mfusg_trtoss_checked_before_writing(function_tmpdir, grid, change):
+    """Changes after construction are checked before the file is opened."""
+    dis = _g06_new(function_tmpdir, grid, [True, False, False], [None, None, 1.0e-3])
+    if change == "ss_trtoss":
+        dis.trtoss = [None, 1.0e-3, 1.0e-3]  # SS, TRTOSS, TRTOSS
+        match = "without a TR period"
+    elif change == "steady_true":
+        dis.steady = [True, False, True]
+        dis.trtoss = [None, None, None]
+        dis.trtoss[0] = 1.0e-3
+        match = "need steady=False"
+    elif change == "length":
+        dis.trtoss = [1.0e-3]
+        match = "scalar or a sequence"
+    else:
+        dis.trtoss = np.array([np.nan, np.nan, np.inf])
+        match = "not a finite"
+    Path(dis.fn_path).write_text("SENTINEL\n")
+    with pytest.raises(ValueError, match=match):
+        _g06_write(dis)
+    assert Path(dis.fn_path).read_text() == "SENTINEL\n"
+
+
+def test_mfusg_trtoss_positional_compatibility(function_tmpdir):
+    """Existing positional calls keep their meaning (trtoss is appended)."""
+    ml = MfUsg(modelname="p", model_ws=str(function_tmpdir))
+    dis = MfUsgDis(
+        ml,
+        1,
+        1,
+        3,
+        2,
+        10.0,
+        10.0,
+        0,
+        30.0,
+        0.0,
+        [5.0, 6.0],
+        [2, 3],
+        [1.0, 1.5],
+        [True, False],
+        False,
+        4,
+        2,
+        "dis",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        "1/1/2020",
+    )
+    assert dis.perlen.array.tolist() == [5.0, 6.0] and dis.itmuni == 4
+    assert dis.period_type == ["SS", "TR"] and dis.trtoss == [None, None]
+    mu = MfUsg(modelname="q", model_ws=str(function_tmpdir), structured=False)
+    disu = MfUsgDisU(
+        mu,
+        3,
+        1,
+        7,
+        0,
+        2,
+        4,
+        2,
+        0,
+        0,
+        None,
+        [10.0] * 3,
+        [0.0] * 3,
+        100.0,
+        np.array([2, 3, 2]),
+        np.array([0, 1, 1, 0, 2, 2, 1]),
+        None,
+        None,
+        None,
+        5.0,
+        10.0,
+        [5.0, 6.0],
+        1,
+        1,
+        [False, True],
+        "disu",
+        None,
+        None,
+        "1/1/2020",
+    )
+    assert disu.perlen.array.tolist() == [5.0, 6.0]
+    assert disu.period_type == ["TR", "SS"] and disu.trtoss == [None, None]
+
+
+def test_mfusg_trtoss_legacy_flag(function_tmpdir):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _g06_new(function_tmpdir, "dis", [False])  # default Trtoss: no warning
+        _g06_new(function_tmpdir, "dis", [False], Trtoss=False)
+    with pytest.warns(UserWarning, match="Trtoss has no effect"):
+        dis = _g06_new(function_tmpdir, "dis", [False, False], Trtoss=True)
+    assert dis.period_type == ["TR", "TR"]
+    with pytest.warns(UserWarning, match="Trtoss has no effect"):
+        dis = _g06_new(
+            function_tmpdir, "dis", [False, False], [1.0e-3, None], Trtoss=True
+        )
+    assert dis.period_type == ["TRTOSS", "TR"]
+
+
+def _g06_load_dis(ws, grid):
+    ml = MfUsg(modelname="t", model_ws=str(ws), structured=(grid == "dis"))
+    cls = MfUsgDis if grid == "dis" else MfUsgDisU
+    kw = {"check": False} if grid == "dis" else {}
+    return cls.load(str(Path(ws) / ("t.dis" if grid == "dis" else "t.disu")), ml, **kw)
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize(
+    "word, expected",
+    [
+        ("TRTOSS 1.0E-3", 1.0e-3),
+        ("trtoss 1.0e-3", 1.0e-3),
+        ("TrToss 1.0D-3", 1.0e-3),
+        ("TRTOSS 1.0d-3", 1.0e-3),
+        ("TRTOSS 1.0Q-3", 1.0e-3),
+        ("TRTOSS 1.0-3", 1.0e-3),
+        ("TRTOSS .001", 1.0e-3),
+        ("TRTOSS +1E-03", 1.0e-3),
+        ("TRTOSS 1.0E-3,9", 1.0e-3),
+        ("TRTOSS 0.0", 0.0),
+        ("TRTOSS -1.0", -1.0),
+    ],
+    ids=[
+        "E",
+        "lower",
+        "mixed_D",
+        "d",
+        "Q",
+        "no_letter",
+        "dot",
+        "plus",
+        "comma",
+        "zero",
+        "negative",
+    ],
+)
+def test_mfusg_trtoss_load_words(function_tmpdir, grid, word, expected):
+    """Number syntax read by USG-T (URWORD, F30.0): E/D/Q or no exponent
+    letter, leading dot, sign, comma separator; case-insensitive flag."""
+    ws = _g06_model(
+        function_tmpdir, grid, periods=[f"100000.0   1   1.0   {word}"] + _G06_E3[1:]
+    )
+    dis = _g06_load_dis(ws, grid)
+    assert dis.period_type == ["TRTOSS", "TR", "TR"]
+    assert np.float32(dis.trtoss[0]) == np.float32(expected)
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize(
+    "word, match",
+    [
+        ("TRTOSS NaN", "not a finite number"),
+        ("TRTOSS Inf", "not a finite number"),
+        ("TRTOSS -Infinity", "not a finite number"),
+        ("TRTOSS abc", "not a finite number"),
+        ("TRTOSS 1." + "0" * 30 + "E-3", "not a finite number"),  # word > 30 characters
+        ("TRTOSS 3.5E38", "beyond the REAL range"),
+        ("XX", "must be SS, TR or TRTOSS"),
+        ("SSX", "must be SS, TR or TRTOSS"),
+    ],
+    ids=[
+        "nan",
+        "inf",
+        "neg_inf",
+        "text",
+        "long_word",
+        "overflow",
+        "flag_xx",
+        "flag_ssx",
+    ],
+)
+def test_mfusg_trtoss_load_rejected(function_tmpdir, grid, word, match):
+    ws = _g06_model(
+        function_tmpdir, grid, periods=[f"100000.0   1   1.0   {word}"] + _G06_E3[1:]
+    )
+    with pytest.raises(ValueError, match=match):
+        _g06_load_dis(ws, grid)
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_missing_fraction(function_tmpdir, grid):
+    ws = _g06_model(
+        function_tmpdir, grid, periods=["100000.0   1   1.0   TRTOSS"] + _G06_E3[1:]
+    )
+    with pytest.warns(UserWarning, match="without a storage fraction"):
+        dis = _g06_load_dis(ws, grid)
+    assert dis.period_type[0] == "TRTOSS" and dis.trtoss[0] == 0.0
+    _g06_write(dis)
+    assert _g06_records(dis.fn_path)[0] == ["TRTOSS", "0.e+00"]
+
+
+def _g06_tie_words():
+    """Words close to a single-precision rounding tie (exact decimal
+    midpoint of two neighbouring REAL values, +/- 1e-22 relative): the REAL
+    USG-T reads is the neighbour on the side of the word."""
+    from decimal import Decimal, localcontext
+
+    out = []
+    for a in (np.float32(1.0e-3), np.float32(4.3712345e-4), np.float32(7.7e-6)):
+        b = np.nextafter(a, np.float32(1))
+        with localcontext() as ctx:
+            ctx.prec = 100
+            mid = (Decimal(float(a)) + Decimal(float(b))) / 2
+            for eps, real in ((Decimal("-1e-22"), a), (Decimal("1e-22"), b)):
+                out.append((format(mid * (1 + eps), ".22E"), real))
+    return out
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_load_write_load(function_tmpdir, grid):
+    """Flags and the REAL storage fraction survive load -> write -> load,
+    including values with more than seven significant digits and words
+    next to a single-precision rounding tie."""
+    cases = [
+        ("1.23456789E-3", np.float32(1.23456789e-3)),
+        ("4.3712345678D-4", np.float32(4.3712345678e-4)),
+    ] + _g06_tie_words()
+    for i, (word, real) in enumerate(cases):
+        ws = _g06_model(
+            function_tmpdir / f"c{i}",
+            grid,
+            periods=[
+                f"100000.0   1   1.0   TRTOSS {word}",
+                "    10.0   1   1.0   TR",
+                "     5.0   1   1.0   SS",
+            ],
+        )
+        dis = _g06_load_dis(ws, grid)
+        assert np.float32(dis.trtoss[0]) == real, word
+        _g06_write(dis)
+        records = _g06_records(dis.fn_path)
+        assert records[1:] == [["TR"], ["SS"]]
+        assert records[0][0] == "TRTOSS" and np.float32(records[0][1]) == real
+        again = _g06_load_dis(ws, grid)
+        assert again.period_type == ["TRTOSS", "TR", "SS"]
+        assert np.float32(again.trtoss[0]) == real
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize("flow", ["lpf", "bcf"])
+def test_mfusg_trtoss_ss_without_tr_rejected_on_load(function_tmpdir, grid, flow):
+    """SS + TRTOSS without TR stops the model load at DIS/DISU, before the
+    storage arrays of LPF/BCF are interpreted."""
+    ws = _g06_model(
+        function_tmpdir,
+        grid,
+        flow,
+        storage=False,
+        periods=[
+            "     1.0   1   1.0   SS",
+            "100000.0   1   1.0   TRTOSS 1.0E-3",
+            "     1.0   1   1.0   SS",
+        ],
+    )
+    with pytest.raises(ValueError, match="without a TR period"):
+        MfUsg.load("t.nam", model_ws=str(ws), check=False)
+
+
+_G06_LPF2 = """# LPF (2 layers)
+         0    -1E+30         0         0
+         0         0
+         0         0
+   1.000000E+00   1.000000E+00
+         0         0
+         0         0
+"""
+
+
+def _g06_two_layer(ws, grid, flow):
+    """2-layer fixture with all periods TRTOSS: layer values differ so that
+    a storage array read as another property is visible."""
+    ws = Path(ws)
+    ws.mkdir(parents=True)
+    rec = "\n".join(["100000.0   1   1.0   TRTOSS 1.0E-3"] * 3) + "\n"
+    if grid == "dis":
+        (ws / "t.dis").write_text(
+            "# DIS\n         2         1         5         3         4         2\n"
+            "  0  0\nCONSTANT 10.0 #delr\nCONSTANT 10.0 #delc\nCONSTANT 30.0 #top\n"
+            "CONSTANT 15.0 #botm 1\nCONSTANT 0.0 #botm 2\n" + rec
+        )
+        nam = "DIS               11  t.dis\n"
+    else:
+        (ws / "t.disu").write_text(
+            "# DISU\n2 2 4 -1 3 4 2 0\n  0  0\n"
+            "INTERNAL 1 (FREE) -1 #nodelay\n 1 1\n"
+            "CONSTANT 30.0 #top 1\nCONSTANT 15.0 #top 2\n"
+            "CONSTANT 15.0 #bot 1\nCONSTANT 0.0 #bot 2\nCONSTANT 100.0 #area\n"
+            "INTERNAL 1 (FREE) -1 #iac\n 2 2\nINTERNAL 1 (FREE) -1 #ja\n 1 2 2 1\n"
+            "CONSTANT 7.5 #cl12\nCONSTANT 100.0 #fahl\n" + rec
+        )
+        nam = "DISU              11  t.disu\n"
+    if flow == "lpf":
+        (ws / "t.lpf").write_text(
+            _G06_LPF2
+            + "CONSTANT 1.0 #hk 1\nCONSTANT 1.0 #vka 1\nCONSTANT 1.0E-3 #ss 1\n"
+            + "CONSTANT 2.0 #hk 2\nCONSTANT 2.0 #vka 2\nCONSTANT 2.0E-3 #ss 2\n"
+        )
+        nam += "LPF               15  t.lpf\n"
+    else:  # BCF order per layer: SF1, TRAN, VCONT (not on the last layer)
+        (ws / "t.bcf").write_text(
+            "         0   -1.E+30         0       0.1         1         0         0\n"
+            " 0 0\nCONSTANT 1.0 #anisotropy\n"
+            "CONSTANT 3.0E-2 #sf1 1\nCONSTANT 30.0 #tran 1\nCONSTANT 0.1 #vcont 1\n"
+            "CONSTANT 6.0E-2 #sf1 2\nCONSTANT 60.0 #tran 2\n"
+        )
+        nam += "BCF6              15  t.bcf\n"
+    bas = "FREE" if grid == "dis" else "UNSTRUCTURED FREE"
+    (ws / "t.bas").write_text(
+        f"# BAS6\n{bas}\nCONSTANT 1 #ibound 1\nCONSTANT 1 #ibound 2\n   -999.99\n"
+        "CONSTANT 20.0 #strt 1\nCONSTANT 20.0 #strt 2\n"
+    )
+    # BAS6 before LPF/BCF: they are loaded in name-file order
+    first, flowline = nam.split("\n")[0], nam.split("\n")[1]
+    nam = f"{first}\nBAS6              13  t.bas\n{flowline}\n"
+    (ws / "t.nam").write_text("LIST               2  t.list\n" + nam)
+    return ws
+
+
+@pytest.mark.parametrize(
+    "grid, flow", [("dis", "lpf"), ("disu", "lpf"), ("dis", "bcf")]
+)
+def test_mfusg_trtoss_two_layer_storage(function_tmpdir, grid, flow):
+    """With every period TRTOSS (ITRSS=-1, storage read by USG-T) the
+    per-layer storage arrays are read in place, and kept on rewrite."""
+    ws = _g06_two_layer(function_tmpdir / "m", grid, flow)
+    pkg = "LPF" if flow == "lpf" else "BCF6"
+    disname = "DIS" if grid == "dis" else "DISU"
+    for _ in range(2):  # load, write, load again
+        ml = MfUsg.load(
+            "t.nam", model_ws=str(ws), check=False, load_only=[disname, "BAS6", pkg]
+        )
+        assert ml.get_package(disname).period_type == ["TRTOSS"] * 3
+        p = ml.get_package(pkg)
+        if flow == "lpf":
+            hk = [p.hk[k].array.ravel()[0] for k in range(2)]
+            vka = [p.vka[k].array.ravel()[0] for k in range(2)]
+            ss = [p.ss[k].array.ravel()[0] for k in range(2)]
+            assert (hk, vka) == ([1.0, 2.0], [1.0, 2.0])
+            np.testing.assert_allclose(ss, [1.0e-3, 2.0e-3], rtol=1e-6)
+        else:
+            sf1 = [p.sf1[k].array.ravel()[0] for k in range(2)]
+            tran = [p.tran[k].array.ravel()[0] for k in range(2)]
+            np.testing.assert_allclose(sf1, [3.0e-2, 6.0e-2], rtol=1e-6)
+            assert tran == [30.0, 60.0]
+        ml.write_input()
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_absent_records_unchanged(function_tmpdir, grid):
+    """Without TRTOSS the stress-period records are written as before."""
+    dis = _g06_new(function_tmpdir, grid, [True, False])
+    _g06_write(dis)
+    tail = Path(dis.fn_path).read_text().splitlines()[-2:]
+    assert tail == [
+        "     10.000000             1  1.000000  SS",
+        "     10.000000             1  1.000000  TR",
+    ]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_trtoss_existing_uses(function_tmpdir, grid):
+    """trtoss is stored as a list (None for other periods), so attribute-wise
+    equality after reload holds; reducing nper after construction writes the
+    first nper periods, checked on those periods only."""
+    dis = _g06_new(function_tmpdir, grid, [False, False, True], [1.0e-3, None, None])
+    assert dis.trtoss == [1.0e-3, None, None]
+    _g06_write(dis)
+    ws = Path(dis.fn_path).parent
+    name = Path(dis.fn_path).name
+    ml = MfUsg(modelname="r", model_ws=str(ws), structured=(grid == "dis"))
+    cls = MfUsgDis if grid == "dis" else MfUsgDisU
+    kw = {"check": False} if grid == "dis" else {}
+    again = cls.load(str(ws / name), ml, **kw)
+    assert again.trtoss == dis.trtoss and again.trtoss == [1.0e-3, None, None]
+    dis.nper = 2
+    _g06_write(dis)
+    assert [r[0] for r in _g06_records(dis.fn_path)[-2:]] == ["TRTOSS", "TR"]
+    assert dis.period_type == ["TRTOSS", "TR"]
+    dis.nper = 3
+    dis.trtoss = [1.0e-3, None]  # shorter than nper
+    with pytest.raises(ValueError, match="scalar or a sequence"):
+        _g06_write(dis)
+
+
+# G04: SMS options, NUMTRACK records and REAL values. Hand-written SMS text;
+# for the executable tests a hand-written model (5 cells, CHD h=10 at cell 1,
+# WEL -2.0 then -3.0 at cell 5, strt 20, SS then TR with 5 steps).
+
+_G04_XMD = " 1 0 7 2 0 0.0 0 1.0E-3\n"
+
+
+def _g04_load(ws, text):
+    ws = Path(ws)
+    ws.mkdir(parents=True, exist_ok=True)
+    (ws / "in.sms").write_text("# SMS\n" + text)
+    return MfUsgSms.load(str(ws / "in.sms"), MfUsg(modelname="t", model_ws=str(ws)))
+
+
+def _g04_rewrite(sms):
+    """Write sms to out.sms next to its input; return (lines, reloaded)."""
+    ws = Path(sms.parent.model_ws)
+    sms.fn_path = str(ws / "out.sms")
+    sms.write_file()
+    lines = Path(sms.fn_path).read_text().splitlines()[1:]
+    again = MfUsgSms.load(sms.fn_path, MfUsg(modelname="r", model_ws=str(ws)))
+    return lines, again
+
+
+@pytest.mark.parametrize(
+    "text, options, options2",
+    [
+        (" 1.0E-6 1.0E-6 100 200 1 0 1 SHIFT\n" + _G04_XMD, [], [" SHIFT"]),
+        (" 1.0E-6 1.0E-6 100 200 1 0 1 shift\n" + _G04_XMD, [], [" SHIFT"]),
+        (
+            " 1.0E-6 1.0E-6 100 200 1 0 1 Shift DampBot SOLVEACTIVE\n" + _G04_XMD,
+            [],
+            [" SHIFT", " DAMPBOT", " SOLVEACTIVE"],
+        ),
+        (
+            " 1.0E-6 1.0E-6 100 200 1 0 1 solveactive,dampbot\n" + _G04_XMD,
+            [],
+            [" SOLVEACTIVE", " DAMPBOT"],
+        ),
+        (
+            " 1.0E-6 1.0E-6 100 200 1 1 1 truncatednewton\n 0.7 0.1 0.2 0.001 0\n"
+            + _G04_XMD,
+            [],
+            [" TRUNCATEDNEWTON"],
+        ),
+        ("simple\n 1.0E-6 1.0E-6 100 200 1 0 1 shift\n", ["SIMPLE"], [" SHIFT"]),
+        (
+            "Moderate\n 1.0E-6 1.0E-6 100 200 1 1 1 TruncatedNewton\n",
+            ["MODERATE"],
+            [" TRUNCATEDNEWTON"],
+        ),
+        ("COMPLEX\n 1.0E-6 1.0E-6 100 200 1 1 1 DAMPBOT\n", ["COMPLEX"], [" DAMPBOT"]),
+    ],
+    ids=[
+        "shift",
+        "shift_lower",
+        "mixed_three",
+        "comma_lower",
+        "truncnewton_lower",
+        "simple_lower",
+        "moderate_mixed",
+        "complex",
+    ],
+)
+def test_mfusg_sms_options_kept(function_tmpdir, text, options, options2):
+    """Option words are read in any case and kept in their order; SHIFT is
+    not turned into DAMPBOT."""
+    sms = _g04_load(function_tmpdir, text)
+    assert (sms.options, sms.options2) == (options, options2)
+    lines, again = _g04_rewrite(sms)
+    assert (again.options, again.options2) == (options, options2)
+    record_1b = lines[1] if options else lines[0]
+    assert record_1b.split()[7:] == [o.strip() for o in options2]
+
+
+@pytest.mark.parametrize(
+    "word", ["truncatednewtoncutoff", "TRUNCATEDNEWTONCUTOFF"], ids=["lower", "upper"]
+)
+def test_mfusg_sms_truncnewton_cutoff(function_tmpdir, word):
+    text = (
+        f" 1.0E-6 1.0E-6 100 200 1 1 1 {word} 0.7654321D0\n"
+        " 0.7 0.1 0.2 0.001 0\n" + _G04_XMD
+    )
+    sms = _g04_load(function_tmpdir, text)
+    name, value = sms.options2[0].split()
+    assert name == "TRUNCATEDNEWTONCUTOFF"
+    assert np.float32(value) == np.float32(0.7654321)
+    lines, again = _g04_rewrite(sms)
+    assert np.float32(again.options2[0].split()[1]) == np.float32(0.7654321)
+
+
+@pytest.mark.parametrize(
+    "record2, nwritten",
+    [
+        (" 0.7 0.1 0.2 0.001 0\n", 5),
+        (" 0.7 0.1 0.2 0.001 0 5.0 0.5 9.0\n", 5),
+        (" 0.7 0.1 0.2 0.001 -1\n", 5),
+        (" 0.7 0.1 0.2 0.001 20 1.0E4 0.2 100.0\n", 8),
+    ],
+    ids=["zero", "zero_extra", "negative", "positive"],
+)
+def test_mfusg_sms_numtrack(function_tmpdir, record2, nwritten):
+    """BTOL, BREDUC, RES_LIM only when NUMTRACK > 0 (SMS7U1AR), and the XMD
+    record that follows is read in sequence."""
+    sms = _g04_load(
+        function_tmpdir,
+        " 1.0E-6 1.0E-6 100 200 1 1 1\n" + record2 + " 2 1 5 3 0 0.0 0 2.0E-3\n",
+    )
+    xmd = (sms.iacl, sms.norder, sms.level, sms.north, sms.epsrn)
+    assert xmd == (2, 1, 5, 3, 2.0e-3)
+    lines, again = _g04_rewrite(sms)
+    assert len(lines[1].split()) == nwritten
+    assert again.numtrack == sms.numtrack and again.level == 5
+    if nwritten == 8:
+        assert (again.btol, again.breduc, again.reslim) == (1.0e4, 0.2, 100.0)
+
+
+def test_mfusg_sms_preset_records(function_tmpdir):
+    """With a preset only records 1a/1b are written; with PCGU a blank line
+    follows, which PCGU7U1AR reads (URDCOM) without using it."""
+    text = "SIMPLE\n 1.0E-6 1.0E-6 100 200 1 1 2\n\n"
+    sms = _g04_load(function_tmpdir / "pcgu", text)
+    lines, again = _g04_rewrite(sms)
+    assert lines[0] == "SIMPLE" and lines[1].split()[:7] == [
+        "1.00e-06",
+        "1.00e-06",
+        "100",
+        "200",
+        "1",
+        "1",
+        "2",
+    ]
+    assert lines[2:] == [""]
+    assert again.options == ["SIMPLE"] and again.theta is None
+
+
+@pytest.mark.parametrize(
+    "word, expected",
+    [
+        ("1.0E-6", 1.0e-6),
+        ("1.0D-6", 1.0e-6),
+        ("1.0d-6", 1.0e-6),
+        ("1.0Q-6", 1.0e-6),
+        ("1.0-6", 1.0e-6),
+        (".000001", 1.0e-6),
+        ("+1E-06", 1.0e-6),
+    ],
+    ids=["E", "D", "d_lower", "Q", "no_letter", "dot", "plus"],
+)
+def test_mfusg_sms_real_syntax(function_tmpdir, word, expected):
+    sms = _g04_load(
+        function_tmpdir,
+        f" {word} {word} 100 200 1 1 1\n"
+        f" {word} 0.1 0.2 0.001 20 {word} 0.2 100.0\n"
+        f" 1 0 7 2 0 {word} 0 {word}\n",
+    )
+    for name in ("hclose", "hiclose", "theta", "btol", "rrctol", "epsrn"):
+        assert np.float32(getattr(sms, name)) == np.float32(expected), name
+
+
+def _g04_tie_words():
+    """Words next to a single-precision rounding tie (decimal midpoint of two
+    neighbouring REAL values, +/- 1e-22 relative) and the REAL USG-T reads."""
+    from decimal import Decimal, localcontext
+
+    out = []
+    for a in (np.float32(1.0e-6), np.float32(0.712345), np.float32(1.2345e4)):
+        b = np.nextafter(a, np.float32(np.inf))
+        with localcontext() as ctx:
+            ctx.prec = 100
+            mid = (Decimal(float(a)) + Decimal(float(b))) / 2
+            for eps, real in ((Decimal("-1e-22"), a), (Decimal("1e-22"), b)):
+                out.append((format(mid * (1 + eps), ".22E"), real))
+    return out
+
+
+def test_mfusg_sms_precision(function_tmpdir):
+    """REAL values with more than seven significant digits, small values and
+    words next to a rounding tie keep the REAL USG-T reads through
+    load -> write -> load; values exact in 9.2e keep that text."""
+    cases = [
+        ("1.23456789E-7", np.float32(1.23456789e-7)),
+        ("7.1234567890E-1", np.float32(0.712345678)),
+        ("1.0E-30", np.float32(1.0e-30)),
+    ] + _g04_tie_words()
+    for i, (word, real) in enumerate(cases):
+        sms = _g04_load(
+            function_tmpdir / f"c{i}",
+            f" {word} 1.0E-6 100 200 1 1 2 TRUNCATEDNEWTONCUTOFF {word}\n"
+            f" {word} 0.1 0.2 0.001 20 {word} 0.2 100.0\n"
+            f" CG 1 0 0 {word} 1.0\n",
+        )
+        lines, again = _g04_rewrite(sms)
+        for name in ("hclose", "theta", "btol", "rclosepcgu"):
+            assert np.float32(getattr(again, name)) == real, (word, name)
+        assert np.float32(again.options2[0].split()[1]) == real
+    text = " 1.0E-4 1.0E-5 100 200 1 0 1\n" + _G04_XMD
+    sms = _g04_load(function_tmpdir / "exact", text)
+    lines, _ = _g04_rewrite(sms)
+    assert lines[0].split()[:2] == ["1.00e-04", "1.00e-05"]
+    assert lines[1].split()[-1] == "1.00e-03"
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["NaN", "Inf", "-Infinity", "abc", "1." + "0" * 30 + "E-3", "3.5E38"],
+    ids=["nan", "inf", "neg_inf", "text", "long_word", "overflow"],
+)
+def test_mfusg_sms_invalid_real_on_load(function_tmpdir, word):
+    with pytest.raises(ValueError, match="HICLOSE") as e:
+        _g04_load(function_tmpdir, f" 1.0E-6 {word} 100 200 1 0 1\n" + _G04_XMD)
+    assert "TRTOSS" not in str(e.value)
+
+
+@pytest.mark.parametrize(
+    "change, error, match",
+    [
+        (("hclose", np.inf), ValueError, "HCLOSE"),
+        (("hiclose", np.nan), ValueError, "HICLOSE"),
+        (("theta", 1.0e39), ValueError, "THETA"),
+        (("btol", None), ValueError, "BTOL"),
+        (("epsrn", "x"), ValueError, "EPSRN"),
+        (
+            ("options2", [" TRUNCATEDNEWTONCUTOFF abc"]),
+            ValueError,
+            "TRUNCATEDNEWTONCUTOFF",
+        ),
+        (
+            ("options2", ["stressperiodsettings"]),
+            NotImplementedError,
+            "STRESSPERIODSETTINGS",
+        ),
+    ],
+    ids=[
+        "hclose_inf",
+        "hiclose_nan",
+        "theta_overflow",
+        "btol_none",
+        "epsrn_text",
+        "cutoff_text",
+        "stressperiodsettings",
+    ],
+)
+def test_mfusg_sms_checked_before_writing(function_tmpdir, change, error, match):
+    sms = MfUsgSms(
+        MfUsg(modelname="t", model_ws=str(function_tmpdir)),
+        nonlinmeth=1,
+        linmeth=1,
+        numtrack=20,
+    )
+    setattr(sms, *change)
+    Path(sms.fn_path).write_text("SENTINEL\n")
+    with pytest.raises(error, match=match):
+        sms.write_file()
+    assert Path(sms.fn_path).read_text() == "SENTINEL\n"
+
+
+def test_mfusg_sms_unsupported_options(function_tmpdir):
+    """STRESSPERIODSETTINGS is rejected; SOLVEROUTPUTFILE n warns and is not
+    kept; other words of record 1b (labels) are ignored like in USG-T."""
+    with pytest.raises(NotImplementedError, match="STRESSPERIODSETTINGS"):
+        _g04_load(
+            function_tmpdir / "a",
+            " 1.0E-6 1.0E-6 100 200 1 0 1 StressPeriodSettings\n" + _G04_XMD,
+        )
+    with pytest.warns(UserWarning, match="solver output file is not written"):
+        sms = _g04_load(
+            function_tmpdir / "b",
+            " 1.0E-6 1.0E-6 100 200 1 0 1 SOLVEROUTPUTFILE 77 SHIFT\n" + _G04_XMD,
+        )
+    assert sms.options2 == [" SHIFT"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sms = _g04_load(
+            function_tmpdir / "c",
+            " 1.0E-6 1.0E-6 100 200 1 0 1 HCLOSE HICLOSE MXITER ITER1\n" + _G04_XMD,
+        )
+    assert sms.options2 == []
+
+
+_G04_SIGNATURE = [
+    "self",
+    "model",
+    "hclose",
+    "hiclose",
+    "mxiter",
+    "iter1",
+    "iprsms",
+    "nonlinmeth",
+    "linmeth",
+    "theta",
+    "akappa",
+    "gamma",
+    "amomentum",
+    "numtrack",
+    "btol",
+    "breduc",
+    "reslim",
+    "iacl",
+    "norder",
+    "level",
+    "north",
+    "iredsys",
+    "rrctol",
+    "idroptol",
+    "epsrn",
+    "clin",
+    "ipc",
+    "iscl",
+    "iord",
+    "rclosepcgu",
+    "relaxpcgu",
+    "extension",
+    "options",
+    "options2",
+    "unitnumber",
+    "filenames",
+]
+
+
+def test_mfusg_sms_signature_and_positional(function_tmpdir):
+    import inspect
+
+    params = inspect.signature(MfUsgSms.__init__).parameters
+    assert list(params) == _G04_SIGNATURE
+    assert params["numtrack"].default == 20 and params["btol"].default == 1e4
+    args = [
+        1e-5,
+        1e-6,
+        50,
+        30,
+        1,
+        1,
+        1,
+        0.6,
+        0.2,
+        0.3,
+        0.002,
+        0,
+        2e4,
+        0.3,
+        50.0,
+        1,
+        0,
+        5,
+        3,
+        0,
+        0.0,
+        0,
+        2e-3,
+        "CG",
+        1,
+        0,
+        0,
+        0.2,
+        0.9,
+        "sms",
+        None,
+        ["shift"],
+    ]
+    sms = MfUsgSms(MfUsg(modelname="p", model_ws=str(function_tmpdir)), *args)
+    assert [getattr(sms, n) for n in _G04_SIGNATURE[2:31]] == args[:29]
+    assert sms.options2 == ["shift"]
+    sms.write_file()
+    lines = Path(sms.fn_path).read_text().splitlines()[1:]
+    assert lines[0].split()[7:] == ["shift"] and len(lines[1].split()) == 5
+
+
+def test_mfusg_sms_api_options_after_load(function_tmpdir):
+    text = " 1.0E-6 1.0E-6 100 200 1 0 1 DAMPBOT\n" + _G04_XMD
+    sms = _g04_load(function_tmpdir, text)
+    sms.options2.append(" SHIFT")
+    lines, again = _g04_rewrite(sms)
+    assert again.options2 == [" DAMPBOT", " SHIFT"]
+
+
+def test_mfusg_sms_default_text_unchanged(function_tmpdir):
+    """Values exact in 9.2e are written as before."""
+    sms = MfUsgSms(MfUsg(modelname="d", model_ws=str(function_tmpdir)))
+    sms.write_file()
+    assert Path(sms.fn_path).read_text().splitlines()[1:] == [
+        "  1.00e-04  1.00e-04       100        20         2         0         2 ",
+        " bcgs              3         0         0  1.00e-01  1.00e+00",
+        "",
+    ]
+
+
+def _g04_model(ws, sms_text, grid="dis", flow="lpf", laytyp=1):
+    """Write the hand-written G04 model with the given SMS text into ws."""
+    ws = Path(ws)
+    ws.mkdir(parents=True, exist_ok=True)
+    periods = "     1.0   1   1.0   SS\n    10.0   5   1.0   TR\n"
+    if grid == "dis":
+        (ws / "t.dis").write_text(
+            "# DIS\n         1         1         5         2         4         2\n"
+            "  0\nCONSTANT 10.0 #delr\nCONSTANT 10.0 #delc\nCONSTANT 30.0 #top\n"
+            "CONSTANT 0.0 #botm\n" + periods
+        )
+        chd = "# CHD\n 1\n 1 0\n 1 1 1 10.0 10.0\n -1 0\n"
+        wel = "# WEL\n 1 0\n 1 0\n 1 1 5 -2.0\n 1 0\n 1 1 5 -3.0\n"
+        bas = "FREE"
+    else:
+        (ws / "t.disu").write_text(
+            "# DISU\n5 1 13 0 2 4 2 0\n  0\nINTERNAL 1 (FREE) -1 #nodelay\n 5\n"
+            "CONSTANT 30.0 #top\nCONSTANT 0.0 #bot\nCONSTANT 100.0 #area\n"
+            "INTERNAL 1 (FREE) -1 #iac\n 2 3 3 3 2\n"
+            "INTERNAL 1 (FREE) -1 #ja\n 1 2  2 1 3  3 2 4  4 3 5  5 4\n"
+            "CONSTANT 5.0 #cl12\nCONSTANT 100.0 #fahl\n" + periods
+        )
+        chd = "# CHD\n 1\n 1 0\n 1 10.0 10.0\n -1 0\n"
+        wel = "# WEL\n 1 0\n 1 0 0\n 5 -2.0\n 1 0 0\n 5 -3.0\n"
+        bas = "UNSTRUCTURED FREE"
+    (ws / "t.bas").write_text(
+        f"# BAS6\n{bas}\nCONSTANT 1 #ibound\n   -999.99\nCONSTANT 20.0 #strt\n"
+    )
+    if flow == "lpf":
+        (ws / "t.lpf").write_text(
+            f"# LPF\n 0 -1E+30 0 0\n {laytyp}\n 0\n 1.0\n 0\n 0\n"
+            "CONSTANT 1.0 #hk\nCONSTANT 1.0 #vka\nCONSTANT 1.0E-5 #ss\n"
+            + ("CONSTANT 0.1 #sy\n" if laytyp else "")
+        )
+    else:  # confined BCF: SF1, TRAN
+        (ws / "t.bcf").write_text(
+            "         0 -1.000e+30         0 1.000e-01         1         0         0\n"
+            "00\nCONSTANT 1.0 #anisotropy\nCONSTANT 3.0E-4 #sf1\nCONSTANT 30.0 #tran\n"
+        )
+    (ws / "t.sms").write_text("# SMS\n" + sms_text)
+    oc = "# OC\nHEAD PRINT FORMAT 0\nHEAD SAVE UNIT 51\nCOMPACT BUDGET AUX\n"
+    for k, n in ((1, 1), (2, 5)):
+        for s in range(1, n + 1):
+            oc += f"period {k} step {s}\n  save head\n  print budget\n"
+    (ws / "t.oc").write_text(oc)
+    (ws / "t.chd").write_text(chd)
+    (ws / "t.wel").write_text(wel)
+    disline = "DIS 11 t.dis" if grid == "dis" else "DISU 11 t.disu"
+    flowline = "LPF 15 t.lpf" if flow == "lpf" else "BCF6 15 t.bcf"
+    (ws / "t.nam").write_text(
+        f"LIST 2 t.list\n{disline}\nBAS6 13 t.bas\n{flowline}\nSMS 32 t.sms\n"
+        "OC 14 t.oc\nCHD 24 t.chd\nWEL 20 t.wel\nDATA(BINARY) 51 t.hds\n"
+    )
+    return ws
+
+
+def _g04_sentinel(sms):
+    p = Path(sms.fn_path)
+    p.write_text("SENTINEL\n")
+    return p, p.stat().st_mtime_ns
+
+
+@pytest.mark.parametrize(
+    "options2, error, match",
+    [
+        (["SHIFT,STRESSPERIODSETTINGS"], NotImplementedError, "STRESSPERIODSETTINGS"),
+        (["shift\tstressperiodsettings"], NotImplementedError, "STRESSPERIODSETTINGS"),
+        (
+            ["SHIFT", "dampbot, StressPeriodSettings"],
+            NotImplementedError,
+            "STRESSPERIODSETTINGS",
+        ),
+        (["TRUNCATEDNEWTONCUTOFF,NaN"], ValueError, "TRUNCATEDNEWTONCUTOFF"),
+        (
+            ["TRUNCATEDNEWTONCUTOFF 0.1 TRUNCATEDNEWTONCUTOFF NaN"],
+            ValueError,
+            "TRUNCATEDNEWTONCUTOFF",
+        ),
+        (
+            ["TRUNCATEDNEWTONCUTOFF inf TRUNCATEDNEWTONCUTOFF 0.1"],
+            ValueError,
+            "TRUNCATEDNEWTONCUTOFF",
+        ),
+        (["truncatednewtoncutoff", "1e39"], ValueError, "TRUNCATEDNEWTONCUTOFF"),
+        (["TRUNCATEDNEWTONCUTOFF\tabc"], ValueError, "TRUNCATEDNEWTONCUTOFF"),
+        (["TRUNCATEDNEWTONCUTOFF SHIFT"], ValueError, "TRUNCATEDNEWTONCUTOFF"),
+    ],
+    ids=[
+        "comma_sps",
+        "tab_sps",
+        "elements_sps",
+        "comma_nan",
+        "second_nan",
+        "first_inf",
+        "next_element_overflow",
+        "tab_text",
+        "option_as_value",
+    ],
+)
+def test_mfusg_sms_options2_rejected_before_writing(
+    function_tmpdir, options2, error, match
+):
+    """options2 is read like record 1b (spaces, tabs, commas; every option
+    and its value); rejections leave the destination untouched."""
+    sms = MfUsgSms(
+        MfUsg(modelname="t", model_ws=str(function_tmpdir)), options2=list(options2)
+    )
+    p, mtime = _g04_sentinel(sms)
+    with pytest.raises(error, match=match) as e:
+        sms.write_file()
+    assert "MfUsgSms" in str(e.value) and "TRTOSS" not in str(e.value)
+    assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+@pytest.mark.parametrize(
+    "added, error",
+    [
+        (["DAMPBOT,stressperiodsettings"], NotImplementedError),
+        (["TRUNCATEDNEWTONCUTOFF\tNaN"], ValueError),
+    ],
+    ids=["sps", "cutoff_nan"],
+)
+def test_mfusg_sms_options2_changed_after_load(function_tmpdir, added, error):
+    sms = _g04_load(function_tmpdir, " 1.0E-6 1.0E-6 100 200 1 0 1 SHIFT\n" + _G04_XMD)
+    sms.options2 += added
+    p, mtime = _g04_sentinel(sms)
+    with pytest.raises(error):
+        sms.write_file()
+    assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+def test_mfusg_sms_options2_separators_kept(function_tmpdir):
+    """Valid options with commas, tabs, labels, repeated cutoffs and a cutoff
+    without value (read as 0.0 by USG-T) are written unchanged and reload in
+    their order, duplicates included."""
+    options2 = [
+        "SHIFT,dampbot",
+        "\tsolveactive",
+        "label words",
+        "TRUNCATEDNEWTONCUTOFF 0.1 truncatednewtoncutoff 0.2",
+        "TRUNCATEDNEWTONCUTOFF",
+    ]
+    sms = MfUsgSms(
+        MfUsg(modelname="t", model_ws=str(function_tmpdir)),
+        nonlinmeth=1,
+        linmeth=1,
+        numtrack=0,
+        options2=list(options2),
+    )
+    lines, again = _g04_rewrite(sms)
+    assert sms.options2 == options2
+    assert again.options2 == [
+        " SHIFT",
+        " DAMPBOT",
+        " SOLVEACTIVE",
+        " TRUNCATEDNEWTONCUTOFF 1.00e-01",
+        " TRUNCATEDNEWTONCUTOFF 2.00e-01",
+        " TRUNCATEDNEWTONCUTOFF 0.00e+00",
+    ]
+
+
+def test_mfusg_sms_load_separators(function_tmpdir):
+    sms = _g04_load(
+        function_tmpdir / "a",
+        " 1.0E-6 1.0E-6 100 200 1 1 1 SHIFT,dampbot\tsolveactive "
+        "TRUNCATEDNEWTONCUTOFF 0.9,truncatednewtoncutoff 0.7654321\n"
+        " 0.7 0.1 0.2 0.001 0\n" + _G04_XMD,
+    )
+    assert [o.split()[0] for o in sms.options2] == [
+        "SHIFT",
+        "DAMPBOT",
+        "SOLVEACTIVE",
+        "TRUNCATEDNEWTONCUTOFF",
+        "TRUNCATEDNEWTONCUTOFF",
+    ]
+    assert np.float32(sms.options2[4].split()[1]) == np.float32(0.7654321)
+    with pytest.raises(ValueError, match="TRUNCATEDNEWTONCUTOFF"):
+        _g04_load(
+            function_tmpdir / "b",
+            " 1.0E-6 1.0E-6 100 200 1 1 1 "
+            "TRUNCATEDNEWTONCUTOFF SHIFT\n"
+            " 0.7 0.1 0.2 0.001 0\n" + _G04_XMD,
+        )
+
+
+# G05: OC with ATS (ATSA, NPTIMES/TIMOT, NPSTPS) and numeric ATS records,
+# checked against USG-T 2.8.1 glo2basu1.f (SGWF2BAS7I, PTIMES1RP, ATS1RP,
+# SGWF2BAS7N). The engine runs are in test_usg_transport_exe.py.
+_G05_PERIODS = "     1.0   1   1.0   SS\n    10.0   5   1.0   TR\n"
+_G05_HDR = "HEAD SAVE UNIT 51\nCOMPACT BUDGET AUX\n"
+_G05_ACT = "  save head\n  save budget\n  print budget\n"
+_G05_NUM = " 0 1 1 1\n 0 0 1 0\n"
+
+
+def _g05_model(ws, oc_text, grid="dis", periods=_G05_PERIODS):
+    """Write a hand-written 5-cell model with the given OC text into ws."""
+    ws = Path(ws)
+    ws.mkdir(parents=True, exist_ok=True)
+    nper = len(periods.strip().splitlines())
+    if grid == "dis":
+        (ws / "t.dis").write_text(
+            f"# DIS\n         1         1         5{nper:10d}         4         2\n"
+            "  0\nCONSTANT 10.0 #delr\nCONSTANT 10.0 #delc\nCONSTANT 30.0 #top\n"
+            "CONSTANT 0.0 #botm\n" + periods
+        )
+        chd = "# CHD\n 1\n 1 0\n 1 1 1 10.0 10.0\n" + " -1 0\n" * (nper - 1)
+        wel = "# WEL\n 1 0\n 1 0\n 1 1 5 -2.0\n" + "".join(
+            f" 1 0\n 1 1 5 {-2.0 - k:.1f}\n" for k in range(1, nper)
+        )
+        bas = "FREE"
+    else:
+        (ws / "t.disu").write_text(
+            f"# DISU\n5 1 13 0 {nper} 4 2 0\n  0\nINTERNAL 1 (FREE) -1 #nodelay\n 5\n"
+            "CONSTANT 30.0 #top\nCONSTANT 0.0 #bot\nCONSTANT 100.0 #area\n"
+            "INTERNAL 1 (FREE) -1 #iac\n 2 3 3 3 2\n"
+            "INTERNAL 1 (FREE) -1 #ja\n 1 2  2 1 3  3 2 4  4 3 5  5 4\n"
+            "CONSTANT 5.0 #cl12\nCONSTANT 100.0 #fahl\n" + periods
+        )
+        chd = "# CHD\n 1\n 1 0\n 1 10.0 10.0\n" + " -1 0\n" * (nper - 1)
+        wel = "# WEL\n 1 0\n 1 0 0\n 5 -2.0\n" + "".join(
+            f" 1 0 0\n 5 {-2.0 - k:.1f}\n" for k in range(1, nper)
+        )
+        bas = "UNSTRUCTURED FREE"
+    (ws / "t.bas").write_text(
+        f"# BAS6\n{bas}\nCONSTANT 1 #ibound\n   -999.99\nCONSTANT 20.0 #strt\n"
+    )
+    (ws / "t.lpf").write_text(
+        "# LPF\n 50 -1E+30 0 0\n 1\n 0\n 1.0\n 0\n 0\n"
+        "CONSTANT 1.0 #hk\nCONSTANT 1.0 #vka\nCONSTANT 1.0E-5 #ss\nCONSTANT 0.1 #sy\n"
+    )
+    (ws / "t.sms").write_text(
+        "# SMS\n 1.0E-6 1.0E-6 100 200 1 0 1\n 1 0 7 2 0 0.0 0 1.0E-3\n"
+    )
+    (ws / "t.oc").write_text(oc_text)
+    (ws / "t.chd").write_text(chd)
+    (ws / "t.wel").write_text(wel)
+    disline = "DIS 11 t.dis" if grid == "dis" else "DISU 11 t.disu"
+    (ws / "t.nam").write_text(
+        f"LIST 2 t.list\n{disline}\nBAS6 13 t.bas\nLPF 15 t.lpf\nSMS 32 t.sms\n"
+        "OC 14 t.oc\nCHD 24 t.chd\nWEL 20 t.wel\nDATA(BINARY) 51 t.hds\n"
+        "DATA(BINARY) 50 t.cbc\n"
+    )
+    return ws
+
+
+def _g05_dis(ws):
+    """The model of ws with its DIS/DISU only."""
+    disname = "DIS" if (Path(ws) / "t.dis").exists() else "DISU"
+    return MfUsg.load("t.nam", model_ws=str(ws), check=False, load_only=[disname])
+
+
+def _g05_load(ws, oc_text, **kwargs):
+    ws = _g05_model(ws, oc_text, **kwargs)
+    return MfUsgOc.load(str(ws / "t.oc"), _g05_dis(ws))
+
+
+def _g05_rewrite(oc, name="out.oc"):
+    """Write oc next to its model; return (lines without heading, reloaded)."""
+    path = Path(oc.parent.model_ws) / name
+    oc.fn_path = str(path)
+    oc.write_file()
+    again = MfUsgOc.load(str(path), _g05_dis(oc.parent.model_ws))
+    return path.read_text().splitlines()[1:], again
+
+
+def _g05_words(first, timot="", p2=""):
+    return (
+        f"# OC\n{first}\n{timot}"
+        + _G05_HDR
+        + "period 1\n"
+        + _G05_ACT
+        + "period 2\n"
+        + p2
+        + _G05_ACT
+    )
+
+
+@pytest.mark.parametrize(
+    "first, timot, expected",
+    [
+        ("ATSA NPTIMES 3", "3 6 11\n", [3.0, 6.0, 11.0]),
+        ("ATSA NPTIMES 3", "3.5 6.25 11.0\n", [3.5, 6.25, 11.0]),
+        ("ATSA NPTIMES 4", "3.5E0 6.25d0 1.1D1 1.2q1\n", [3.5, 6.25, 11.0, 12.0]),
+        ("ATSA NPTIMES 2", "1.5-1 2.0+1\n", [0.15, 20.0]),
+        ("ATSA NPTIMES 4", "+.5, 5.\n\n6.25\t,8.5 ,\n", [0.5, 5.0, 6.25, 8.5]),
+        ("atsa,nptimes,3", "3.5\n6.25\n11.0\n", [3.5, 6.25, 11.0]),
+        (
+            "ATSA NPTIMES 60 NPSTPS 4",
+            "".join(
+                " ".join(str(10 * (6 * r + c + 1)) for c in range(6)) + "\n"
+                for r in range(10)
+            ),
+            [10.0 * (i + 1) for i in range(60)],
+        ),
+    ],
+    ids=[
+        "int",
+        "decimal",
+        "exp_letters",
+        "exp_sign",
+        "commas_blank_tabs",
+        "multiline",
+        "long",
+    ],
+)
+def test_mfusg_oc_timot_load_write(function_tmpdir, first, timot, expected):
+    """TIMOT is read like USG-T (list-directed DOUBLE over several lines) and
+    written once, right after the first line, with its DOUBLE value."""
+    oc = _g05_load(function_tmpdir, _g05_words(first, timot))
+    assert oc.atsa == 1 and oc.nptimes == len(expected)
+    assert oc.timot == expected
+    lines, again = _g05_rewrite(oc)
+    head = lines[0].split()
+    assert head[:3] == ["ATSA", "NPTIMES", str(len(expected))]
+    assert len(lines[0]) < 198 and not any("{" in ln for ln in lines)
+    nt = (len(expected) + 9) // 10
+    assert [float(w) for ln in lines[1 : 1 + nt] for w in ln.split()] == expected
+    assert lines[1 + nt] == "HEAD PRINT FORMAT   0"
+    assert sum(ln.count(repr(expected[-1])) for ln in lines) == 1
+    assert again.timot == expected and again.npsteps == oc.npsteps
+    assert _g05_rewrite(again, "out2.oc")[0] == lines
+
+
+def test_mfusg_oc_timot_double_value(function_tmpdir):
+    """TIMOT keeps the DOUBLE value USG-T reads (no REAL rounding)."""
+    words = [
+        "0.1",
+        "0.30000000000000004",
+        "1.00000000000000011102230246251565",
+        "3.14159265358979323846264338",
+    ]
+    text = _g05_words("ATSA NPTIMES 4", " ".join(words) + "\n")
+    oc = _g05_load(function_tmpdir / "a", text)
+    # the third word is just below the midpoint between 1 and the next DOUBLE
+    assert oc.timot == [0.1, 0.30000000000000004, 1.0, 3.141592653589793]
+    lines, again = _g05_rewrite(oc)
+    assert lines[1].split() == [repr(t) for t in oc.timot]
+    ml = _g05_dis(_g05_model(function_tmpdir / "b", "# OC\n" + _G05_HDR))
+    oc = MfUsgOc(ml, atsa=1, nptimes=2, timot=np.array([3.3, 11.0], dtype=np.float32))
+    lines, again = _g05_rewrite(oc)
+    assert again.timot == [float(np.float32(3.3)), 11.0]
+
+
+@pytest.mark.parametrize(
+    "timot, match",
+    [
+        ("2*3.5 11.0\n", "not supported"),
+        ("3.5,,11.0\n", "null value"),
+        (",3.5 6.0 11.0\n", "null value"),
+        ("3.5 6.25 /\n", "not supported"),
+        ("3.5 6.25 NaN\n", "not supported"),
+        ("3.5 6.25 Infinity\n", "not supported"),
+        ("3.5 6.25 1.0E400\n", "beyond the DOUBLE range"),
+        ("'3.5' 6.25 11.0\n", "not supported"),
+        ("# times\n3.5 6.25 11.0\n", "not supported"),
+        ("3.5;6.25 11.0\n", "not supported"),
+        ("3.5 6.25 11.0 12.0\n", "NPTIMES is 3"),
+        ("3.5 6.25\n", "not supported"),
+    ],
+    ids=[
+        "repeat",
+        "null",
+        "leading_comma",
+        "slash",
+        "nan",
+        "inf",
+        "overflow",
+        "quote",
+        "comment",
+        "semicolon",
+        "extra_value",
+        "next_record",
+    ],
+)
+def test_mfusg_oc_timot_rejected_on_load(function_tmpdir, timot, match):
+    """TIMOT forms FloPy cannot read like USG-T, extra values (ignored by
+    USG-T) and OC records read as times are rejected with the TIMOT name."""
+    with pytest.raises(ValueError, match=match) as e:
+        _g05_load(function_tmpdir, _g05_words("ATSA NPTIMES 3", timot))
+    assert "TIMOT" in str(e.value) or "NPTIMES" in str(e.value)
+
+
+def test_mfusg_oc_timot_eof(function_tmpdir):
+    with pytest.raises(ValueError, match="end of file while reading 4 TIMOT"):
+        _g05_load(function_tmpdir, "# OC\nATSA NPTIMES 4\n3.5 6.0\n")
+
+
+@pytest.mark.parametrize("first", ["NPTIMES 3", "npstps 2", "ATS", "Ats NPTIMES 3"])
+def test_mfusg_oc_numeric_first_word_rejected(function_tmpdir, first):
+    """USG-T reads an OC file whose first word is NPTIMES, NPSTPS or ATS as
+    numeric output control and stops; FloPy does not repair it."""
+    with pytest.raises(ValueError, match="start the first line with ATSA"):
+        _g05_load(function_tmpdir, _g05_words(first, "3 6 11\n"))
+
+
+def test_mfusg_oc_ats_activation(function_tmpdir):
+    """NPTIMES or NPSTPS turn ATS on (numeric first line or API); the file
+    then starts with ATSA."""
+    oc = _g05_load(
+        function_tmpdir / "n",
+        "# OC\n 0 0 51 0 NPTIMES 3\n3 6 11\n"
+        " 1.0 1.0E-5 10.0 2.0 5.0 3 1000 0 0\n"
+        + _G05_NUM
+        + " 0.5 1.0E-5 2.0 2.0 5.0 3 1000 0 0\n"
+        + _G05_NUM,
+    )
+    assert (oc.atsa, oc.nptimes, oc.npsteps, oc.timot) == (1, 3, 1000, [3.0, 6.0, 11.0])
+    ml = _g05_dis(_g05_model(function_tmpdir / "a", "# OC\n" + _G05_HDR))
+    for kw, first in (
+        ({"nptimes": 2, "timot": [3.5, 11.0]}, "ATSA NPTIMES 2"),
+        ({"npsteps": 4}, "ATSA NPSTPS 4"),
+        ({"atsa": 1}, "ATSA"),
+    ):
+        oc = MfUsgOc(ml, stress_period_data={(1, 0): ["save head"]}, **kw)
+        lines, again = _g05_rewrite(oc)
+        assert lines[0].strip() == first
+        assert again.atsa == 1 and lines[-2:] == ["period 2 ", "  save head"]
+
+
+def test_mfusg_oc_ats_params_kept(function_tmpdir):
+    """DELTAT, TMINAT, TMAXAT, TADJAT and TCUTAT keep their REAL text."""
+    p2 = (
+        "  DELTAT 0.123456789\n  tminat 1.5d-6\n  TMAXAT 1.7654321\n"
+        "  TADJAT 1.33333\n  TCUTAT 3\n"
+    )
+    oc = _g05_load(function_tmpdir, _g05_words("ATSA", "", p2))
+    expected = [
+        "DELTAT 0.123456789",
+        "TMINAT 1.5D-6",
+        "TMAXAT 1.7654321",
+        "TADJAT 1.33333",
+        "TCUTAT 3",
+    ]
+    assert oc.stress_period_data[(1, 0)][:5] == expected
+    lines, again = _g05_rewrite(oc)
+    assert [
+        ln.strip()
+        for ln in lines
+        if ln.strip().split()[0] in ("DELTAT", "TMINAT", "TMAXAT", "TADJAT", "TCUTAT")
+    ] == expected
+    assert again.stress_period_data == oc.stress_period_data
+
+
+@pytest.mark.parametrize(
+    "action, match",
+    [
+        ("DELTAT abc", "DELTAT 'ABC'"),
+        ("TMAXAT 1.0E39", "TMAXAT '1.0E39'"),
+        ("TADJAT nan", "TADJAT 'NAN'"),
+        ("TCUTAT", "TCUTAT needs a value"),
+    ],
+    ids=["text", "beyond_real", "nan", "missing"],
+)
+def test_mfusg_oc_ats_param_rejected(function_tmpdir, action, match):
+    with pytest.raises(ValueError, match=match):
+        _g05_load(function_tmpdir / "l", _g05_words("ATSA", "", f"  {action}\n"))
+    ml = _g05_dis(_g05_model(function_tmpdir / "w", "# OC\n" + _G05_HDR))
+    oc = MfUsgOc(ml, atsa=1, stress_period_data={(1, 0): [action.lower(), "save head"]})
+    oc.fn_path = str(function_tmpdir / "w" / "dest.oc")
+    p, mtime = _g04_sentinel(oc)
+    with pytest.raises(ValueError, match=action.split()[0]):
+        oc.write_file()
+    assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+def _g05_num(header, timot, rec1, rec2, flags=_G05_NUM):
+    return f"# OC\n 0 0 51 0 ATSA{header}\n{timot}{rec1}\n{flags}{rec2}\n{flags}"
+
+
+_G05_TR2 = ["DELTAT 0.5", "TMINAT 1.0E-5", "TMAXAT 2.0", "TADJAT 2.0", "TCUTAT 5.0"]
+_G05_FLAGS = ["PRINT BUDGET", "SAVE BUDGET", "SAVE HEAD"]
+
+
+@pytest.mark.parametrize(
+    "text, periods, spd, npsteps",
+    [
+        (
+            _g05_num(
+                " NPTIMES 3",
+                "3.5 6.25 11.0\n",
+                " 1.0 1.0E-5 10.0 2.0 5.0 3 1000 0 0",
+                " 0.5 1.0E-5 2.0 2.0 5.0 3 1000 0 0",
+            ),
+            _G05_PERIODS,
+            {
+                (0, 0): [
+                    "DELTAT 1.0000001E+00",
+                    "TMINAT 1.0E-5",
+                    "TMAXAT 10.0",
+                    "TADJAT 2.0",
+                    "TCUTAT 5.0",
+                ]
+                + _G05_FLAGS,
+                (1, 0): _G05_TR2 + _G05_FLAGS,
+            },
+            1000,
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0 0 1000 0 0",
+                " 0.0 0.0 -1.0 0.5 0.9 0 1000 0 0",
+            ),
+            _G05_PERIODS,
+            {
+                (0, 0): [
+                    "DELTAT 1.0000001E+00",
+                    "TMINAT 1.0E-5",
+                    "TMAXAT 10.0",
+                    "TADJAT 2.0",
+                    "TCUTAT 5.0",
+                ]
+                + _G05_FLAGS,
+                (1, 0): [
+                    "DELTAT 1.0",
+                    "TMINAT 1.0E-10",
+                    "TMAXAT 1.0E10",
+                    "TADJAT 2.0",
+                    "TCUTAT 5.0",
+                ]
+                + _G05_FLAGS,
+            },
+            1000,
+        ),
+        (
+            _g05_num(
+                " NPSTPS 3",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0 0 2 0 0",
+                " 0.5 1.0E-5 2.0 2.0 5.0 0 2",
+            ),
+            "     0.1   1   1.0   SS\n    10.0   5   1.0   TR\n",
+            {
+                (0, 0): [
+                    "DELTAT 1.0000001E-01",
+                    "TMINAT 1.0E-5",
+                    "TMAXAT 10.0",
+                    "TADJAT 2.0",
+                    "TCUTAT 5.0",
+                ]
+                + _G05_FLAGS,
+                (1, 0): _G05_TR2 + _G05_FLAGS,
+            },
+            2,
+        ),
+        (
+            _g05_num(
+                " NPSTPS 3",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0 0 0 0 0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+            ),
+            _G05_PERIODS,
+            None,
+            0,
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" 1 1 0 0\n 1 0 0 0\n",
+            ),
+            _G05_PERIODS,
+            {
+                (0, 0): [
+                    "DELTAT 1.0000001E+00",
+                    "TMINAT 1.0E-5",
+                    "TMAXAT 10.0",
+                    "TADJAT 2.0",
+                    "TCUTAT 5.0",
+                    "PRINT HEAD 1",
+                ],
+                (1, 0): _G05_TR2 + ["PRINT HEAD 1"],
+            },
+            0,
+        ),
+    ],
+    ids=["nptimes", "limits", "ss_perlen_npstps", "npstps_zero", "incode_layers"],
+)
+def test_mfusg_oc_numeric_ats_load(function_tmpdir, text, periods, spd, npsteps):
+    """Numeric ATS records are loaded as words with the values USG-T uses:
+    ATS1RP defaults for values below its limits, DELTAT at or above PERLEN in
+    steady-state periods (cut to PERLEN), NPSTPS of the records (0: none)."""
+    oc = _g05_load(function_tmpdir, text, periods=periods)
+    assert oc.atsa == 1 and oc.npsteps == npsteps
+    if spd is not None:
+        assert oc.stress_period_data == spd
+    lines, again = _g05_rewrite(oc)
+    assert ("NPSTPS" in lines[0]) == (npsteps > 0)
+    assert not any("{" in ln for ln in lines)
+    assert again.stress_period_data == oc.stress_period_data
+    assert again.npsteps == npsteps
+
+
+@pytest.mark.parametrize(
+    "text, match",
+    [
+        (
+            _g05_num(
+                " NPTIMES 3",
+                "3.5 6.25 11.0\n",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+            ),
+            "has NPTIMES 0",
+        ),
+        (
+            _g05_num(
+                " NPTIMES 3",
+                "3.5 6.25 11.0\n",
+                " 1.0 1.0E-5 10.0 2.0 5.0 3",
+                " 0.5 1.0E-5 2.0 2.0 5.0 2",
+            ),
+            "has NPTIMES 2",
+        ),
+        (
+            _g05_num(
+                "", "", " 1.0 1.0E-5 10.0 2.0 5.0 0 2", " 0.5 1.0E-5 2.0 2.0 5.0 0 3"
+            ),
+            r"different NPSTPS \[2, 3\]",
+        ),
+        (
+            _g05_num(
+                "", "", " 1.0 1.0E-5 10.0 2.0 5.0 0 0 1 0", " 0.5 1.0E-5 2.0 2.0 5.0"
+            ),
+            "IBOOT",
+        ),
+        (
+            _g05_num(
+                "", "", " 1.0 1.0E-5 10.0 2.0 5.0", " 0.5 1.0E-5 2.0 2.0 5.0 0 0 0 1"
+            ),
+            "IBOOT",
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" -1 1 1 1\n",
+            ),
+            "INCODE < 0",
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" 0 1 1 2\n 0 0 1 0\n",
+            ),
+            "ICBCFL = 2",
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" 0 0 1 1\n 0 0 1 0\n",
+            ),
+            "IHDDFL = 0",
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" 1 0 1 1\n 1 0 0 0\n",
+            ),
+            "IHDDFL = 0",
+        ),
+        (
+            _g05_num(
+                "",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+                flags=" 0 1 1 1 0\n 0 0 1 0 0 0\n",
+            ),
+            "transport flags",
+        ),
+        (
+            _g05_num(
+                " FASTFORWARD 1 1 60",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+            ),
+            "FASTFORWARD",
+        ),
+        (
+            _g05_num(
+                " BOOTSTRAPPING 60",
+                "",
+                " 1.0 1.0E-5 10.0 2.0 5.0",
+                " 0.5 1.0E-5 2.0 2.0 5.0",
+            ),
+            "BOOTSTRAPPING",
+        ),
+        (
+            _g05_num(
+                " NPTIMES 3",
+                "3.5 6.25 11.0\n",
+                " 1.0 1.0E-5 10.0 2.0 5.0 3",
+                " 5.0 1.0E-5 10.0 2.0 5.0 3",
+            ),
+            "limited by TIMOT",
+        ),
+        (
+            _g05_num("", "", " 1.0 1.0E-5 10.0 2.0", " 0.5 1.0E-5 2.0 2.0 5.0"),
+            "must give DELTAT TMINAT",
+        ),
+    ],
+    ids=[
+        "nptimes_missing",
+        "nptimes_differs",
+        "npstps_varies",
+        "iboot",
+        "ibootscale",
+        "incode_negative",
+        "icbcfl_2",
+        "ihddfl0",
+        "ihddfl0_layers",
+        "transport",
+        "fastforward",
+        "bootstrapping",
+        "deltat_capped",
+        "four_reals",
+    ],
+)
+def test_mfusg_oc_numeric_ats_rejected(function_tmpdir, text, match):
+    """Numeric ATS records the word form cannot represent are rejected."""
+    with pytest.raises((NotImplementedError, ValueError), match=match):
+        _g05_load(function_tmpdir, text)
+
+
+def test_mfusg_oc_numeric_ats_timot_beyond(function_tmpdir):
+    """ATS1RP reads TIMOT(KPER) for the first time step of a transient
+    period; beyond NPTIMES+1 that is outside TIMOT: rejected."""
+    text = _g05_num(
+        " NPTIMES 1", "2.0\n", " 1.0 1.0E-5 10.0 2.0 5.0 1", " 0.5 1.0E-5 2.0 2.0 5.0 1"
+    )
+    text += " 0.5 1.0E-5 2.0 2.0 5.0 1\n" + _G05_NUM
+    with pytest.raises(NotImplementedError, match="beyond NPTIMES"):
+        _g05_load(function_tmpdir, text, periods=_G05_THREE)
+
+
+def test_mfusg_oc_numeric_ats_model_rejected(function_tmpdir):
+    """Fixed format, transport, CLN and DPF are not validated: rejected."""
+    text = _g05_num("", "", " 1.0 1.0E-5 10.0 2.0 5.0", " 0.5 1.0E-5 2.0 2.0 5.0")
+    ws = _g05_model(function_tmpdir, text)
+    for attr, value, match in (
+        ("free_format_input", False, "fixed format"),
+        ("itrnsp", 1, "transport"),
+        ("icln", 1, "CLN"),
+        ("idpf", 1, "DPF"),
+    ):
+        ml = _g05_dis(ws)
+        setattr(ml, attr, value)
+        with pytest.raises(NotImplementedError, match=match):
+            MfUsgOc.load(str(ws / "t.oc"), ml)
+    # IHDDFL = 0 without head or drawdown flags keeps its meaning
+    oc = _g05_load(
+        function_tmpdir / "z",
+        _g05_num(
+            "",
+            "",
+            " 1.0 1.0E-5 10.0 2.0 5.0",
+            " 0.5 1.0E-5 2.0 2.0 5.0",
+            flags=" 0 0 1 1\n 0 0 0 0\n",
+        ),
+    )
+    assert oc.stress_period_data[(1, 0)] == _G05_TR2 + ["PRINT BUDGET", "SAVE BUDGET"]
+
+
+_G05_THREE = _G05_PERIODS + "    10.0   5   1.0   TR\n"
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        "period 1\n  save head\nperiod 1\n  save head\nperiod 2\n  save head\n",
+        "period 1\n  save head\nperiod 2\n  save head\nperiod 2\n  save head\n"
+        "period 3\n  save head\n",
+        "period 1\n  save head\nperiod 2\n  save head\nperiod 3\n  save head\n"
+        "period 3\n  save head\n",
+        "period 1\nperiod 1\nperiod 2\n  save head\n",
+        "period 1\n  save head\nperiod 2 ddreference\nperiod 2 ddreference\n",
+        "period 1\n  save head\nperiod 3\n  save head\nperiod 2\n  save head\n",
+        "period 1\n  save head\nperiod 2 step 3\n  save head\nperiod 2 step 5\n"
+        "  save head\n",
+        "period 1\n  save head\nperiod 2 step 1 ddreference\n  save head\n",
+    ],
+    ids=[
+        "first",
+        "intermediate",
+        "last_before_eof",
+        "empty",
+        "ddreference",
+        "out_of_order",
+        "two_steps",
+        "ddreference_after_step",
+    ],
+)
+def test_mfusg_oc_ats_period_blocks_rejected(function_tmpdir, blocks):
+    """With ATS, USG-T reads output control once per stress period: a period
+    given again or out of order would be applied to a later period, and
+    DDREFERENCE after STEP is ignored. Without ATS the same records load as
+    before."""
+    with pytest.raises(NotImplementedError, match="with ATS"):
+        _g05_load(
+            function_tmpdir / "a",
+            "# OC\nATSA\n" + _G05_HDR + blocks,
+            periods=_G05_THREE,
+        )
+    _g05_load(function_tmpdir / "b", "# OC\n" + _G05_HDR + blocks, periods=_G05_THREE)
+
+
+def test_mfusg_oc_ats_period_records(function_tmpdir):
+    """With ATS, STEP is ignored on load and PERIOD k [DDREFERENCE] is
+    written; empty and DDREFERENCE-only blocks are kept. Without ATS the
+    records keep their step."""
+    text = (
+        "# OC\nATSA\n" + _G05_HDR + "period 1\nperiod 2 step 4 \n  save head\n"
+        "period 3 ddreference\n"
+    )
+    oc = _g05_load(function_tmpdir, text, periods=_G05_THREE)
+    assert oc.stress_period_data == {(1, 0): ["SAVE HEAD"], (2, 0): ["DDREFERENCE"]}
+    lines, again = _g05_rewrite(oc)
+    assert lines[-3:] == ["period 2 ", "  SAVE HEAD", "period 3 ddreference"]
+    assert again.stress_period_data == oc.stress_period_data
+    oc = MfUsgOc(oc.parent, stress_period_data={(1, 3): ["save head", "ddreference"]})
+    assert _g05_rewrite(oc, "noats.oc")[0][-2:] == [
+        "period 2 step 4 ddreference",
+        "  save head",
+    ]
+
+
+def test_mfusg_oc_old_flopy_inline_timot(function_tmpdir):
+    """Files written by FloPy before G05 repeat TIMOT on the first line; USG-T
+    ignores the options that start after column 198 (here NPSTPS)."""
+    times = " ".join(str(10 * (i + 1)) for i in range(60))
+    text = (
+        f"# OC\nATSA NPTIMES 60 {times} NPSTPS 4 \n{times} \n"
+        + _G05_HDR
+        + "period 1\n"
+        + _G05_ACT
+        + "period 2\n"
+        + _G05_ACT
+    )
+    oc = _g05_load(
+        function_tmpdir,
+        text,
+        periods="     1.0   1   1.0   SS\n  1000.0   5   1.0   TR\n",
+    )
+    assert (oc.nptimes, oc.npsteps) == (60, 0)
+    assert oc.timot == [10.0 * (i + 1) for i in range(60)]
+    lines, _ = _g05_rewrite(oc)
+    assert lines[0].strip() == "ATSA NPTIMES 60"
+
+
+def _g05_dest(function_tmpdir, **kwargs):
+    ml = _g05_dis(_g05_model(function_tmpdir, "# OC\n" + _G05_HDR))
+    spd = kwargs.pop("stress_period_data", {(0, 0): ["save head"]})
+    oc = MfUsgOc(ml, stress_period_data=spd, **kwargs)
+    oc.fn_path = str(Path(function_tmpdir) / "dest.oc")
+    return oc
+
+
+@pytest.mark.parametrize(
+    "kwargs, mutate, match",
+    [
+        ({"atsa": 1, "nptimes": 3, "timot": [3.5, 6.25]}, None, "NPTIMES is 3 but 2"),
+        ({"atsa": 1, "nptimes": 2}, None, "NPTIMES is 2 but 0"),
+        ({"atsa": 1, "timot": [3.5]}, None, "NPTIMES is 0 but 1"),
+        (
+            {"nptimes": 4, "timot": np.array([[1.0, 2.0], [3.0, 4.0]])},
+            None,
+            "one-dimensional",
+        ),
+        ({"nptimes": 1, "timot": 3.5}, None, "one-dimensional"),
+        ({"nptimes": 2, "timot": ["3.5", "6.0"]}, None, "not a number"),
+        ({"nptimes": 2, "timot": [True, 6.0]}, None, "not a number"),
+        ({"nptimes": 2, "timot": [3.5, float("nan")]}, None, "finite"),
+        ({"nptimes": 2, "timot": [3.5, np.inf]}, None, "finite"),
+        ({"nptimes": 2, "timot": [6.0, 3.5]}, None, "not increasing"),
+        ({"nptimes": 2, "timot": [1.0, 1.0 + 0.5e-10]}, None, "not increasing"),
+        ({"atsa": 1}, ("nptimes", -1), "non-negative integer"),
+        ({"atsa": 1}, ("npsteps", 2.0), "non-negative integer"),
+        (
+            {"nptimes": 2, "timot": [3.5, 11.0]},
+            ("timot", [3.5, 11.0, 12.0]),
+            "NPTIMES is 2 but 3",
+        ),
+        (
+            {
+                "atsa": 1,
+                "stress_period_data": {(1, 0): ["save head"], (1, 3): ["save budget"]},
+            },
+            None,
+            r"stress period\(s\) \[2\]",
+        ),
+        ({"stress_period_data": {(1, 0): ["deltat 1.0e39"]}}, None, "DELTAT"),
+        ({"stress_period_data": {(1, 0): ["DELTAT"]}}, None, "DELTAT needs a value"),
+    ],
+    ids=[
+        "count",
+        "missing",
+        "without_nptimes",
+        "matrix",
+        "scalar",
+        "text",
+        "bool",
+        "nan",
+        "inf",
+        "decreasing",
+        "gap_tminat",
+        "nptimes_negative",
+        "npsteps_float",
+        "mutated_timot",
+        "two_blocks",
+        "deltat_real",
+        "deltat_missing",
+    ],
+)
+def test_mfusg_oc_write_rejected_before_opening(function_tmpdir, kwargs, mutate, match):
+    """Invalid ATS settings, also changed after the constructor, are rejected
+    before the destination is opened."""
+    oc = _g05_dest(function_tmpdir, **kwargs)
+    if mutate:
+        setattr(oc, *mutate)
+    p, mtime = _g04_sentinel(oc)
+    with pytest.raises(ValueError, match=match):
+        oc.write_file()
+    assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+def test_mfusg_oc_timot_gap(function_tmpdir):
+    """TIMOT values 2.0E-10 apart pass the USG-T check (TMINAT=1.0E-10)."""
+    oc = _g05_dest(function_tmpdir, nptimes=2, timot=[1.0, 1.0 + 2.0e-10])
+    lines, again = _g05_rewrite(oc)
+    assert again.timot == [1.0, 1.0 + 2.0e-10]
+
+
+def test_mfusg_oc_signature_and_output_without_ats(function_tmpdir):
+    """The constructor signature is unchanged and OC without ATS is written
+    as before G05."""
+    import inspect
+
+    params = inspect.signature(MfUsgOc.__init__).parameters
+    assert list(params) == [
+        "self",
+        "model",
+        "ihedfm",
+        "iddnfm",
+        "ispcfm",
+        "chedfm",
+        "cddnfm",
+        "cspcfm",
+        "cboufm",
+        "compact",
+        "stress_period_data",
+        "extension",
+        "unitnumber",
+        "filenames",
+        "label",
+        "kwargs",
+    ]
+    assert [params[k].default for k in ("ihedfm", "compact", "label")] == [
+        0,
+        True,
+        "LABEL",
+    ]
+    oc = _g05_dest(
+        function_tmpdir,
+        chedfm="(10G12.4)",
+        stress_period_data={
+            (0, 0): ["save head", "print budget"],
+            (1, 2): ["save head", "ddreference"],
+            (1, 4): ["save budget"],
+        },
+    )
+    oc.write_file()
+    assert Path(oc.fn_path).read_text().splitlines()[1:] == [
+        "HEAD PRINT FORMAT   0",
+        "HEAD SAVE FORMAT (10G12.4)            LABEL",
+        "HEAD SAVE UNIT    51",
+        "DRAWDOWN PRINT FORMAT   0",
+        "COMPACT BUDGET AUX",
+        "period 1 step 1 ",
+        "  save head",
+        "  print budget",
+        "period 2 step 3 ddreference",
+        "  save head",
+        "period 2 step 5 ",
+        "  save budget",
+    ]
+
+
+def test_mfusg_oc_load_closes_its_file(function_tmpdir, monkeypatch):
+    """A file opened by load is closed when reading fails; a handle given by
+    the caller is left open."""
+    import builtins
+
+    ws = _g05_model(function_tmpdir, _g05_words("ATSA NPTIMES 3", "3.5,,11.0\n"))
+    ml = _g05_dis(ws)
+    opened = []
+    real_open = builtins.open
+
+    def tracking_open(*args, **kwargs):
+        fh = real_open(*args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(builtins, "open", tracking_open)
+    with pytest.raises(ValueError):
+        MfUsgOc.load(str(ws / "t.oc"), ml)
+    monkeypatch.setattr(builtins, "open", real_open)
+    oc_files = [fh for fh in opened if str(fh.name).endswith("t.oc")]
+    assert oc_files and all(fh.closed for fh in oc_files)
+    with open(ws / "t.oc") as fh:
+        with pytest.raises(ValueError):
+            MfUsgOc.load(fh, ml)
+        assert not fh.closed
+
+
+# G05 v2: ATS actions with URWORD separators (blanks, tabs, commas)
+_G05_ACTION_VALUES = {
+    "DELTAT": "0.123456789",
+    "TMINAT": "1.5d-6",
+    "TMAXAT": "1.7654321",
+    "TADJAT": "1.33333",
+    "TCUTAT": "3",
+}
+_G05_SEPS = {"comma": ",", "tab": "\t", "blanks": "   ", "comma_blanks": " , "}
+
+
+def _g05_real(action):
+    return np.float32(float(action.split()[1].upper().replace("D", "E")))
+
+
+@pytest.mark.parametrize("sep", list(_G05_SEPS))
+@pytest.mark.parametrize("name", list(_G05_ACTION_VALUES))
+def test_mfusg_oc_ats_action_separators(function_tmpdir, name, sep):
+    """DELTAT, TMINAT, TMAXAT, TADJAT and TCUTAT are read like URWORD (blanks,
+    tabs or commas, any case) from a file, through the API and after a
+    change of a loaded package; the action and its REAL value survive
+    load -> write -> load."""
+    value = _G05_ACTION_VALUES[name]
+    action = f"{name[:3].lower()}{name[3:]}{_G05_SEPS[sep]}{value}"
+    expected = f"{name} {value.upper()}"
+    real = np.float32(float(value.replace("d", "e")))
+    oc = _g05_load(function_tmpdir / "text", _g05_words("ATSA", "", f"  {action}\n"))
+    assert oc.stress_period_data[(1, 0)][0] == expected
+    lines, again = _g05_rewrite(oc)
+    assert again.stress_period_data == oc.stress_period_data
+    ml = _g05_dis(_g05_model(function_tmpdir / "api", "# OC\n" + _G05_HDR))
+    oc = MfUsgOc(ml, atsa=1, stress_period_data={(1, 0): [action, "save head"]})
+    lines, again = _g05_rewrite(oc)
+    assert f"  {action}" in lines
+    assert again.stress_period_data[(1, 0)] == [expected, "SAVE HEAD"]
+    oc = _g05_load(function_tmpdir / "changed", _g05_words("ATSA"))
+    oc.stress_period_data[(1, 0)].append(action)
+    lines, again = _g05_rewrite(oc)
+    assert again.stress_period_data[(1, 0)][-1] == expected
+    assert _g05_real(again.stress_period_data[(1, 0)][-1]) == real
+
+
+@pytest.mark.parametrize(
+    "action, field",
+    [
+        ("DELTAT,NaN", "DELTAT"),
+        ("TMAXAT,3.5E38", "TMAXAT"),
+        ("tadjat\tabc", "TADJAT"),
+        ("TCUTAT,", "TCUTAT"),
+        ("tminat , inf", "TMINAT"),
+        ("DeltaT\t1.0E39", "DELTAT"),
+    ],
+    ids=[
+        "nan_comma",
+        "beyond_real_comma",
+        "text_tab",
+        "missing_comma",
+        "inf_comma_blanks",
+        "beyond_real_tab",
+    ],
+)
+def test_mfusg_oc_ats_action_separators_rejected(function_tmpdir, action, field):
+    """Invalid values are rejected whatever the separator: on load, and on
+    write before the destination is opened (API and changed package)."""
+    with pytest.raises(ValueError, match=field):
+        _g05_load(function_tmpdir / "text", _g05_words("ATSA", "", f"  {action}\n"))
+    ml = _g05_dis(_g05_model(function_tmpdir / "api", "# OC\n" + _G05_HDR))
+    api = MfUsgOc(ml, atsa=1, stress_period_data={(1, 0): [action, "save head"]})
+    changed = _g05_load(function_tmpdir / "changed", _g05_words("ATSA"))
+    changed.stress_period_data[(1, 0)].append(action)
+    for oc in (api, changed):
+        oc.fn_path = str(Path(oc.parent.model_ws) / "dest.oc")
+        p, mtime = _g04_sentinel(oc)
+        with pytest.raises(ValueError, match=field):
+            oc.write_file()
+        assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+def test_mfusg_oc_ats_action_reviewer_cases(function_tmpdir):
+    """The three API cases of the G05 review: DELTAT,0.5 is kept; DELTAT,NaN
+    and TMAXAT,3.5E38 are rejected before the destination is opened."""
+    ml = _g05_dis(_g05_model(function_tmpdir, "# OC\n" + _G05_HDR))
+    oc = MfUsgOc(ml, atsa=1, stress_period_data={(1, 0): ["DELTAT,0.5", "save head"]})
+    lines, again = _g05_rewrite(oc)
+    assert again.stress_period_data[(1, 0)] == ["DELTAT 0.5", "SAVE HEAD"]
+    for action in ("DELTAT,NaN", "TMAXAT,3.5E38"):
+        oc = MfUsgOc(ml, atsa=1, stress_period_data={(1, 0): [action, "save head"]})
+        oc.fn_path = str(Path(function_tmpdir) / "dest.oc")
+        p, mtime = _g04_sentinel(oc)
+        with pytest.raises(ValueError, match=action.split(",")[0]):
+            oc.write_file()
+        assert p.read_text() == "SENTINEL\n" and p.stat().st_mtime_ns == mtime
+
+
+# G01 (partial, F39/F40): MfUsgRch keeps its own SELEV and IZNRCH values and
+# writes the RTS option with an integer MXZNRCH (gwf2rch8u1.f: AR 72-89 RTS
+# read by URWORD as integer; RP 400-446 IZNRCH, then 449-462 SELEV). Written
+# files are read back with _g01_read, by hand, not with MfUsgRch.load.
+
+_G01_NPER = 3
+
+
+def _g01_model(ws, grid):
+    """2x2 DIS or 4-node DISU (1 layer), three stress periods."""
+    ml = MfUsg(modelname="t", model_ws=str(ws), structured=(grid == "dis"))
+    if grid == "dis":
+        MfUsgDis(ml, nlay=1, nrow=2, ncol=2, nper=_G01_NPER)
+    else:
+        MfUsgDisU(
+            ml,
+            nodes=4,
+            nlay=1,
+            njag=10,
+            iac=np.array([2, 3, 3, 2]),
+            ja=np.array([0, 1, 1, 0, 2, 2, 1, 3, 3, 2]),
+            ivsd=0,
+            cl12=5.0,
+            fahl=10.0,
+            area=100.0,
+            top=[10.0] * 4,
+            bot=[0.0] * 4,
+            nper=_G01_NPER,
+        )
+    return ml
+
+
+def _g01_arr(grid, values, dtype=np.float64):
+    """values as a (nrow, ncol) DIS array or a (1, nodes) DISU array."""
+    return np.array(values, dtype=dtype).reshape((2, 2) if grid == "dis" else (1, 4))
+
+
+def _g01_read(path, n, skip=0):
+    """Read a written RCH file by hand: (options tokens, [(period header
+    tokens, {name: n values})]). Arrays follow the RP order: RECH, IRCH
+    (NRCHOP=2), IZNRCH (INRCHZONES > 0), SELEV (INSELEV > 0). skip: lines
+    between the options and the first period (MXNDRCH, IRCHCONC)."""
+    lines = [ln for ln in Path(path).read_text().splitlines() if not ln.startswith("#")]
+    pos = 1 + skip
+
+    def array():
+        nonlocal pos
+        ctl = lines[pos].split()
+        pos += 1
+        if ctl[0].upper() == "CONSTANT":
+            return [float(ctl[1])] * n
+        assert ctl[0].upper() == "INTERNAL", ctl
+        values = []
+        while len(values) < n:
+            values += [float(v) for v in lines[pos].split()]
+            pos += 1
+        assert len(values) == n
+        return values
+
+    opts = lines[0].split()
+    periods = []
+    while pos < len(lines):
+        head = lines[pos].split("#")[0].split()
+        pos += 1
+        arrays = {}
+        if int(head[0]) >= 0:
+            arrays["rech"] = array()
+        if int(opts[0]) == 2 and int(head[1]) >= 0:
+            arrays["irch"] = array()
+        for flag, name in (("INRCHZONES", "iznrch"), ("INSELEV", "selev")):
+            if flag in head and int(head[head.index(flag) + 1]) > 0:
+                arrays[name] = array()
+        periods.append((head, arrays))
+    return opts, periods
+
+
+_G01_R1 = [1e-3, 2e-3, 3e-3, 4e-3]
+_G01_R3 = [4e-3, 3e-3, 2e-3, 1e-3]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_rch_selev_keeps_its_values(function_tmpdir, grid):
+    """SELEV keeps its own non-uniform values (not RECH) in every period,
+    with the period 1 array reused in period 2 and RECH reused in period 2."""
+    ml = _g01_model(function_tmpdir, grid)
+    s1 = _g01_arr(grid, [5.5, 6.25, 7.0, 8.125])
+    s3 = _g01_arr(grid, [9.5, 10.0, 11.25, 12.0])
+    rech = {0: _g01_arr(grid, _G01_R1), 2: _g01_arr(grid, _G01_R3)}
+    rch = MfUsgRch(ml, nrchop=3, rech=rech, seepelev=1, selev={0: s1, 1: s1, 2: s3})
+    for kper, expected in ((0, s1), (1, s1), (2, s3)):
+        array = rch.selev[kper].array
+        assert array.dtype == np.float32 and array.shape == expected.shape
+        np.testing.assert_array_equal(array, expected.astype(np.float32))
+    rch.write_file(check=False)
+    opts, periods = _g01_read(rch.fn_path, 4)
+    assert opts == ["3", "0", "SEEPELEV"]
+    assert [p[1].get("selev") for p in periods] == [
+        [5.5, 6.25, 7.0, 8.125],
+        [5.5, 6.25, 7.0, 8.125],
+        [9.5, 10.0, 11.25, 12.0],
+    ]
+    assert [p[1].get("rech") for p in periods] == [_G01_R1, None, _G01_R3]
+    assert [p[0][0] for p in periods] == ["1", "-1", "1"]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_rch_iznrch_keeps_its_values(function_tmpdir, grid):
+    """IZNRCH keeps its own non-uniform zone numbers (not RECH) as int32 in
+    every period, with the period 1 array reused in period 2."""
+    ml = _g01_model(function_tmpdir, grid)
+    z1 = _g01_arr(grid, [1, 2, 3, 0], np.int64)
+    z3 = _g01_arr(grid, [0, 3, 2, 1], np.int64)
+    rech = {0: _g01_arr(grid, _G01_R1), 2: _g01_arr(grid, _G01_R3)}
+    rch = MfUsgRch(ml, nrchop=3, rech=rech, mxrtzones=3, iznrch={0: z1, 1: z1, 2: z3})
+    for kper, expected in ((0, z1), (1, z1), (2, z3)):
+        array = rch.iznrch[kper].array
+        assert array.dtype == np.int32 and array.shape == expected.shape
+        np.testing.assert_array_equal(array, expected)
+    rch.write_file(check=False)
+    opts, periods = _g01_read(rch.fn_path, 4)
+    assert opts == ["3", "0", "RTS", "3"]
+    assert [p[1].get("iznrch") for p in periods] == [
+        [1, 2, 3, 0],
+        [1, 2, 3, 0],
+        [0, 3, 2, 1],
+    ]
+    assert [p[1].get("rech") for p in periods] == [_G01_R1, None, _G01_R3]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_rch_iznrch_written_before_selev(function_tmpdir, grid):
+    """With RTS and SEEPELEV, each period writes RECH, IZNRCH, SELEV in the
+    order RP reads them."""
+    ml = _g01_model(function_tmpdir, grid)
+    z = _g01_arr(grid, [2, 0, 1, 2], np.int32)
+    s = _g01_arr(grid, [15.5, 14.25, 13.0, 12.75])
+    rch = MfUsgRch(
+        ml,
+        nrchop=3,
+        ipakcb=50,
+        rech=_g01_arr(grid, _G01_R1),
+        seepelev=1,
+        mxrtzones=2,
+        selev=dict.fromkeys(range(3), s),
+        iznrch=dict.fromkeys(range(3), z),
+    )
+    rch.write_file(check=False)
+    opts, periods = _g01_read(rch.fn_path, 4)
+    assert opts == ["3", "50", "SEEPELEV", "RTS", "2"]
+    assert periods[0][1] == {
+        "rech": _G01_R1,
+        "iznrch": [2, 0, 1, 2],
+        "selev": [15.5, 14.25, 13.0, 12.75],
+    }
+    for head, arrays in periods[1:]:
+        assert head[0] == "-1"
+        assert arrays == {"iznrch": [2, 0, 1, 2], "selev": [15.5, 14.25, 13.0, 12.75]}
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize("mxrtzones", [0, 1, 3, 12345])
+def test_mfusg_rch_rts_option(function_tmpdir, grid, mxrtzones):
+    """RTS is written with its integer MXZNRCH; without zones (0) there is
+    no RTS keyword."""
+    ml = _g01_model(function_tmpdir, grid)
+    rch = MfUsgRch(ml, nrchop=3, ipakcb=50, rech=1e-3, mxrtzones=mxrtzones)
+    rch.write_file(check=False)
+    opts, periods = _g01_read(rch.fn_path, 4)
+    assert opts == ["3", "50"] + (["RTS", str(mxrtzones)] if mxrtzones else [])
+    assert periods[0] == (["1"], {"rech": [1e-3] * 4})
+    assert [p[0] for p in periods[1:]] == [["-1"], ["-1"]]
+
+
+def test_mfusg_rch_rts_load_write(function_tmpdir):
+    """The G03 hand-written RCH with RTS 2 loads and writes again with
+    RTS 2 and its IZNRCH zones (int32)."""
+    ws = _g03_fixture(function_tmpdir, evs=None)
+    ml = MfUsg.load("t.nam", model_ws=str(ws), check=False, load_only=["DISU"])
+    rch = MfUsgRch.load(str(ws / "t.rch"), ml, check=False)
+    assert rch.mxrtzones == 2
+    assert rch.iznrch[0].array.dtype == np.int32
+    np.testing.assert_array_equal(rch.iznrch[0].array, [[0, 1, 2]])
+    rch.fn_path = str(ws / "out.rch")
+    rch.write_file(check=False)
+    opts, periods = _g01_read(ws / "out.rch", 3)
+    assert opts == ["1", "0", "RTS", "2"]
+    assert periods[0][1] == {"rech": [0.0] * 3, "iznrch": [0, 1, 2]}
+
+
+# hand-written SEEPELEV control for the 5-cell model of _g05_model, three
+# periods: SELEV differs from RECH and is not uniform; period 2 repeats the
+# period 1 SELEV (p2="1") or reuses it (p2="-1"); period 3 reuses RECH
+_G01_P3 = _G05_PERIODS + "    10.0   5   1.0   TR\n"
+_G01_OC = (
+    "# OC\n"
+    + _G05_HDR
+    + "".join(
+        f"period {k} step {s}\n" + _G05_ACT
+        for k, n in ((1, 1), (2, 5), (3, 5))
+        for s in range(1, n + 1)
+    )
+)
+_G01_RECH = (
+    ["0.01", "0.02", "0.03", "0.02", "0.01"],
+    ["0.02", "0.01", "0.03", "0.01", "0.02"],
+)
+_G01_SELEV = (
+    ["12.5", "11.9", "10.8", "10.9", "10.7"],
+    ["12.0", "11.8", "10.6", "10.9", "10.4"],
+)
+
+
+def _g01_seep_text(selev1=_G01_SELEV[0], p2="1", seepelev=True):
+    """RCH text (NRCHOP 3, IRCHCB 50) for _g05_model; without seepelev the
+    same RECH without SELEV."""
+
+    def blk(values):
+        return "INTERNAL 1.0 (FREE) -1\n " + " ".join(values) + "\n"
+
+    if not seepelev:
+        return (
+            "# RCH\n 3 50\n 0\n"
+            + blk(_G01_RECH[0])
+            + " 0\n"
+            + blk(_G01_RECH[1])
+            + " -1\n"
+        )
+    return (
+        "# RCH\n 3 50 SEEPELEV\n 0 INSELEV 1\n"
+        + blk(_G01_RECH[0])
+        + blk(selev1)
+        + f" 0 INSELEV {p2}\n"
+        + blk(_G01_RECH[1])
+        + (blk(selev1) if p2 == "1" else "")
+        + " -1 INSELEV 1\n"
+        + blk(_G01_SELEV[1])
+    )
+
+
+def _g01_seep_model(ws, rch_text, grid):
+    ws = _g05_model(ws, _G01_OC, grid, _G01_P3)
+    (ws / "t.rch").write_text(rch_text)
+    with open(ws / "t.nam", "a") as f:
+        f.write("RCH 18 t.rch\n")
+    return ws
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+def test_mfusg_rch_seepelev_load_write(function_tmpdir, grid):
+    """The hand-written SEEPELEV control loads and writes again with its
+    SELEV values in every period."""
+    ws = _g01_seep_model(function_tmpdir, _g01_seep_text(), grid)
+    rch = MfUsgRch.load(str(ws / "t.rch"), _g05_dis(ws), check=False)
+    rch.fn_path = str(ws / "out.rch")
+    rch.write_file(check=False)
+    opts, periods = _g01_read(ws / "out.rch", 5)
+    assert opts == ["3", "50", "SEEPELEV"]
+    s1, s3 = ([float(v) for v in s] for s in _G01_SELEV)
+    r1, r2 = ([float(v) for v in r] for r in _G01_RECH)
+    assert [p[1] for p in periods] == [
+        {"rech": r1, "selev": s1},
+        {"rech": r2, "selev": s1},
+        {"rech": r2, "selev": s3},
+    ]
+
+
+# kept fork behaviour: INCONC is a bare keyword (RP 246-248); INIRCH and the
+# IRCH array only with NRCHOP=2 (RP 255-272); MXNDRCH only for DISU NRCHOP=2
+
+
+def test_mfusg_rch_inconc_bare_keyword(function_tmpdir):
+    ml = _g01_model(function_tmpdir, "dis")
+    ml.mcomp = 1
+    rch = MfUsgRch(ml, nrchop=3, rech=1e-3, iconc=1, rchconc={0: 0.5, 1: 0.5, 2: 0.25})
+    rch.write_file(check=False)
+    lines = [
+        ln
+        for ln in Path(rch.fn_path).read_text().splitlines()
+        if not ln.startswith("#")
+    ]
+    assert lines[0].split() == ["3", "0", "CONC"]
+    assert lines[1].split() == ["1"]
+    heads = [ln.split("#")[0].split() for ln in lines if "Stress period" in ln]
+    assert heads == [["1", "INCONC"], ["-1", "INCONC"], ["-1", "INCONC"]]
+
+
+@pytest.mark.parametrize("grid", ["dis", "disu"])
+@pytest.mark.parametrize("nrchop", [1, 2, 3])
+def test_mfusg_rch_nrchop_headers(function_tmpdir, grid, nrchop):
+    ml = _g01_model(function_tmpdir, grid)
+    irch = _g01_arr(grid, [0, 0, 0, 0] if grid == "dis" else [0, 1, 2, 3], np.int32)
+    rch = MfUsgRch(
+        ml,
+        nrchop=nrchop,
+        rech=_g01_arr(grid, _G01_R1),
+        irch=dict.fromkeys(range(3), irch),
+    )
+    rch.write_file(check=False)
+    mxndrch = nrchop == 2 and grid == "disu"
+    opts, periods = _g01_read(rch.fn_path, 4, skip=int(mxndrch))
+    assert opts == [str(nrchop), "0"]
+    if mxndrch:
+        lines = Path(rch.fn_path).read_text().splitlines()
+        assert lines[2].split() == ["4"]
+    if nrchop == 2:
+        inirch = "4" if grid == "disu" else "1"
+        assert [p[0] for p in periods] == [
+            ["1", inirch],
+            ["-1", inirch],
+            ["-1", inirch],
+        ]
+        irch_file = [1, 1, 1, 1] if grid == "dis" else [1, 2, 3, 4]
+        assert [p[1] for p in periods] == [
+            {"rech": _G01_R1, "irch": irch_file},
+            {"irch": irch_file},
+            {"irch": irch_file},
+        ]
+    else:
+        assert [p[0] for p in periods] == [["1"], ["-1"], ["-1"]]
+        assert periods[0][1] == {"rech": _G01_R1}
+
+
+# VORONOI-USG: DISU arrays of a voronoi grid extruded into layers with the
+# same cells (flopy.utils.voronoi.get_disu5_gridprops). USG-T 2.8.1 contract:
+# gwf2basu1.f SGWF2DIS8UR (IAC, JA with the node first) and FILLGFU (the
+# horizontal FAHL is an area that USG-T divides by 0.5*(thick_n + thick_m));
+# glo2basu1.f FILLISYM (n-m needs m-n) and SGLO2BAS8ARDIS 10A (IVSD <= 0:
+# m in a later layer is a vertical connection); utl7u1.f U1DRELNJAU
+# (IDSYMRD=0: CL12 in row n is the distance from n to the face, CL1 upper and
+# CL2 lower triangle) and U1DRELNJA (only the upper FAHL is read);
+# gwf2bcf-lpf-u1.f SGWF2LPFU1VCOND (vertical flow uses FAHL as the area).
+
+_VOR_SQ = (
+    [(0, 0), (1, 0), (2, 0), (2, 1), (1, 1), (0, 1)],
+    [[0, 1, 4, 5], [1, 2, 3, 4]],
+    [(0.5, 0.5), (1.5, 0.5)],
+)
+# voronoi cells of A(1,1), B(3,1), C(2,3) in [0,4]x[0,4]; the vertex
+# (2,1.75) is 1.25 from the three points
+_VOR_TRI = (
+    [(0, 0), (2, 0), (4, 0), (4, 2.75), (2, 1.75), (0, 2.75), (4, 4), (0, 4)],
+    [[0, 1, 4, 5], [1, 2, 3, 4], [5, 4, 3, 6, 7]],
+    [(1, 1), (3, 1), (2, 3)],
+)
+
+
+def _vor_check(g):
+    """Invariants of the DISU arrays, independent of the geometry."""
+    from flopy.utils.voronoi import get_disu5_gridprops  # noqa: F401
+
+    iac, ja, nodes = g["iac"], g["ja"], g["nodes"]
+    njag = g["njag"]
+    assert (
+        iac.sum()
+        == njag
+        == len(ja)
+        == len(g["cl12"])
+        == len(g["fahl"])
+        == len(g["ivc"])
+    )
+    assert ja.min() >= 0 and ja.max() < nodes
+    ncpl = g["nodelay"][0]
+    ia = np.r_[0, np.cumsum(iac)]
+    conn = {}
+    for n in range(nodes):
+        row = ja[ia[n] : ia[n + 1]].tolist()
+        assert row[0] == n and len(set(row)) == len(row) and row[1:] == sorted(row[1:])
+        assert g["cl12"][ia[n]] == 0 and g["fahl"][ia[n]] == 0
+        for j in range(ia[n] + 1, ia[n + 1]):
+            m = int(ja[j])
+            assert g["cl12"][j] > 0 and g["fahl"][j] > 0
+            vertical = m // ncpl != n // ncpl
+            assert g["ivc"][j] == int(vertical)
+            if vertical:
+                assert abs(m // ncpl - n // ncpl) == 1 and m % ncpl == n % ncpl
+            conn[(n, m)] = (g["ivc"][j], g["fahl"][j])
+    for (n, m), value in conn.items():
+        assert conn[(m, n)] == value
+
+
+def _vor_rows(g):
+    ia = np.r_[0, np.cumsum(g["iac"])]
+    return [
+        list(
+            zip(
+                g["ja"][ia[n] : ia[n + 1]].tolist(),
+                g["cl12"][ia[n] : ia[n + 1]],
+                g["fahl"][ia[n] : ia[n + 1]],
+                g["ivc"][ia[n] : ia[n + 1]].tolist(),
+            )
+        )
+        for n in range(g["nodes"])
+    ]
+
+
+def _vor_assert_rows(g, expected):
+    got = _vor_rows(g)
+    assert [[r[0] for r in row] for row in got] == [
+        [e[0] for e in row] for row in expected
+    ]
+    for grow, erow in zip(got, expected):
+        for (m, cl, fa, v), (_, ecl, efa, ev) in zip(grow, erow):
+            assert v == ev
+            assert cl == pytest.approx(ecl, rel=1e-12, abs=1e-15)
+            assert fa == pytest.approx(efa, rel=1e-12, abs=1e-15)
+
+
+def _vor_same(a, b, scale_cl=1.0, scale_fa=1.0, scale_area=1.0):
+    np.testing.assert_array_equal(a["ja"], b["ja"])
+    np.testing.assert_array_equal(a["iac"], b["iac"])
+    np.testing.assert_allclose(b["cl12"], a["cl12"] * scale_cl, rtol=1e-9)
+    np.testing.assert_allclose(b["fahl"], a["fahl"] * scale_fa, rtol=1e-9)
+    np.testing.assert_allclose(b["area"], a["area"] * scale_area, rtol=1e-9)
+
+
+def test_mfusg_voronoi_disu5_two_squares():
+    """Hand values: 1 layer, 2 layers, and variable thickness (FAHL uses the
+    mean thickness of the two cells; vertical CL12 is half the thickness of
+    the cell of the row)."""
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    g = get_disu5_gridprops(*_VOR_SQ, 2.0, [0.0])
+    _vor_check(g)
+    assert (g["nodes"], g["nlay"], g["njag"], g["ivsd"], g["idsymrd"]) == (
+        2,
+        1,
+        4,
+        0,
+        0,
+    )
+    np.testing.assert_allclose(g["area"], [1.0, 1.0], rtol=1e-12)
+    _vor_assert_rows(
+        g, [[(0, 0, 0, 0), (1, 0.5, 2.0, 0)], [(1, 0, 0, 0), (0, 0.5, 2.0, 0)]]
+    )
+    g = get_disu5_gridprops(*_VOR_SQ, 2.0, [1.5, 0.0])
+    _vor_check(g)
+    _vor_assert_rows(
+        g,
+        [
+            [(0, 0, 0, 0), (1, 0.5, 0.5, 0), (2, 0.25, 1.0, 1)],
+            [(1, 0, 0, 0), (0, 0.5, 0.5, 0), (3, 0.25, 1.0, 1)],
+            [(2, 0, 0, 0), (0, 0.75, 1.0, 1), (3, 0.5, 1.5, 0)],
+            [(3, 0, 0, 0), (1, 0.75, 1.0, 1), (2, 0.5, 1.5, 0)],
+        ],
+    )
+    np.testing.assert_array_equal(g["top"], [2, 2, 1.5, 1.5])
+    np.testing.assert_array_equal(g["bot"], [1.5, 1.5, 0, 0])
+    np.testing.assert_array_equal(g["nodelay"], [2, 2])
+    g = get_disu5_gridprops(*_VOR_SQ, [3.0, 2.0], [[1.0, 0.5], [0.0, 0.0]])
+    _vor_check(g)
+    _vor_assert_rows(
+        g,
+        [
+            [(0, 0, 0, 0), (1, 0.5, 1.75, 0), (2, 1.0, 1.0, 1)],
+            [(1, 0, 0, 0), (0, 0.5, 1.75, 0), (3, 0.75, 1.0, 1)],
+            [(2, 0, 0, 0), (0, 0.5, 1.0, 1), (3, 0.5, 0.75, 0)],
+            [(3, 0, 0, 0), (1, 0.25, 1.0, 1), (2, 0.5, 0.75, 0)],
+        ],
+    )
+
+
+def test_mfusg_voronoi_disu5_irregular_three_cells():
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    for p in _VOR_TRI[2]:
+        assert np.hypot(p[0] - 2, p[1] - 1.75) == pytest.approx(1.25, rel=1e-15)
+    g = get_disu5_gridprops(*_VOR_TRI, 10.0, [0.0])
+    _vor_check(g)
+    np.testing.assert_allclose(g["area"], [4.5, 4.5, 7.0], rtol=1e-12)
+    s5 = np.sqrt(5.0)
+    _vor_assert_rows(
+        g,
+        [
+            [(0, 0, 0, 0), (1, 1.0, 17.5, 0), (2, s5 / 2, 10 * s5, 0)],
+            [(1, 0, 0, 0), (0, 1.0, 17.5, 0), (2, s5 / 2, 10 * s5, 0)],
+            [(2, 0, 0, 0), (0, s5 / 2, 10 * s5, 0), (1, s5 / 2, 10 * s5, 0)],
+        ],
+    )
+
+
+def test_mfusg_voronoi_disu5_elevation_forms():
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    forms = (
+        [np.array([1.0, 0.5]), 0.0],
+        np.array([[1.0, 0.5], [0.0, 0.0]]),
+        [[1.0, 0.5], [0.0, 0.0]],
+        ([1.0, 0.5], 0),
+    )
+    gs = [get_disu5_gridprops(*_VOR_SQ, [3.0, 2.0], b) for b in forms]
+    for g in gs[1:]:
+        _vor_same(gs[0], g)
+        np.testing.assert_array_equal(g["bot"], gs[0]["bot"])
+    _vor_same(
+        get_disu5_gridprops(*_VOR_SQ, 3.0, [1.0, 0.0]),
+        get_disu5_gridprops(*_VOR_SQ, np.array([3.0, 3.0]), np.array([1.0, 0.0])),
+    )
+
+
+@pytest.mark.parametrize("shift", [(3.3e5, 4.47e6), (-1e7, 2.5e3)])
+def test_mfusg_voronoi_disu5_invariance(shift):
+    """Translation, scale, direction, first vertex, closed rings and repeated
+    coordinates give the same connections."""
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    v, iv, c = _VOR_TRI
+    base = get_disu5_gridprops(v, iv, c, 10.0, [0.0])
+    _vor_same(
+        base, get_disu5_gridprops(np.add(v, shift), iv, np.add(c, shift), 10.0, [0.0])
+    )
+    _vor_same(
+        base,
+        get_disu5_gridprops(np.multiply(v, 10), iv, np.multiply(c, 10), 10.0, [0.0]),
+        10,
+        10,
+        100,
+    )
+    for cells in (
+        [r[::-1] for r in iv],
+        [r[2:] + r[:2] for r in iv],
+        [r + r[:1] for r in iv],
+    ):
+        _vor_same(base, get_disu5_gridprops(v, cells, c, 10.0, [0.0]))
+    # cell 0 lists a second vertex with the coordinates of vertex 4
+    _vor_same(
+        base,
+        get_disu5_gridprops(v + [v[4]], [[0, 1, 8, 5], iv[1], iv[2]], c, 10.0, [0.0]),
+    )
+
+
+def test_mfusg_voronoi_disu5_merge_tolerance():
+    """Copies of a shared vertex within the tolerance are merged whatever
+    their position relative to the rounding bins and their order; vertices
+    used by no cell, even far away, change nothing; a chain of points closer
+    than the tolerance but longer than it cannot be resolved."""
+    from flopy.utils.voronoi import _disu5_merge, get_disu5_gridprops
+
+    tol = 1e-9 * 2.0  # extent of the two squares
+    base = get_disu5_gridprops(*_VOR_SQ, 1.0, [0.0])
+    v = np.array(_VOR_SQ[0], float)
+    for x in (1.0, 1.0 + 0.5 * tol, 1.0 + 0.999 * tol, 1.0 + 1.5 * tol):
+        for side in (0.4 * tol, -0.4 * tol):
+            vv = v.copy()
+            vv[[1, 4], 0] = x
+            vv = np.vstack([vv, vv[[1, 4]] + [side, 0.0]])
+            for cells in ([[0, 1, 4, 5], [6, 2, 3, 7]], [[0, 6, 7, 5], [1, 2, 3, 4]]):
+                g = get_disu5_gridprops(vv, cells, _VOR_SQ[2], 1.0, [0.0])
+                np.testing.assert_array_equal(g["ja"], base["ja"])
+    far = np.vstack([v, [[1e12, 1e12], [-1e9, 5.0]]])
+    _vor_same(base, get_disu5_gridprops(far, _VOR_SQ[1], _VOR_SQ[2], 1.0, [0.0]))
+    cid, xy = _disu5_merge(np.array([[0.0, 0.0], [0.4, 0.0], [5.0, 5.0]]), 1.0)
+    assert cid[0] == cid[1] != cid[2] and np.allclose(xy[cid[0]], [0.2, 0.0])
+    with pytest.raises(ValueError, match="chain"):
+        _disu5_merge(np.array([[0.0, 0.0], [0.8, 0.0], [1.6, 0.0], [2.4, 0.0]]), 1.0)
+
+
+def test_mfusg_voronoi_disu5_small_cells_kept():
+    """A strip 1e-4 wide between two unit cells keeps its connections (the
+    tolerance is 1e-9 times the extent)."""
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    e = 1e-4
+    v = [(0, 0), (1, 0), (1 + e, 0), (2 + e, 0), (2 + e, 1), (1 + e, 1), (1, 1), (0, 1)]
+    iv = [[0, 1, 6, 7], [1, 2, 5, 6], [2, 3, 4, 5]]
+    c = [(0.5, 0.5), (1 + e / 2, 0.5), (1.5 + e, 0.5)]
+    g = get_disu5_gridprops(v, iv, c, 2.0, [0.0])
+    _vor_check(g)
+    np.testing.assert_allclose(g["area"], [1.0, e, 1.0], rtol=1e-9)
+    _vor_assert_rows(
+        g,
+        [
+            [(0, 0, 0, 0), (1, 0.5, 2.0, 0)],
+            [(1, 0, 0, 0), (0, e / 2, 2.0, 0), (2, e / 2, 2.0, 0)],
+            [(2, 0, 0, 0), (1, 0.5, 2.0, 0)],
+        ],
+    )
+
+
+def test_mfusg_voronoi_disu5_collinear_face_segments():
+    """A face made of two collinear segments counts its whole width; two
+    faces in different directions between the same cells are rejected."""
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    v = [(0, 0), (1, 0), (2, 0), (2, 1), (1, 1), (0, 1), (1, 0.5)]
+    g = get_disu5_gridprops(
+        v, [[0, 1, 6, 4, 5], [1, 2, 3, 4, 6]], _VOR_SQ[2], 2.0, [0.0]
+    )
+    _vor_assert_rows(
+        g, [[(0, 0, 0, 0), (1, 0.5, 2.0, 0)], [(1, 0, 0, 0), (0, 0.5, 2.0, 0)]]
+    )
+    v = [(0, 0), (2, 0), (2, 1), (1, 1), (1, 2), (0, 2), (2, 2)]
+    with pytest.raises(ValueError, match="more than one face"):
+        get_disu5_gridprops(
+            v, [[0, 1, 2, 3, 4, 5], [3, 2, 6, 4]], [(0.5, 0.5), (1.5, 1.5)], 1.0, [0.0]
+        )
+
+
+def test_mfusg_voronoi_disu5_inputs_not_modified():
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    v = np.array(_VOR_TRI[0], float)
+    iv = [list(r) for r in _VOR_TRI[1]]
+    c = np.array(_VOR_TRI[2], float)
+    top = np.array([10.0, 11.0, 12.0])
+    botm = [np.array([4.0, 5.0, 6.0]), 0.0]
+    copies = (v.copy(), [list(r) for r in iv], c.copy(), top.copy(), botm[0].copy())
+    g1 = get_disu5_gridprops(v, iv, c, top, botm)
+    g2 = get_disu5_gridprops(v, iv, c, top, botm)
+    np.testing.assert_array_equal(v, copies[0])
+    assert iv == copies[1]
+    np.testing.assert_array_equal(c, copies[2])
+    np.testing.assert_array_equal(top, copies[3])
+    np.testing.assert_array_equal(botm[0], copies[4])
+    g1["ja"] += 1
+    g1["top"][0] = -1.0
+    assert g2["ja"][0] == 0 and g2["top"][0] == 10.0
+
+
+@pytest.mark.parametrize(
+    "top,botm,match",
+    [
+        (10.0, [10.0], "non-positive thickness"),
+        (10.0, [5.0, 6.0], "non-positive thickness"),
+        ([10.0, 10.0, 1.0], [[0.0, 0.0, 2.0]], "non-positive thickness"),
+        (np.nan, [0.0], "finite"),
+        (10.0, [[0.0, np.inf, 0.0]], "finite"),
+        ([10.0, 10.0], [0.0], "top must be"),
+        (10.0, [[0.0, 0.0]], r"botm\[0\]"),
+        (10.0, 0.0, "one entry per layer"),
+        (10.0, [], "at least one layer"),
+        ("ten", [0.0], "top must be"),
+        (10.0, ["zero"], r"botm\[0\]"),
+    ],
+)
+def test_mfusg_voronoi_disu5_rejects_elevations(top, botm, match):
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    with pytest.raises(ValueError, match=match):
+        get_disu5_gridprops(*_VOR_TRI, top, botm)
+
+
+_VOR_BAD = {
+    # reviewer case: [0,1]x[0,1] and [0.5,1.5]x[0.3,1.3] overlap
+    "overlap": (
+        [
+            (0, 0),
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (0.5, 0.3),
+            (1.5, 0.3),
+            (1.5, 1.3),
+            (0.5, 1.3),
+        ],
+        [[0, 1, 2, 3], [4, 5, 6, 7]],
+        [(0.5, 0.5), (1.0, 0.8)],
+        "cross or touch",
+    ),
+    "duplicate": (
+        [(0, 0), (1, 0), (1, 1), (0, 1)],
+        [[0, 1, 2, 3], [0, 1, 2, 3]],
+        [(0.5, 0.5), (0.4, 0.4)],
+        "same direction",
+    ),
+    "contained": (
+        [(0, 0), (4, 0), (4, 4), (0, 4), (1, 1), (2, 1), (2, 2), (1, 2)],
+        [[0, 1, 2, 3], [4, 5, 6, 7]],
+        [(3.0, 3.0), (1.5, 1.5)],
+        "inside cell|boundaries",
+    ),
+    "bowtie": (
+        [(0, 0), (1, 1), (1, 0), (0, 1)],
+        [[0, 1, 2, 3]],
+        [(0.5, 0.5)],
+        "intersects itself|outside|zero area",
+    ),
+    "folded": (
+        [(0, 0), (2, 0), (1, 0), (1, 1)],
+        [[0, 1, 2, 3]],
+        [(0.8, 0.2)],
+        "folds back|intersects itself",
+    ),
+    "spike": (
+        [(0, 0), (2, 0), (2, 2), (2, 1), (0, 2)],
+        [[0, 1, 2, 3, 4]],
+        [(1.0, 1.0)],
+        "folds back|intersects itself",
+    ),
+    "fraction": (
+        *_VOR_SQ[:1],
+        [[0, 1, 4.5, 5], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "not an integer",
+    ),
+    "float_index": (
+        *_VOR_SQ[:1],
+        [[0, 1, 4.0, 5], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "not an integer",
+    ),
+    "bool_index": (
+        *_VOR_SQ[:1],
+        [[0, True, 4, 5], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "not an integer",
+    ),
+    "text_cell": (*_VOR_SQ[:1], ["0145", [1, 2, 3, 4]], _VOR_SQ[2], "list of integers"),
+    "empty_cell": (*_VOR_SQ[:1], [[], [1, 2, 3, 4]], _VOR_SQ[2], "no vertices"),
+    "no_cells": (_VOR_SQ[0], [], np.zeros((0, 2)), "empty"),
+    "out_of_range": (
+        *_VOR_SQ[:1],
+        [[0, 1, 4, 99], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "out of range",
+    ),
+    "negative": (
+        *_VOR_SQ[:1],
+        [[0, 1, 4, -1], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "out of range",
+    ),
+    "verts_3d": (
+        [(0, 0, 0), (1, 0, 0), (1, 1, 0)],
+        [[0, 1, 2]],
+        [(0.6, 0.3)],
+        "verts must have",
+    ),
+    "verts_text": (
+        [("a", 0), (1, 0), (1, 1)],
+        [[0, 1, 2]],
+        [(0.6, 0.3)],
+        "arrays of numbers",
+    ),
+    "xcyc_shape": (*_VOR_SQ[:2], [(0.5, 0.5)], "xcyc must have"),
+    "xcyc_nan": (*_VOR_SQ[:2], [(np.nan, 0.5), (1.5, 0.5)], "finite"),
+    "two_vertices": (*_VOR_SQ[:1], [[0, 1], [1, 2, 3, 4]], _VOR_SQ[2], "fewer than 3"),
+    "repeated_vertex": (
+        *_VOR_SQ[:1],
+        [[0, 1, 4, 1, 5], [1, 2, 3, 4]],
+        _VOR_SQ[2],
+        "repeated",
+    ),
+    "center_outside": (*_VOR_SQ[:2], [(1.5, 0.5), (0.5, 0.5)], "outside"),
+    "zero_area": (
+        [(0, 0), (1, 0), (2, 0)],
+        [[0, 1, 2]],
+        [(1.0, 0.0)],
+        "fewer than 3|zero area|folds",
+    ),
+    "three_cells_edge": (
+        _VOR_SQ[0] + [(0.5, 0.5)],
+        [[0, 1, 4, 5], [1, 2, 3, 4], [1, 4, 6]],
+        [(0.5, 0.5), (1.5, 0.5), (0.8, 0.5)],
+        "more than two cells",
+    ),
+    "non_orthogonal": (
+        [(0, 0), (1, 0), (2, 0), (2.5, 1), (1.5, 1), (0.5, 1)],
+        _VOR_SQ[1],
+        [(0.75, 0.5), (1.75, 0.5)],
+        "not orthogonal",
+    ),
+    "hanging_vertex": (
+        [(0, 0), (1, 0), (2, 0), (2, 1), (1, 1), (0, 1), (2, 0.5), (1, 0.5)],
+        [[0, 1, 4, 5], [1, 2, 6, 7], [7, 6, 3, 4]],
+        [(0.5, 0.5), (1.5, 0.25), (1.5, 0.75)],
+        "overlap|cross or touch",
+    ),
+    # 3x3 squares without the middle one: a hole
+    "hole": (
+        [(i, j) for j in range(4) for i in range(4)],
+        [
+            [0, 1, 5, 4],
+            [1, 2, 6, 5],
+            [2, 3, 7, 6],
+            [4, 5, 9, 8],
+            [6, 7, 11, 10],
+            [8, 9, 13, 12],
+            [9, 10, 14, 13],
+            [10, 11, 15, 14],
+        ],
+        [
+            (0.5, 0.5),
+            (1.5, 0.5),
+            (2.5, 0.5),
+            (0.5, 1.5),
+            (2.5, 1.5),
+            (0.5, 2.5),
+            (1.5, 2.5),
+            (2.5, 2.5),
+        ],
+        "separate boundaries",
+    ),
+    "separate_regions": (
+        [(0, 0), (1, 0), (1, 1), (0, 1), (5, 0), (6, 0), (6, 1), (5, 1)],
+        [[0, 1, 2, 3], [4, 5, 6, 7]],
+        [(0.5, 0.5), (5.5, 0.5)],
+        "separate boundaries",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_VOR_BAD))
+def test_mfusg_voronoi_disu5_rejects_geometry(case):
+    from flopy.utils.voronoi import get_disu5_gridprops
+
+    v, iv, c, match = _VOR_BAD[case]
+    with pytest.raises(ValueError, match=match):
+        get_disu5_gridprops(v, iv, c, 1.0, [0.0])
+
+
+def test_mfusg_voronoi_disu5_center_inside_other_cell():
+    """The last overlap check on its own: a cell center inside another cell."""
+    from flopy.utils.voronoi import _disu5_cells, _disu5_check_overlaps
+
+    v, iv, c, _ = _VOR_BAD["contained"]
+    c = np.array(c, float)
+    rings, _, vxy, tol = _disu5_cells(np.array(v, float), iv, c)
+    edges = [(min(a, b), max(a, b)) for r in rings for a, b in zip(r, r[1:] + r[:1])]
+    with pytest.raises(ValueError, match="inside cell 0"):
+        _disu5_check_overlaps(rings, edges, vxy, c, tol)
+
+
+def _vor_rect(ws, seed=7, n=40, max_area=4000.0, length=1000.0, width=500.0):
+    """flopy Triangle + VoronoiGrid of a length x width rectangle with random
+    interior nodes (fixed seed)."""
+    from flopy.utils.triangle import Triangle
+    from flopy.utils.voronoi import VoronoiGrid
+
+    Path(ws).mkdir(parents=True)
+    rng = np.random.default_rng(seed)
+    nodes = np.c_[rng.uniform(40, length - 40, n), rng.uniform(40, width - 40, n)]
+    tri = Triangle(maximum_area=max_area, angle=30, nodes=nodes, model_ws=str(ws))
+    tri.add_polygon([(0, 0), (length, 0), (length, width), (0, width)])
+    tri.build(verbose=False)
+    return tri, VoronoiGrid(tri)
+
+
+@requires_pkg("scipy", "shapely")
+@requires_exe("triangle")
+def test_mfusg_voronoi_disu5_voronoigrid(tmp_path):
+    """The VoronoiGrid method equals the module function; the neighbors are
+    Triangle edges (Delaunay), the others touch at one point; the cells
+    cover the rectangle."""
+    import inspect
+
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    from flopy.utils.voronoi import VoronoiGrid, get_disu5_gridprops
+
+    assert list(inspect.signature(VoronoiGrid.get_disu5_gridprops).parameters) == [
+        "self",
+        "top",
+        "botm",
+    ]
+    assert list(inspect.signature(get_disu5_gridprops).parameters) == [
+        "verts",
+        "iverts",
+        "xcyc",
+        "top",
+        "botm",
+    ]
+    assert "MfUsgDisU" in VoronoiGrid.get_disu5_gridprops.__doc__
+    assert "transport" in get_disu5_gridprops.__doc__
+    tri, vor = _vor_rect(tmp_path / "mesh")
+    top = np.linspace(30.0, 40.0, vor.ncpl)
+    g = vor.get_disu5_gridprops(top, [10.0, 0.0])
+    _vor_check(g)
+    f = get_disu5_gridprops(vor.verts, vor.iverts, vor.points, top, [10.0, 0.0])
+    for key in g:
+        np.testing.assert_array_equal(g[key], f[key])
+    ncpl = vor.ncpl
+    ia = np.r_[0, np.cumsum(g["iac"])]
+    pairs = {
+        tuple(sorted((n, int(m))))
+        for n in range(ncpl)
+        for m in g["ja"][ia[n] + 1 : ia[n + 1]]
+        if m < ncpl
+    }
+    tri_pairs = {
+        tuple(sorted(map(int, e)))
+        for e in tri.edge[["endpoint1", "endpoint2"]].tolist()
+    }
+    base = min(min(p) for p in tri_pairs)
+    tri_pairs = {(a - base, b - base) for a, b in tri_pairs}
+    polys = [Polygon(np.asarray(vor.verts)[iv]) for iv in vor.iverts]
+    assert pairs <= tri_pairs
+    for a, b in tri_pairs - pairs:
+        assert polys[a].intersection(polys[b]).geom_type == "Point"
+    domain = Polygon([(0, 0), (1000, 0), (1000, 500), (0, 500)])
+    assert unary_union(polys).symmetric_difference(domain).area <= 1e-9 * domain.area
+    np.testing.assert_allclose(g["area"][:ncpl], [p.area for p in polys], rtol=1e-12)
+
+
+@requires_pkg("scipy")
+@requires_exe("triangle")
+def test_mfusg_voronoi_disu5_hole_rejected(tmp_path):
+    """A VoronoiGrid built with a hole does not cover its domain (a gap next
+    to the hole, cells inside it): rejected."""
+    from flopy.utils.triangle import Triangle
+    from flopy.utils.voronoi import VoronoiGrid
+
+    tri = Triangle(maximum_area=2000.0, angle=30, model_ws=str(tmp_path))
+    tri.add_polygon([(0, 0), (400, 0), (400, 300), (0, 300)])
+    tri.add_polygon([(150, 100), (250, 100), (250, 200), (150, 200)])
+    tri.add_hole((200, 150))
+    tri.build(verbose=False)
+    vor = VoronoiGrid(tri)
+    with pytest.raises(ValueError, match="separate boundaries"):
+        vor.get_disu5_gridprops(10.0, [0.0])
+
+
+@requires_pkg("scipy")
+@requires_exe("triangle")
+def test_mfusg_voronoi_unstructuredgrid_props(tmp_path):
+    """Without top and botm the dictionary is unchanged; with them it
+    describes the layered grid (independent lists per layer)."""
+    from flopy.discretization import UnstructuredGrid
+
+    _, vor = _vor_rect(tmp_path / "mesh", seed=3, n=10, max_area=20000.0)
+    ncpl = vor.ncpl
+    plain = vor.get_gridprops_unstructuredgrid()
+    assert list(plain) == ["vertices", "iverts", "ncpl", "xcenters", "ycenters"]
+    assert plain["iverts"] is vor.iverts and plain["ncpl"] == ncpl
+    np.testing.assert_array_equal(plain["xcenters"], vor.points[:, 0])
+    assert plain["vertices"] == vor.get_disv_gridprops()["vertices"]
+    for kwargs in ({"top": 10.0}, {"botm": [0.0]}):
+        with pytest.raises(ValueError, match="together"):
+            vor.get_gridprops_unstructuredgrid(**kwargs)
+    top = np.linspace(30.0, 40.0, ncpl)
+    botm = [np.full(ncpl, 20.0), 5.0]
+    p = vor.get_gridprops_unstructuredgrid(top=top, botm=botm)
+    assert p["ncpl"] == [ncpl, ncpl] and len(p["iverts"]) == 2 * ncpl
+    p["iverts"][0].append(-1)
+    assert p["iverts"][ncpl][-1] != -1 and vor.iverts[0][-1] != -1
+    p["iverts"][0].pop()
+    ug = UnstructuredGrid(**p)
+    assert ug.nlay == 2 and list(ug.ncpl) == [ncpl, ncpl]
+    np.testing.assert_allclose(ug.top[:ncpl], top)
+    np.testing.assert_allclose(ug.top[ncpl:], 20.0)
+    np.testing.assert_allclose(ug.botm[:ncpl], 20.0)
+    np.testing.assert_allclose(ug.botm[ncpl:], 5.0)
+    verts = np.asarray(vor.verts)
+    for k in range(2):
+        for c in range(ncpl):
+            n = k * ncpl + c
+            assert ug.xcellcenters[n] == vor.points[c, 0]
+            assert ug.ycellcenters[n] == vor.points[c, 1]
+            np.testing.assert_array_equal(
+                ug.get_cell_vertices(n), verts[vor.iverts[c]].tolist()
+            )

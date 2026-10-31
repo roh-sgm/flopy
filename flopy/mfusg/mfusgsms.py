@@ -5,9 +5,96 @@ Contains the MfUsgSms class. Note that the user can access
 the MfUsgSms class as `flopy.mfusg.MfUsgSms`.
 """
 
+import warnings
+
+import numpy as np
+
 from ..pakbase import Package
 from ..utils.flopy_io import line_parse
 from .mfusg import MfUsg
+from .mfusgdis import _real32, _stofrac_from_word, _stofrac_word
+
+# The REAL reading/writing helpers of the DIS stress-period records (mfusgdis)
+# are reused: they follow URWORD (E/D/Q exponents, words of at most 30
+# characters, correctly rounded single precision) and write the shortest text
+# that USG-T reads as the same REAL.
+
+# SMS option words of record 1b (SMS7U1AR, glo2sms-u1.f): read with URWORD,
+# so in any case; TRUNCATEDNEWTONCUTOFF is followed by a REAL.
+_SMS_OPTIONS = (
+    "SOLVEACTIVE",
+    "DAMPBOT",
+    "SHIFT",
+    "TRUNCATEDNEWTON",
+    "TRUNCATEDNEWTONCUTOFF",
+)
+
+
+def _real(word, name):
+    """REAL value of a word of an SMS file as USG-T reads it."""
+    try:
+        return _stofrac_from_word(word, 0)
+    except ValueError:
+        raise ValueError(
+            f"MfUsgSms: {name} {word!r} is not a finite REAL number USG-T can "
+            "read (or it is beyond the REAL range)"
+        )
+
+
+def _check_real(value, name):
+    """A finite value within the REAL range, before the file is opened."""
+    if isinstance(value, (bool, np.bool_, str, bytes)) or value is None:
+        raise ValueError(f"MfUsgSms: {name} must be a number, got {value!r}")
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"MfUsgSms: {name} must be a number, got {value!r}")
+    if not np.isfinite(x) or _real32(x) is None:
+        raise ValueError(f"MfUsgSms: {name}={x} is not a finite REAL value")
+    return x
+
+
+def _scan_options(words):
+    """Option words of record 1b after LINMETH, read like SMS7U1AR.
+
+    ``words`` are split like URWORD (spaces, tabs, commas) and compared in
+    upper case. TRUNCATEDNEWTONCUTOFF takes the next word as a REAL (every
+    occurrence is checked; a missing word is read as 0.0, another word stops
+    USG-T), SOLVEROUTPUTFILE takes the next word as its unit, other words
+    are ignored like in USG-T. STRESSPERIODSETTINGS raises. Returns the
+    (option, value) pairs in their order, duplicates included.
+    """
+    words = [w.upper() for w in words]
+    found = []
+    i = 0
+    while i < len(words):
+        word = words[i]
+        i += 1
+        if word == "STRESSPERIODSETTINGS":
+            raise NotImplementedError(
+                "MfUsgSms: STRESSPERIODSETTINGS (per-stress-period solver "
+                "settings in PERIOD blocks) is not supported"
+            )
+        if word in ("TRUNCATEDNEWTONCUTOFF", "SOLVEROUTPUTFILE"):
+            value = 0.0 if word == "TRUNCATEDNEWTONCUTOFF" else ""
+            if i < len(words):
+                value = words[i]
+                if word == "TRUNCATEDNEWTONCUTOFF":
+                    value = _real(value, word)
+                i += 1
+            found.append((word, value))
+        elif word in _SMS_OPTIONS:
+            found.append((word, None))
+    return found
+
+
+def _real_text(value):
+    """9.2e when it keeps the single-precision value, else the shortest
+    text that USG-T reads as np.float32(value)."""
+    text = f"{value:9.2e}"
+    if np.float32(float(text)) == np.float32(value):
+        return text
+    return f"{_stofrac_word(value):>9s}"
 
 
 class MfUsgSms(Package):
@@ -212,6 +299,13 @@ class MfUsgSms(Package):
         will be created using the model name and package extension. If a
         single string is passed the package will be set to the string.
         Default is None.
+    options : str or list of str, optional
+        Preset of record 1a: SIMPLE, MODERATE or COMPLEX. With a preset the
+        nonlinear (item 2) and XMD/PCGU parameter records are not written.
+    options2 : str or list of str, optional
+        Options of record 1b, after LINMETH: SOLVEACTIVE, DAMPBOT, SHIFT,
+        TRUNCATEDNEWTON and TRUNCATEDNEWTONCUTOFF value (case-insensitive in
+        USG-T). STRESSPERIODSETTINGS is not supported.
 
     Attributes
     ----------
@@ -224,6 +318,17 @@ class MfUsgSms(Package):
 
     Notes
     -----
+    Loading follows SMS7U1AR (USG-T 2.8.1): option words of record 1b are
+    read in any case and kept in their order (SHIFT included); other words
+    of that record are ignored like in USG-T. SOLVEROUTPUTFILE n is not kept
+    (warning: the separate solver output is not written) and
+    STRESSPERIODSETTINGS raises NotImplementedError on load and write.
+    BTOL, BREDUC and RES_LIM are read and written only when NUMTRACK > 0.
+    REAL values accept E, D or Q exponents; they are written with 9.2e when
+    that keeps the single-precision value USG-T reads, otherwise with the
+    shortest text that does (helpers shared with the DIS stress-period
+    records). Missing, non-finite or out-of-range REAL values are rejected
+    before the file is opened.
 
     Examples
     --------
@@ -355,13 +460,15 @@ class MfUsgSms(Package):
         None
 
         """
+        nopt = len(self.options)
+        self._check_before_writing(nopt)
         f = open(self.fn_path, "w")
         f.write(f"{self.heading}\n")
-        nopt = len(self.options)
         if nopt > 0:
             f.write(" ".join(self.options) + "\n")
+        r = _real_text
         f.write(
-            f" {self.hclose:9.2e} {self.hiclose:9.2e} {self.mxiter:9d} {self.iter1:9d}"
+            f" {r(self.hclose)} {r(self.hiclose)} {self.mxiter:9d} {self.iter1:9d}"
             f" {self.iprsms:9d} {self.nonlinmeth:9d} {self.linmeth:9d} "
         )
         if len(self.options2) > 0:
@@ -369,25 +476,46 @@ class MfUsgSms(Package):
         f.write("\n")
 
         if self.nonlinmeth != 0 and nopt == 0:
-            f.write(
-                f" {self.theta:9.2e} {self.akappa:9.2e} {self.gamma:9.2e}"
-                f" {self.amomentum:9.2e} {self.numtrack:9d} {self.btol:9.2e}"
-                f" {self.breduc:9.2e} {self.reslim:9.2e}\n"
+            line = (
+                f" {r(self.theta)} {r(self.akappa)} {r(self.gamma)}"
+                f" {r(self.amomentum)} {self.numtrack:9d}"
             )
+            # BTOL BREDUC RES_LIM are read only when NUMTRACK > 0
+            if self.numtrack > 0:
+                line += f" {r(self.btol)} {r(self.breduc)} {r(self.reslim)}"
+            f.write(line + "\n")
 
         if self.linmeth == 1 and nopt == 0:
             f.write(
                 f" {self.iacl:9d} {self.norder:9d} {self.level:9d} {self.north:9d}"
-                f" {self.iredsys:9d} {self.rrctol:9.2e} {self.idroptol:9d}"
-                f" {self.epsrn:9.2e}\n"
+                f" {self.iredsys:9d} {r(self.rrctol)} {self.idroptol:9d}"
+                f" {r(self.epsrn)}\n"
             )
         if self.linmeth == 2 and nopt == 0:
             f.write(
                 f" {self.clin:9s} {self.ipc:9d} {self.iscl:9d} {self.iord:9d}"
-                f" {self.rclosepcgu:9.2e} {self.relaxpcgu:9.2e}\n"
+                f" {r(self.rclosepcgu)} {r(self.relaxpcgu)}\n"
             )
         f.write("\n")
         f.close()
+
+    def _check_before_writing(self, nopt):
+        """Reject, before the file is opened, STRESSPERIODSETTINGS (not
+        supported) and REAL values that are missing, not finite or beyond
+        the REAL range in the records that will be written."""
+        # same reading as load (separators, every option with its value)
+        _scan_options(line_parse(" ".join(str(o) for o in self.options2)))
+        names = ["hclose", "hiclose"]
+        if self.nonlinmeth != 0 and nopt == 0:
+            names += ["theta", "akappa", "gamma", "amomentum"]
+            if self.numtrack > 0:
+                names += ["btol", "breduc", "reslim"]
+        if self.linmeth == 1 and nopt == 0:
+            names += ["rrctol", "epsrn"]
+        if self.linmeth == 2 and nopt == 0:
+            names += ["rclosepcgu", "relaxpcgu"]
+        for name in names:
+            _check_real(getattr(self, name), name.upper())
 
     @classmethod
     def load(cls, f, model, ext_unit_dict=None):
@@ -419,6 +547,10 @@ class MfUsgSms(Package):
         >>> m = flopy.modflow.Modflow()
         >>> sms = flopy.modflow.ModflowPcg.load('test.sms', m)
         """
+        if not hasattr(f, "read"):
+            # the file is closed also when a record cannot be read
+            with open(f, "r") as fh:
+                return cls.load(fh, model, ext_unit_dict=ext_unit_dict)
         msg = (
             "Model object must be of type flopy.mfusg.MfUsg\n"
             f"but received type: {type(model)}."
@@ -451,18 +583,18 @@ class MfUsgSms(Package):
         options = []
         firstentry = line.strip().split()[0]
         if firstentry.lower() in opts:
-            options.append(firstentry)
+            options.append(firstentry.upper())
         nopt = len(options)
 
         if nopt > 0:
-            line = f.readline().upper()
+            line = f.readline()
 
         # Record 1b -- line will have already been read
         if model.verbose:
             print("   loading HCLOSE HICLOSE MXITER ITER1 IPRSMS NONLINMETH LINMETH...")
         ll = line_parse(line)
-        hclose = float(ll.pop(0))
-        hiclose = float(ll.pop(0))
+        hclose = _real(ll.pop(0), "HCLOSE")
+        hiclose = _real(ll.pop(0), "HICLOSE")
         mxiter = int(ll.pop(0))
         iter1 = int(ll.pop(0))
         iprsms = int(ll.pop(0))
@@ -476,18 +608,19 @@ class MfUsgSms(Package):
 
         # OPTIONS2
         options2 = []
-        if "SOLVEACTIVE" in ll:
-            options2.append(" SOLVEACTIVE")
-        if "DAMPBOT" in ll:
-            options2.append(" DAMPBOT")
-        if "SHIFT" in ll:
-            options2.append(" DAMPBOT")
-        if "TRUNCATEDNEWTON" in ll:
-            options2.append(" TRUNCATEDNEWTON")
-        if "TRUNCATEDNEWTONCUTOFF" in ll:
-            idx = ll.index("TRUNCATEDNEWTONCUTOFF")
-            val = float(ll[idx + 1])
-            options2.append(f" TRUNCATEDNEWTONCUTOFF {val}")
+        dropped = []
+        for word, value in _scan_options(ll):
+            if word == "TRUNCATEDNEWTONCUTOFF":
+                options2.append(f" {word} {_real_text(value).strip()}")
+            elif word == "SOLVEROUTPUTFILE":
+                dropped.append(f"{word} {value}".strip())
+            else:
+                options2.append(f" {word}")
+        if dropped:
+            warnings.warn(
+                f"MfUsgSms.load: {dropped} is not supported by MfUsgSms and is "
+                "not kept: the separate solver output file is not written"
+            )
 
         # Record 2
         theta = None
@@ -509,14 +642,16 @@ class MfUsgSms(Package):
                 if line[0] != "#":
                     break
             ll = line_parse(line)
-            theta = float(ll.pop(0))
-            akappa = float(ll.pop(0))
-            gamma = float(ll.pop(0))
-            amomentum = float(ll.pop(0))
+            theta = _real(ll.pop(0), "THETA")
+            akappa = _real(ll.pop(0), "AKAPPA")
+            gamma = _real(ll.pop(0), "GAMMA")
+            amomentum = _real(ll.pop(0), "AMOMENTUM")
             numtrack = int(ll.pop(0))
-            btol = float(ll.pop(0))
-            breduc = float(ll.pop(0))
-            reslim = float(ll.pop(0))
+            # BTOL BREDUC RES_LIM are read only when NUMTRACK > 0
+            if numtrack > 0:
+                btol = _real(ll.pop(0), "BTOL")
+                breduc = _real(ll.pop(0), "BREDUC")
+                reslim = _real(ll.pop(0), "RES_LIM")
             if model.verbose:
                 print(
                     f" THETA {theta} AKAPPA{akappa} GAMMA{gamma} AMOMENTUM{amomentum}"
@@ -546,9 +681,9 @@ class MfUsgSms(Package):
             level = int(ll.pop(0))
             north = int(ll.pop(0))
             iredsys = int(ll.pop(0))
-            rrctol = float(ll.pop(0))
+            rrctol = _real(ll.pop(0), "RRCTOL")
             idroptol = int(ll.pop(0))
-            epsrn = float(ll.pop(0))
+            epsrn = _real(ll.pop(0), "EPSRN")
             if model.verbose:
                 print(
                     f" IACL {iacl} NORDER {norder} LEVEL {level} NORTH {north}"
@@ -575,9 +710,9 @@ class MfUsgSms(Package):
             ipc = int(ll.pop(0))
             iscl = int(ll.pop(0))
             iord = int(ll.pop(0))
-            rclosepcgu = float(ll.pop(0))
+            rclosepcgu = _real(ll.pop(0), "RCLOSEPCGU")
             if len(ll) > 0:
-                relaxpcgu = float(ll.pop(0))
+                relaxpcgu = _real(ll.pop(0), "RELAXPCGU")
             if model.verbose:
                 print(
                     f"   CLIN {clin} IPC {ipc} ISCL {iscl} IORD {iord} "

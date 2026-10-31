@@ -5,6 +5,8 @@ Contains the MfUsgBcf class. Note that the user can
 access the MfUsgBcf class as `flopy.mfusg.MfUsgBcf`.
 """
 
+import re
+
 import numpy as np
 
 from ..modflow import ModflowBcf
@@ -23,6 +25,98 @@ from ._tabrich import (
     write_tabrich,
 )
 from .mfusg import MfUsg
+
+_RICHARDS_NAMES = ("alpha", "beta", "sr", "brook", "bp")
+
+
+def _effective_laycon(laycon, richards):
+    """LAYCON used by the BCF readers. FloPy already stores the units digit of
+    the file code (READBCF 248-257); the BAS RICHARDS/RICHARDS_HP option then
+    turns every LAYCON != 0 into 5 (READBCF 335-350). The input is not mutated."""
+    laycon = np.array(laycon, dtype=np.int32)
+    if richards:
+        laycon[laycon != 0] = 5
+    return laycon
+
+
+def _bas_richards(model):
+    bas = model.get_package("BAS6")
+    return bool(bas is not None and getattr(bas, "richards", False))
+
+
+def _is_anisotropic(trpy):
+    """IHANISO test of READBCF (357-360)."""
+    return bool(np.any(np.abs(np.asarray(trpy, dtype=float) - 1.0) > 1.0e-6))
+
+
+def _fortran_int_field(value, width=10):
+    """Right-justified integer for an Iw field; fails if it does not fit."""
+    text = f"{int(value):{width}d}"
+    if len(text) > width:
+        raise ValueError(f"{value} does not fit a {width}-character integer field")
+    return text
+
+
+_FIXED_REAL = re.compile(r"^([+-]?)(\d*)(?:\.(\d*))?(?:[EDQ]([+-]?\d+)|([+-]\d+))?$")
+
+
+def _read_fixed_real(text, decimals=3):
+    """Value of a Fortran Fw.d input field (default d=3, as F10.3). Blanks are
+    ignored (BLANK='NULL') and an empty field is 0. Without a decimal point
+    in the mantissa its last d digits are fractional, also when an exponent
+    (E, D, Q or a signed integer) follows: '-1E+30' is -1E+27, '123E+2' is
+    12.3. A decimal point in the mantissa overrides d."""
+    field = text.replace(" ", "").upper()
+    if not field:
+        return 0.0
+    match = _FIXED_REAL.match(field)
+    if match is None or not (match.group(2) or match.group(3)):
+        raise ValueError(f"invalid Fortran real field: {text!r}")
+    sign, whole, frac, exp1, exp2 = match.groups()
+    exponent = int(exp1 or exp2 or 0)
+    if frac is None:
+        return float(f"{sign}{whole}e{exponent - decimals}")
+    return float(f"{sign}{whole or '0'}.{frac or '0'}e{exponent}")
+
+
+def _fortran_real_field(value, width=10):
+    """Shortest right-justified text of at most `width` characters that an
+    F10.3 read (`_read_fixed_real`) returns as the same single-precision
+    value. Every candidate carries a decimal point in the mantissa, because
+    an exponent alone does not cancel the implied decimals (-1e30 is written
+    as '-1.E+30'); up to nine significant digits are tried in positional and
+    exponential form. Fails if the value cannot be kept within the field."""
+    target = np.float32(value)
+    candidates = []
+    for digits in range(1, 10):
+        text = f"{float(value):.{digits}G}"
+        if "E" in text:
+            mantissa, exponent = text.split("E")
+            if "." not in mantissa:
+                mantissa += "."
+            candidates.append(f"{mantissa}E{exponent}")
+        elif "." not in text:
+            candidates.append(text + ".")
+        else:
+            candidates.append(text)
+        exponential = f"{float(value):.{digits - 1}E}"
+        mantissa, exponent = exponential.split("E")
+        if "." not in mantissa:
+            mantissa += "."
+        candidates.append(f"{mantissa}E{exponent}")
+        positional = f"{float(value):.{digits - 1}f}"
+        candidates.append(positional if "." in positional else positional + ".")
+    valid = [
+        text
+        for text in candidates
+        if len(text) <= width and np.float32(_read_fixed_real(text)) == target
+    ]
+    if not valid:
+        raise ValueError(
+            f"{value} cannot be written in a {width}-character F{width}.3 field "
+            "without changing its single-precision value"
+        )
+    return min(valid, key=len).rjust(width)
 
 
 class MfUsgBcf(ModflowBcf):
@@ -92,7 +186,8 @@ class MfUsgBcf(ModflowBcf):
     ksat : float or array of floats (njag)
         inter-block saturated hydraulic conductivity or transmissivity
         (if IKCFLAG = 1) or the inter-block conductance (if IKCFLAG = - 1)
-        of the connection between nodes n and m.
+        of the connection between nodes n and m. Read for unstructured grids
+        when IKCFLAG is not 0.
     extension : string
         Filename extension (default is 'bcf')
     unitnumber : int
@@ -111,6 +206,13 @@ class MfUsgBcf(ModflowBcf):
     add_package : bool
         Flag to add the initialised package object to the parent model object.
         Default is True.
+    alpha, beta, sr, brook : float or array of floats (nlay, nrow, ncol)
+        Richards-equation parameters, read for layers whose effective LAYCON
+        is 5 (LAYCON 5, or any LAYCON != 0 with the BAS RICHARDS/RICHARDS_HP
+        option) when TABRICH is off (defaults 1.0, 7.0, 0.05, 6.0).
+    bp : float or array of floats (nlay, nrow, ncol)
+        Bubbling point head for the same layers, read with BUBBLEPT
+        (default 0.0).
 
     Methods
     -------
@@ -120,6 +222,10 @@ class MfUsgBcf(ModflowBcf):
 
     Notes
     -----
+    IKCFLAG is only read for unstructured grids; for a structured model it
+    is treated as 0 when writing and loading. In a fixed-format BCF file (BAS
+    without FREE) the header options cannot be read, so writing one with
+    TABRICH, BUBBLEPT, FULLYDRY or ALTSTO raises a ValueError.
 
     Examples
     --------
@@ -165,6 +271,11 @@ class MfUsgBcf(ModflowBcf):
         unitnumber=None,
         filenames=None,
         add_package=True,
+        alpha=1.0,
+        beta=7.0,
+        sr=0.05,
+        brook=6.0,
+        bp=0.0,
     ):
         """Constructs the MfUsgBcf object.
 
@@ -252,8 +363,29 @@ class MfUsgBcf(ModflowBcf):
                 model, (njag,), np.float32, ksat, "ksat", locat=self.unit_number[0]
             )
 
+        # Richards parameters, read for layers whose effective LAYCON is 5
+        # when TABRICH is off (bp only with BUBBLEPT)
+        for name, value in zip(_RICHARDS_NAMES, (alpha, beta, sr, brook, bp)):
+            setattr(
+                self,
+                name,
+                Util3d(
+                    model,
+                    (nlay, nrow, ncol),
+                    np.float32,
+                    value,
+                    name=f"richards {name}",
+                    locat=self.unit_number[0],
+                ),
+            )
+
         if add_package:
             self.parent.add_package(self)
+
+    def _effective_ikcflag(self):
+        """IKCFLAG as consumed by READBCF: only read for unstructured grids
+        (gwf2bcf-lpf-u1.f 91-111), so it is 0 for a structured model."""
+        return 0 if self.parent.structured else int(self.ikcflag)
 
     def write_file(self, f=None):
         """
@@ -263,34 +395,71 @@ class MfUsgBcf(ModflowBcf):
         ----------
         f : open file object.
             Default is None, which will result in MfUsg.fn_path being
-            opened for writing.
+            opened for writing. A handle passed by the caller is written to
+            and left open.
         """
         # get model information
         nlay = self.parent.nlay
         dis = self.parent.get_package("DIS")
         if dis is None:
             dis = self.parent.get_package("DISU")
+        structured = self.parent.structured
+        ifrefm = self.parent.get_ifrefm()
+        ikcflag = self._effective_ikcflag()
 
-        # Open file for writing
-        if f is None:
-            f_obj = open(self.fn_path, "w")
-
-        # Item 1: ipakcb, HDRY, IWDFLG, WETFCT, IWETIT, IHDWET, IKVFLAG, IKCFLAG
-        f_obj.write(
-            f" {self.ipakcb:9d} {self.hdry:9.3e} {self.iwdflg:9d}"
-            f" {self.wetfct:9.3e} {self.iwetit:9d} {self.ihdwet:9d}"
-            f" {self.ikvflag:9d} {self.ikcflag:9d}"
-        )
-
+        # Item 1: IBCFCB, HDRY, IWDFLG, WETFCT, IWETIT, IHDWET, IKVFLAG, <IKCFLAG>
+        options = []
         if self.tabrich:
-            f_obj.write(f" TABRICH {self.nuzones:9d} {self.nutabrows:9d}")
+            options.append(f"TABRICH {self.nuzones:9d} {self.nutabrows:9d}")
         if self.bubblept:
-            f_obj.write(" BUBBLEPT")
+            options.append("BUBBLEPT")
         if self.fullydry:
-            f_obj.write(" FULLYDRY")
+            options.append("FULLYDRY")
         if self.altsto:
-            f_obj.write(" ALTSTO")
-        f_obj.write("\n")
+            options.append("ALTSTO")
+        codes = 10 * np.asarray(self.intercellt.array) + np.asarray(self.laycon.array)
+        if ifrefm:
+            header = (
+                f" {self.ipakcb:9d} {self.hdry:9.3e} {self.iwdflg:9d}"
+                f" {self.wetfct:9.3e} {self.iwetit:9d} {self.ihdwet:9d}"
+                f" {self.ikvflag:9d}"
+            )
+            if not structured:
+                header += f" {ikcflag:9d}"
+            header += "".join(f" {opt}" for opt in options)
+        else:
+            # READ(IN,2) with FORMAT(I10,F10.3,I10,F10.3,4I10) (READBCF 91-99,
+            # 113); the options are not parsed from a fixed-format line
+            if options:
+                raise ValueError(
+                    "BCF options "
+                    + ", ".join(opt.split()[0] for opt in options)
+                    + " cannot be read by USG-Transport from a fixed-format "
+                    "BCF file (BAS without FREE); use free format "
+                    "(MfUsgBas ifrefm=True)."
+                )
+            if np.any((codes < 0) | (codes > 99)):
+                raise ValueError(
+                    f"LAYCON codes {codes.tolist()} do not fit the fixed-format "
+                    "I2 fields."
+                )
+            fields = [
+                _fortran_int_field(self.ipakcb),
+                _fortran_real_field(self.hdry),
+                _fortran_int_field(self.iwdflg),
+                _fortran_real_field(self.wetfct),
+                _fortran_int_field(self.iwetit),
+                _fortran_int_field(self.ihdwet),
+                _fortran_int_field(self.ikvflag),
+            ]
+            if not structured:
+                fields.append(_fortran_int_field(ikcflag))
+            header = "".join(fields)
+
+        # Open file for writing; a handle passed by the caller is left open
+        opened = f is None
+        f_obj = open(self.fn_path, "w") if opened else f
+        f_obj.write(header + "\n")
 
         # Items 1c/1d: TABRICH zone map and retention curves (before LAYCON).
         # Fail explicitly rather than write an incomplete TABRICH file.
@@ -302,59 +471,71 @@ class MfUsgBcf(ModflowBcf):
                 )
             write_tabrich(f_obj, self.iuzontab, self.retcrvs)
 
-        # LAYCON array
-        for layer in range(nlay):
-            if self.intercellt[layer] > 0:
-                f_obj.write(f"{self.intercellt[layer]:1d} {self.laycon[layer]:1d} ")
+        # LAYCON array: one code 10*INTERCELLT+LAYCON per layer, read with
+        # READ(IN,*) in free format and FORMAT(40I2) in fixed format
+        for start in range(0, nlay, 40):
+            chunk = codes[start : start + 40]
+            if ifrefm:
+                f_obj.write(" ".join(f"{code:02d}" for code in chunk) + "\n")
             else:
-                f_obj.write(f"0{self.laycon[layer]:1d} ")
-        f_obj.write("\n")
+                f_obj.write("".join(f"{code:2d}" for code in chunk) + "\n")
 
-        # TRPY, <ANGLEX>
-        f_obj.write(self.trpy.get_file_entry())
+        # TRPY (read when IKCFLAG=0) and ANGLEX (DISU, horizontal anisotropy)
+        if ikcflag == 0:
+            f_obj.write(self.trpy.get_file_entry())
+            if not structured and _is_anisotropic(self.trpy.array):
+                f_obj.write(self.anglex.get_file_entry())
+
+        # <SF1>, <TRAN>, <HY>, <VCONT>, <KV>, <SF2>, <WETDRY>, Richards arrays
         transient = not dis.steady.all()
-        structured = self.parent.structured
-        anis = any(t != 1 for t in self.trpy)
-        if (not structured) and anis:
-            f_obj.write(self.anglex.get_file_entry())
-
-        # <SF1>, <TRAN>, <HY>, <VCONT>, <KV>, <SF2>, <WETDRY>
+        laycon = _effective_laycon(self.laycon.array, _bas_richards(self.parent))
         for layer in range(nlay):
             if transient:
                 f_obj.write(self.sf1[layer].get_file_entry())
 
-            if self.ikcflag == 0:
-                self._write_hy_tran_vcont_kv(f_obj, layer)
+            if ikcflag == 0:
+                self._write_hy_tran_vcont_kv(f_obj, layer, laycon[layer])
 
-            if transient and (self.laycon[layer] in {2, 3, 4}):
+            if transient and laycon[layer] in {2, 3, 4, 5}:
                 f_obj.write(self.sf2[layer].get_file_entry())
 
-            if (self.iwdflg != 0) and (self.laycon[layer] in {1, 3}):
+            if self.iwdflg != 0 and laycon[layer] in {1, 3}:
                 f_obj.write(self.wetdry[layer].get_file_entry())
 
-        # <KSAT> (if ikcflag==1)
-        if abs(self.ikcflag == 1):
+            if laycon[layer] == 5 and not self.tabrich:
+                f_obj.write(self.alpha[layer].get_file_entry())
+                f_obj.write(self.beta[layer].get_file_entry())
+                f_obj.write(self.sr[layer].get_file_entry())
+                f_obj.write(self.brook[layer].get_file_entry())
+                if self.bubblept:
+                    f_obj.write(self.bp[layer].get_file_entry())
+
+        # <KSAT> connection array (DISU, IKCFLAG != 0)
+        if not structured and ikcflag != 0:
             f_obj.write(self.ksat.get_file_entry())
 
-        f_obj.close()
+        if opened:
+            f_obj.close()
 
-    def _write_hy_tran_vcont_kv(self, f_obj, layer):
+    def _write_hy_tran_vcont_kv(self, f_obj, layer, laycon_k):
         """
         writes hy/tran and vcont/kv file entries
 
         Parameters
         ----------
         f_obj : open file object.
-        k : model layer index (base 0)
+        layer : model layer index (base 0)
+        laycon_k : effective LAYCON of the layer
         """
-        if self.laycon[layer] in {0, 2}:
+        if laycon_k in {0, 2}:
             f_obj.write(self.tran[layer].get_file_entry())
         else:
             f_obj.write(self.hy[layer].get_file_entry())
 
-        if (self.ikvflag == 0) and layer < (self.parent.nlay - 1):
-            f_obj.write(self.vcont[layer].get_file_entry())
-        elif (self.ikvflag == 1) and (self.parent.nlay > 1):
+        if self.ikvflag == 0:
+            if layer < (self.parent.nlay - 1):
+                f_obj.write(self.vcont[layer].get_file_entry())
+        elif self.parent.nlay > 1:
             f_obj.write(self.kv[layer].get_file_entry())
 
     @classmethod
@@ -409,26 +590,35 @@ class MfUsgBcf(ModflowBcf):
 
         # determine problem dimensions
         nlay = model.nlay
+        structured = model.structured
         dis = model.get_package("DIS")
         if dis is None:
             dis = model.get_package("DISU")
             njag = dis.njag
 
-        # Item 1: ipakcb, HDRY, IWDFLG, WETFCT, IWETIT, IHDWET - line already read above
+        # Item 1: ipakcb, HDRY, IWDFLG, WETFCT, IWETIT, IHDWET, IKVFLAG, <IKCFLAG>
         if model.verbose:
             print("   loading ipakcb, HDRY, IWDFLG, WETFCT, IWETIT, IHDWET...")
         text_list = line_parse(line)
-        ipakcb, hdry, iwdflg, wetfct, iwetit, ihdwet = (
-            int(text_list[0]),
-            float(text_list[1]),
-            int(text_list[2]),
-            float(text_list[3]),
-            int(text_list[4]),
-            int(text_list[5]),
-        )
-
-        ikvflag = type_from_iterable(text_list, index=6, _type=int, default_val=0)
-        ikcflag = type_from_iterable(text_list, index=7, _type=int, default_val=0)
+        if model.get_ifrefm():
+            ipakcb, hdry, iwdflg, wetfct, iwetit, ihdwet = (
+                int(text_list[0]),
+                float(text_list[1]),
+                int(text_list[2]),
+                float(text_list[3]),
+                int(text_list[4]),
+                int(text_list[5]),
+            )
+            ikvflag = type_from_iterable(text_list, index=6, _type=int, default_val=0)
+            ikcflag = 0
+            if not structured:
+                ikcflag = type_from_iterable(
+                    text_list, index=7, _type=int, default_val=0
+                )
+        else:
+            (ipakcb, hdry, iwdflg, wetfct, iwetit, ihdwet, ikvflag, ikcflag) = (
+                cls._load_fixed_header(line, structured)
+            )
 
         # options
         if "TABRICH" in text_list:
@@ -467,38 +657,41 @@ class MfUsgBcf(ModflowBcf):
         # LAYCON array
         laycon, intercellt = cls._load_laycon(f_obj, model)
 
-        # TRPY array
-        if model.verbose:
-            print("   loading TRPY...")
-        trpy = Util2d.load(f_obj, model, (nlay,), np.float32, "trpy", ext_unit_dict)
-
-        # property data for each layer based on options
-        transient = not dis.steady.all()
-        anis = any(t != 1 for t in trpy)
+        # TRPY array (read when IKCFLAG=0) and ANGLEX (DISU, anisotropy)
+        trpy = 1.0
         anglex = 0
-        if (not model.structured) and anis:
+        if ikcflag == 0:
             if model.verbose:
-                print("loading ANGLEX...")
-            anglex = Util2d.load(
-                f_obj, model, (njag,), np.float32, "anglex", ext_unit_dict
-            )
+                print("   loading TRPY...")
+            trpy = Util2d.load(f_obj, model, (nlay,), np.float32, "trpy", ext_unit_dict)
+            if (not structured) and _is_anisotropic(trpy.array):
+                if model.verbose:
+                    print("loading ANGLEX...")
+                anglex = Util2d.load(
+                    f_obj, model, (njag,), np.float32, "anglex", ext_unit_dict
+                )
 
-        # hy, kv, storage
-        (sf1, tran, hy, vcont, sf2, wetdry, kv) = cls._load_layer_arrays(
-            f_obj,
-            model,
-            nlay,
-            ext_unit_dict,
-            transient,
-            laycon,
-            ikvflag,
-            ikcflag,
-            iwdflg,
+        # hy, kv, storage, wetting and Richards arrays
+        transient = not dis.steady.all()
+        (sf1, tran, hy, vcont, sf2, wetdry, kv, richards_arrays) = (
+            cls._load_layer_arrays(
+                f_obj,
+                model,
+                nlay,
+                ext_unit_dict,
+                transient,
+                _effective_laycon(laycon, _bas_richards(model)),
+                ikvflag,
+                ikcflag,
+                iwdflg,
+                tabrich,
+                bubblept,
+            )
         )
 
         # Ksat  mfusg
         ksat = 0
-        if (not model.structured) and abs(ikcflag == 1):
+        if (not structured) and ikcflag != 0:
             if model.verbose:
                 print("   loading ksat (njag)...")
             ksat = Util2d.load(f_obj, model, (njag,), np.float32, "ksat", ext_unit_dict)
@@ -543,10 +736,33 @@ class MfUsgBcf(ModflowBcf):
             wetdry=wetdry,
             unitnumber=unitnumber,
             filenames=filenames,
+            **richards_arrays,
         )
 
         # return bcf object
         return bcf
+
+    @staticmethod
+    def _load_fixed_header(line, structured):
+        """
+        Reads item 1 as READ(IN,2) with FORMAT(I10,F10.3,I10,F10.3,4I10)
+        (READBCF 91-99, 113): IKCFLAG is the eighth field and is read only
+        for unstructured grids; blanks are ignored and the real fields follow
+        F10.3 input rules (see `_read_fixed_real`).
+        """
+        line = line.rstrip("\r\n")
+
+        def text(i):
+            return line[10 * i : 10 * (i + 1)].replace(" ", "")
+
+        def ival(i):
+            return int(text(i)) if text(i) else 0
+
+        def rval(i):
+            return _read_fixed_real(line[10 * i : 10 * (i + 1)])
+
+        ikcflag = 0 if structured else ival(7)
+        return (ival(0), rval(1), ival(2), rval(3), ival(4), ival(5), ival(6), ikcflag)
 
     @staticmethod
     def _load_laycon(f_obj, model):
@@ -571,46 +787,24 @@ class MfUsgBcf(ModflowBcf):
         if model.verbose:
             print("   loading LAYCON...")
 
-        line = f_obj.readline()
-
+        codes = []
         if ifrefm:
-            laycons = []
-            line_split = line.strip().split()
-            for item in line_split:
-                laycons.append(item)
-            # read the rest of the laycon values
-            if len(laycons) < nlay:
-                while True:
-                    line = f_obj.readline()
-                    line_split = line.strip().split()
-                    for item in line_split:
-                        laycons.append(item)
-                    if len(laycons) == nlay:
-                        break
+            # READ(IN,*): NLAY integers, possibly on several lines
+            while len(codes) < nlay:
+                codes += [int(item) for item in f_obj.readline().split()]
         else:
-            laycons = []
-            istart = 0
-            for layer in range(nlay):
-                lcode = line[istart : istart + 2]
-                if lcode.strip() == "":
-                    # hit end of line before expected end of data
-                    # read next line
-                    line = f_obj.readline()
-                    istart = 0
-                    lcode = line[istart : istart + 2]
-                lcode = lcode.replace(" ", "0")
-                laycons.append(lcode)
-                istart += 2
+            # FORMAT(40I2): 2-character fields, blanks ignored, 40 per line
+            while len(codes) < nlay:
+                line = f_obj.readline().rstrip("\r\n")
+                for start in range(0, 80, 2):
+                    if len(codes) == nlay:
+                        break
+                    field = line[start : start + 2].replace(" ", "")
+                    codes.append(int(field) if field else 0)
 
-        intercellt = np.zeros(nlay, dtype=np.int32)
-        laycon = np.zeros(nlay, dtype=np.int32)
-        for layer in range(nlay):
-            if len(laycons[layer]) > 1:
-                intercellt[layer] = int(laycons[layer][0])
-                laycon[layer] = int(laycons[layer][1])
-            else:
-                laycon[layer] = int(laycons[layer])
-
+        codes = np.asarray(codes[:nlay], dtype=np.int32)
+        intercellt = codes // 10
+        laycon = codes - 10 * intercellt
         return laycon, intercellt
 
     @classmethod
@@ -625,9 +819,11 @@ class MfUsgBcf(ModflowBcf):
         ikvflag,
         ikcflag,
         iwdflg,
+        tabrich=False,
+        bubblept=False,
     ):
         """
-        Loads LPF layer property arrays.
+        Loads BCF layer property arrays.
 
         Parameters
         ----------
@@ -636,9 +832,9 @@ class MfUsgBcf(ModflowBcf):
             The model object (of type :class:`flopy.modflow.mf.Modflow`) to
             which this package will be added.
         nlay : int. Number of model layers
-        laycon : disu laycon array
         ext_unit_dict : external unit dictionary
         transient : bool. Flag for transient vs steady state models
+        laycon : effective LAYCON array (after the RICHARDS promotion)
         ikvflag : int
             flag indicating if vertical hydraulic conductivity is input
             instead of leakance between two layers.
@@ -648,10 +844,13 @@ class MfUsgBcf(ModflowBcf):
             is directly input for the nodal connections.
         iwdflg : int
             flag to indicate if wetting is inactive (0) or not (non zero)
+        tabrich : bool. TABRICH option (no per-layer Richards arrays)
+        bubblept : bool. BUBBLEPT option (bubbling point heads)
 
         Returns
         -------
         sf1, tran, hy, vcont, sf2, wetdry, kv : layer property arrays
+        richards_arrays : dict of alpha, beta, sr, brook and bp lists
         """
         sf1 = [0] * nlay
         tran = [0] * nlay
@@ -663,6 +862,7 @@ class MfUsgBcf(ModflowBcf):
         sf2 = [0] * nlay
         wetdry = [0] * nlay
         kv = [0] * nlay  # mfusg
+        richards_arrays = {name: [0] * nlay for name in _RICHARDS_NAMES}
 
         for layer in range(nlay):
             util2d_shape = get_util2d_shape_for_layer(model, layer=layer)
@@ -693,7 +893,7 @@ class MfUsgBcf(ModflowBcf):
                     vcont[layer] = vcont_k
 
             # sf2
-            if transient and (laycon[layer] in {2, 3, 4}):
+            if transient and (laycon[layer] in {2, 3, 4, 5}):
                 if model.verbose:
                     print(f"   loading sf2 layer {layer + 1:3d}...")
                 sf2[layer] = Util2d.load(
@@ -703,12 +903,22 @@ class MfUsgBcf(ModflowBcf):
             # wetdry
             if (iwdflg != 0) and (laycon[layer] in {1, 3}):
                 if model.verbose:
-                    print(f"   loading sf2 layer {layer + 1:3d}...")
+                    print(f"   loading wetdry layer {layer + 1:3d}...")
                 wetdry[layer] = Util2d.load(
                     f_obj, model, util2d_shape, np.float32, "wetdry", ext_unit_dict
                 )
 
-        return sf1, tran, hy, vcont, sf2, wetdry, kv
+            # Richards equation (skipped under TABRICH: RETCRVS replaces these)
+            if laycon[layer] == 5 and not tabrich:
+                names = _RICHARDS_NAMES if bubblept else _RICHARDS_NAMES[:4]
+                for name in names:
+                    if model.verbose:
+                        print(f"   loading {name} layer {layer + 1:3d}...")
+                    richards_arrays[name][layer] = Util2d.load(
+                        f_obj, model, util2d_shape, np.float32, name, ext_unit_dict
+                    )
+
+        return sf1, tran, hy, vcont, sf2, wetdry, kv, richards_arrays
 
     @staticmethod
     def _load_hy_tran_kv_vcont(f_obj, model, laycon_k, ext_unit_dict, ikvflag):
@@ -721,7 +931,7 @@ class MfUsgBcf(ModflowBcf):
         model : model object
             The model object (of type :class:`flopy.modflow.mf.Modflow`) to
             which this package will be added.
-        laycon_k : tuple of two ints: (k, laycon for layer k)
+        laycon_k : tuple of two ints: (k, effective laycon for layer k)
         ext_unit_dict : external unit dictionary
         ikvflag : int
             flag indicating if vertical hydraulic conductivity is input
@@ -754,16 +964,18 @@ class MfUsgBcf(ModflowBcf):
                 f_obj, model, util2d_shape, np.float32, "hy", ext_unit_dict
             )
 
-        # kv or vcont
+        # vcont (IKVFLAG=0, all but the last layer) or kv (IKVFLAG!=0, every
+        # layer of a multi-layer model)
         kv = 0
         vcont = 0
-        if layer < (model.nlay - 1):
-            if model.verbose:
-                print(f"   loading vcont layer {layer + 1:3d}...")
-            vcont = Util2d.load(
-                f_obj, model, util2d_shape, np.float32, "vcont", ext_unit_dict
-            )
-        elif (ikvflag == 1) and (model.nlay > 1):
+        if ikvflag == 0:
+            if layer < (model.nlay - 1):
+                if model.verbose:
+                    print(f"   loading vcont layer {layer + 1:3d}...")
+                vcont = Util2d.load(
+                    f_obj, model, util2d_shape, np.float32, "vcont", ext_unit_dict
+                )
+        elif model.nlay > 1:
             if model.verbose:
                 print(f"   loading kv layer {layer + 1:3d}...")
             kv = Util2d.load(

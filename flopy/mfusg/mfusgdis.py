@@ -8,7 +8,9 @@ MODFLOW Guide
 
 """
 
+import re
 import warnings
+from decimal import Decimal, localcontext
 
 import numpy as np
 
@@ -63,7 +65,10 @@ class MfUsgDis(Package):
         Time step multiplier (default is 1.0).
     steady : bool or array of bool (nper)
         true or False indicating whether or not stress period is steady state
-        (default is True).
+        (default is True). A TRTOSS period (see ``trtoss``) has False.
+    Trtoss : bool
+        Kept for compatibility; it has no effect (a warning is issued when it
+        is set). Use ``trtoss``.
     itmuni : int
         Time units, default is days (4)
     lenuni : int
@@ -104,6 +109,15 @@ class MfUsgDis(Package):
 
         .. deprecated:: 3.5
            ``proj4_str`` will be removed for FloPy 3.6, use ``crs`` instead.
+    trtoss : None, float or sequence of float/None (nper), optional
+        Storage fraction (STOFRAC) of the USG-T ``TRTOSS`` stress periods: a
+        period with a value is run as transient until the storage rate is
+        below this fraction of the total budget rate, then ends. None or NaN
+        means the period is not TRTOSS (SS or TR from ``steady``). A scalar
+        applies to every period, a sequence must have ``nper`` values. A
+        TRTOSS period needs ``steady=False`` for that period (the default
+        ``steady=True`` must be changed). Default is None (no TRTOSS).
+        Stored as ``self.trtoss``, a list (float, or None for other periods).
 
     Attributes
     ----------
@@ -118,6 +132,16 @@ class MfUsgDis(Package):
 
     Notes
     -----
+    USG-T ``TRTOSS`` periods (``trtoss``): the period ends early only with
+    adaptive time stepping (OC ``ATS``/``ATSA``); without it the period runs
+    like ``TR``. A fraction <= 0 never ends the period early (it is kept as
+    given). The value is written so that USG-T reads the same REAL number
+    (single precision) as ``numpy.float32`` of the value; a value loaded
+    from a file keeps the REAL number USG-T reads from that file. SS and
+    TRTOSS periods without any TR period are rejected: USG-T 2.8.1 then
+    reads no storage arrays (ITRSS=0) although the TRTOSS period is
+    transient, while USG-T 2.7.0 reads them. ``period_type`` and ``itrss``
+    are read-only views; ``itrss`` follows the USG-T 2.8.1 rule.
 
     Examples
     --------
@@ -156,6 +180,7 @@ class MfUsgDis(Package):
         crs=None,
         prjfile=None,
         start_datetime=None,
+        trtoss=None,
         **kwargs,
     ):
         # set default unit number of one is not specified
@@ -222,6 +247,14 @@ class MfUsgDis(Package):
         self.nstp = Util2d(model, (self.nper,), np.int32, nstp, name="nstp")
         self.tsmult = Util2d(model, (self.nper,), np.float32, tsmult, name="tsmult")
         self.steady = Util2d(model, (self.nper,), bool, steady, name="steady")
+        trtoss = _trtoss_array(trtoss, self.nper)
+        _check_period_types(self.steady.array, trtoss, self.nper)
+        self.trtoss = _trtoss_list(trtoss)
+        if Trtoss:
+            warnings.warn(
+                "MfUsgDis: Trtoss has no effect; use trtoss (storage fraction "
+                "per stress period)"
+            )
 
         try:
             self.itmuni = int(itmuni)
@@ -276,6 +309,20 @@ class MfUsgDis(Package):
 
         self.start_datetime = start_datetime
         self._totim = None
+
+    @property
+    def period_type(self):
+        """Stress-period types, "SS", "TR" or "TRTOSS" (read-only view)."""
+        trtoss = _trtoss_array(self.trtoss, self.nper, exact=False)
+        steady = _check_period_types(self.steady.array, trtoss, self.nper, exact=False)
+        return _period_flags(steady, trtoss)
+
+    @property
+    def itrss(self):
+        """ITRSS as USG-T 2.8.1 sets it: 1 with TR and no SS periods, 0 with
+        SS and no TR periods, -1 otherwise (TRTOSS counts as neither; USG-T
+        2.7.0 counts TRTOSS as TR)."""
+        return _itrss(self.period_type)
 
     def checklayerthickness(self):
         """
@@ -599,6 +646,10 @@ class MfUsgDis(Package):
         None
 
         """
+        # checked before the file is opened (steady/trtoss may have changed)
+        trtoss = _trtoss_array(self.trtoss, self.nper, exact=False)
+        steady = _check_period_types(self.steady.array, trtoss, self.nper, exact=False)
+        flags = _period_flags(steady, trtoss)
         if check:  # allows turning off package checks when writing files at model level
             self.check(f=f"{self.name[0]}.chk", verbose=self.parent.verbose, level=1)
         # Open file for writing
@@ -624,13 +675,13 @@ class MfUsgDis(Package):
         # Item 5: BOTM(NCOL, NROW)
         f_dis.write(self.botm.get_file_entry())
 
-        # Item 6: NPER, NSTP, TSMULT, Ss/tr
+        # Item 6: NPER, NSTP, TSMULT, Ss/tr/Trtoss [stofrac]
         for t in range(self.nper):
-            f_dis.write(f"{self.perlen[t]:14f}{self.nstp[t]:14d}{self.tsmult[t]:10f} ")
-            if self.steady[t]:
-                f_dis.write(" SS\n")
-            else:
-                f_dis.write(" TR\n")
+            f_dis.write(
+                _period_record(
+                    self.perlen[t], self.nstp[t], self.tsmult[t], flags[t], trtoss[t]
+                )
+            )
         f_dis.close()
 
     def check(self, f=None, verbose=True, level=1, checktype=None):
@@ -816,16 +867,15 @@ class MfUsgDis(Package):
         nstp = []
         tsmult = []
         steady = []
+        trtoss = []
         for k in range(nper):
             line = f.readline()
-            a1, a2, a3, a4 = line_parse(line)[0:4]
-            a1 = float(a1)
-            a2 = int(a2)
-            a3 = float(a3)
-            if a4.upper() == "TR":
-                a4 = False
-            else:
-                a4 = True
+            words = line_parse(line)
+            a1 = float(words[0])
+            a2 = int(words[1])
+            a3 = float(words[2])
+            a4, stofrac = _parse_period_flag(words, k)
+            trtoss.append(stofrac)
             perlen.append(a1)
             nstp.append(a2)
             tsmult.append(a3)
@@ -860,6 +910,7 @@ class MfUsgDis(Package):
             steady=steady,
             itmuni=itmuni,
             lenuni=lenuni,
+            trtoss=trtoss,
             unitnumber=unitnumber,
             filenames=filenames,
         )
@@ -875,6 +926,170 @@ class MfUsgDis(Package):
     @staticmethod
     def _defaultunit():
         return 11
+
+
+# USG-T TRTOSS stress periods (SGLO2BAS8ARDIS, glo2basu1.f): the flag is read
+# with URWORD and the storage fraction as a REAL (F30.0 on a word of at most
+# 30 characters, correctly rounded to single precision).
+_REAL_WORD = re.compile(
+    r"^([+-]?(?:\d+\.?\d*|\.\d+))(?:[EeDdQq]([+-]?\d+)|([+-]\d+))?$"
+)
+
+
+def _real32(value):
+    """np.float32 of value, None when it is beyond the REAL range."""
+    with np.errstate(over="ignore"):
+        r = np.float32(value)
+    return r if np.isfinite(r) else None
+
+
+def _stofrac_from_word(word, kper):
+    """Storage fraction of a TRTOSS period as USG-T reads ``word``."""
+    m = _REAL_WORD.match(word) if len(word) <= 30 else None
+    if m is None:
+        raise ValueError(
+            f"stress period {kper + 1}: TRTOSS storage fraction {word!r} is not "
+            "a finite number USG-T can read"
+        )
+    mantissa, e1, e2 = m.groups()
+    with localcontext() as ctx:
+        ctx.prec = 400
+        exact = Decimal(mantissa).scaleb(int(e1 or e2 or 0))
+        near = _real32(float(exact))
+        if near is None:
+            raise ValueError(
+                f"stress period {kper + 1}: TRTOSS storage fraction {word!r} is "
+                "beyond the REAL range"
+            )
+        # correctly rounded single precision value (ties to even)
+        cands = [
+            c
+            for c in (
+                np.nextafter(near, -near.dtype.type(np.inf)),
+                near,
+                np.nextafter(near, near.dtype.type(np.inf)),
+            )
+            if np.isfinite(c)
+        ]
+        real = min(
+            cands,
+            key=lambda c: (
+                abs(Decimal(float(c)) - exact),
+                int(np.array(c).view(np.int32)) & 1,
+            ),
+        )
+    value = float(exact)
+    return value if np.float32(value) == real else float(real)
+
+
+def _stofrac_word(value):
+    """Shortest text that USG-T reads as np.float32(value)."""
+    return np.format_float_scientific(np.float32(value), unique=True, exp_digits=2)
+
+
+def _trtoss_array(trtoss, nper, exact=True):
+    """Validated storage fractions of the first nper periods; NaN = not a
+    TRTOSS period. exact=False accepts a longer sequence (nper reduced after
+    construction: only the first nper periods are written)."""
+    if trtoss is None:
+        return np.full(nper, np.nan)
+    values = np.asarray(trtoss, dtype=object)
+    if values.ndim == 0:
+        values = np.full(nper, values.item(), dtype=object)
+    elif values.ndim != 1 or values.size < nper or (exact and values.size != nper):
+        raise ValueError(
+            f"trtoss must be a scalar or a sequence of nper={nper} values, "
+            f"got shape {values.shape}"
+        )
+    values = values[:nper]
+    out = np.full(nper, np.nan)
+    for k, v in enumerate(values):
+        if v is None:
+            continue
+        if isinstance(v, (bool, np.bool_, str, bytes)):
+            raise ValueError(f"trtoss[{k}] must be a number or None, got {v!r}")
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            raise ValueError(f"trtoss[{k}] must be a number or None, got {v!r}")
+        if np.isinf(x) or (not np.isnan(x) and _real32(x) is None):
+            raise ValueError(f"trtoss[{k}]={x} is not a finite REAL value")
+        out[k] = x
+    return out
+
+
+def _trtoss_list(trtoss):
+    """Stored form of the fractions: float, or None for a non-TRTOSS period."""
+    return [None if np.isnan(x) else float(x) for x in trtoss]
+
+
+def _check_period_types(steady, trtoss, nper, exact=True):
+    """Shapes, TRTOSS only on steady=False periods, and no SS + TRTOSS
+    without TR (USG-T 2.8.1 ITRSS=0: storage arrays not read although the
+    TRTOSS period is transient; USG-T 2.7.0 reads them). Returns the steady
+    flags of the first nper periods."""
+    steady = np.asarray(steady)
+    if steady.ndim != 1 or steady.size < nper or (exact and steady.size != nper):
+        raise ValueError(f"steady must have nper={nper} values, got {steady.shape}")
+    steady = steady[:nper].astype(bool)
+    is_trtoss = ~np.isnan(trtoss)
+    bad = is_trtoss & steady
+    if bad.any():
+        raise ValueError(
+            f"TRTOSS stress period(s) {(np.nonzero(bad)[0] + 1).tolist()} need "
+            "steady=False"
+        )
+    if is_trtoss.any() and steady.any() and not (~steady & ~is_trtoss).any():
+        raise ValueError(
+            "SS and TRTOSS stress periods without a TR period are not supported: "
+            "USG-T 2.8.1 then reads no storage arrays (ITRSS=0) although the "
+            "TRTOSS period is transient, and USG-T 2.7.0 reads them"
+        )
+    return steady
+
+
+def _period_flags(steady, trtoss):
+    """SS / TR / TRTOSS per period."""
+    return [
+        "TRTOSS" if not np.isnan(f) else ("SS" if s else "TR")
+        for s, f in zip(np.asarray(steady, dtype=bool), trtoss)
+    ]
+
+
+def _itrss(flags):
+    """ITRSS as USG-T 2.8.1 sets it (TRTOSS counts as neither SS nor TR)."""
+    if "TR" in flags and "SS" not in flags:
+        return 1
+    if "SS" in flags and "TR" not in flags:
+        return 0
+    return -1
+
+
+def _parse_period_flag(words, kper):
+    """(steady, stofrac) from the words of a stress-period record."""
+    flag = words[3].upper() if len(words) > 3 else ""
+    if flag == "SS":
+        return True, np.nan
+    if flag == "TR":
+        return False, np.nan
+    if flag == "TRTOSS":
+        if len(words) > 4:
+            return False, _stofrac_from_word(words[4], kper)
+        warnings.warn(
+            f"stress period {kper + 1}: TRTOSS without a storage fraction; "
+            "USG-T reads 0.0 (the period does not end early), written as 0.0"
+        )
+        return False, 0.0
+    raise ValueError(
+        f"stress period {kper + 1}: flag {flag!r} must be SS, TR or TRTOSS"
+    )
+
+
+def _period_record(perlen, nstp, tsmult, flag, stofrac):
+    text = f"{perlen:14f}{nstp:14d}{tsmult:10f}  {flag}"
+    if flag == "TRTOSS":
+        text += f" {_stofrac_word(stofrac)}"
+    return text + "\n"
 
 
 def get_layer(dis, i, j, elev):

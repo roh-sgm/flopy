@@ -8,10 +8,20 @@ import numpy as np
 from ..discretization.unstructuredgrid import UnstructuredGrid
 from ..pakbase import Package
 from ..utils import Util2d, Util3d, read1d
+from ..utils.flopy_io import line_parse
 
 # todo: check
 # from ..utils.reference import TemporalReference
 from .mfusg import MfUsg
+from .mfusgdis import (
+    _check_period_types,
+    _itrss,
+    _parse_period_flag,
+    _period_flags,
+    _period_record,
+    _trtoss_array,
+    _trtoss_list,
+)
 
 ITMUNI = {"u": 0, "s": 1, "m": 2, "h": 3, "d": 4, "y": 5}
 LENUNI = {"u": 0, "f": 1, "m": 2, "c": 3}
@@ -163,7 +173,7 @@ class MfUsgDisU(Package):
         Time step multiplier (default is 1.0).
     steady : bool or array of bool (nper)
         True or False indicating whether or not stress period is steady state
-        (default is True).
+        (default is True). A TRTOSS period (see ``trtoss``) has False.
     extension : string
         Filename extension (default is 'dis')
     unitnumber : int
@@ -173,6 +183,15 @@ class MfUsgDisU(Package):
         will be created using the model name and package extension. If a
         single string is passed the package will be set to the string.
         Default is None.
+    trtoss : None, float or sequence of float/None (nper), optional
+        Storage fraction (STOFRAC) of the USG-T ``TRTOSS`` stress periods: a
+        period with a value is run as transient until the storage rate is
+        below this fraction of the total budget rate, then ends. None or NaN
+        means the period is not TRTOSS (SS or TR from ``steady``). A scalar
+        applies to every period, a sequence must have ``nper`` values. A
+        TRTOSS period needs ``steady=False`` for that period (the default
+        ``steady=True`` must be changed). Default is None (no TRTOSS).
+        Stored as ``self.trtoss``, a list (float, or None for other periods).
 
 
     Attributes
@@ -190,6 +209,17 @@ class MfUsgDisU(Package):
     -----
     Now works for multi-layer USG models since u3d was modified to handle
     multiple u2d instances of different size.
+
+    USG-T ``TRTOSS`` periods (``trtoss``): the period ends early only with
+    adaptive time stepping (OC ``ATS``/``ATSA``); without it the period runs
+    like ``TR``. A fraction <= 0 never ends the period early (it is kept as
+    given). The value is written so that USG-T reads the same REAL number
+    (single precision) as ``numpy.float32`` of the value; a value loaded
+    from a file keeps the REAL number USG-T reads from that file. SS and
+    TRTOSS periods without any TR period are rejected: USG-T 2.8.1 then
+    reads no storage arrays (ITRSS=0) although the TRTOSS period is
+    transient, while USG-T 2.7.0 reads them. ``period_type`` and ``itrss``
+    are read-only views; ``itrss`` follows the USG-T 2.8.1 rule.
 
     Examples
     --------
@@ -230,6 +260,7 @@ class MfUsgDisU(Package):
         unitnumber=None,
         filenames=None,
         start_datetime=None,
+        trtoss=None,
     ):
         msg = (
             "Model object must be of type flopy.mfusg.MfUsg\n"
@@ -402,6 +433,9 @@ class MfUsgDisU(Package):
         self.nstp = Util2d(model, (self.nper,), np.int32, nstp, name="nstp")
         self.tsmult = Util2d(model, (self.nper,), np.float32, tsmult, name="tsmult")
         self.steady = Util2d(model, (self.nper,), bool, steady, name="steady")
+        trtoss = _trtoss_array(trtoss, self.nper)
+        _check_period_types(self.steady.array, trtoss, self.nper)
+        self.trtoss = _trtoss_list(trtoss)
 
         self.itmuni_dict = {
             0: "undefined",
@@ -474,6 +508,20 @@ class MfUsgDisU(Package):
     @property
     def ncpl(self):
         return self.nodes // self.nlay
+
+    @property
+    def period_type(self):
+        """Stress-period types, "SS", "TR" or "TRTOSS" (read-only view)."""
+        trtoss = _trtoss_array(self.trtoss, self.nper, exact=False)
+        steady = _check_period_types(self.steady.array, trtoss, self.nper, exact=False)
+        return _period_flags(steady, trtoss)
+
+    @property
+    def itrss(self):
+        """ITRSS as USG-T 2.8.1 sets it: 1 with TR and no SS periods, 0 with
+        SS and no TR periods, -1 otherwise (TRTOSS counts as neither; USG-T
+        2.7.0 counts TRTOSS as TR)."""
+        return _itrss(self.period_type)
 
     @classmethod
     def load(cls, f, model, ext_unit_dict=None, check=True):
@@ -698,16 +746,15 @@ class MfUsgDisU(Package):
         nstp = []
         tsmult = []
         steady = []
+        trtoss = []
         for k in range(nper):
             line = f.readline()
-            a1, a2, a3, a4 = line.strip().split()[0:4]
-            a1 = float(a1)
-            a2 = int(a2)
-            a3 = float(a3)
-            if a4.upper() == "TR":
-                a4 = False
-            else:
-                a4 = True
+            words = line_parse(line)
+            a1 = float(words[0])
+            a2 = int(words[1])
+            a3 = float(words[2])
+            a4, stofrac = _parse_period_flag(words, k)
+            trtoss.append(stofrac)
             perlen.append(a1)
             nstp.append(a2)
             tsmult.append(a3)
@@ -758,6 +805,7 @@ class MfUsgDisU(Package):
             steady=steady,
             unitnumber=unitnumber,
             filenames=filenames,
+            trtoss=trtoss,
         )
 
         # return dis object instance
@@ -772,6 +820,11 @@ class MfUsgDisU(Package):
         None
 
         """
+        # checked before the file is opened (steady/trtoss may have changed)
+        trtoss = _trtoss_array(self.trtoss, self.nper, exact=False)
+        steady = _check_period_types(self.steady.array, trtoss, self.nper, exact=False)
+        flags = _period_flags(steady, trtoss)
+
         # Open file for writing
         f_dis = open(self.fn_path, "w")
 
@@ -835,13 +888,13 @@ class MfUsgDisU(Package):
         # Item 12: FAHL
         f_dis.write(self.fahl.get_file_entry())
 
-        # Item 13: NPER, NSTP, TSMULT, Ss/tr
+        # Item 13: NPER, NSTP, TSMULT, Ss/tr/Trtoss [stofrac]
         for t in range(self.nper):
-            f_dis.write(f"{self.perlen[t]:14f}{self.nstp[t]:14d}{self.tsmult[t]:10f} ")
-            if self.steady[t]:
-                f_dis.write(" SS\n")
-            else:
-                f_dis.write(" TR\n")
+            f_dis.write(
+                _period_record(
+                    self.perlen[t], self.nstp[t], self.tsmult[t], flags[t], trtoss[t]
+                )
+            )
 
         # Close and return
         f_dis.close()

@@ -2,19 +2,21 @@
 mfusgriv module. Contains the MfUsgRiv class.
 """
 
+from warnings import warn
+
 import numpy as np
 
 from ..modflow.mfriv import ModflowRiv
 from ..pakbase import Package
 from ..utils import MfList
 from ..utils.recarray_utils import create_empty_recarray
+from ..utils.utils_def import get_unitnumber_from_ext_unit_dict
 
 
 class MfUsgRiv(ModflowRiv):
     """MODFLOW-USG River Package (RIV) with transport support.
 
-    Supports unstructured grids (node-based), AUX concentration variables,
-    and an optional trailing reach-ID column (``irch``).
+    Supports unstructured grids (node-based) and AUX concentration variables.
 
     Parameters
     ----------
@@ -23,12 +25,18 @@ class MfUsgRiv(ModflowRiv):
     stress_period_data : dict, optional
         Dictionary keyed by zero-based stress period index. Each value is a
         recarray with base fields ``node``, ``stage``, ``cond``, ``rbot``,
-        plus any AUX fields and optionally ``irch``.
+        plus any AUX fields.
     dtype : np.dtype, optional
         Custom dtype. Defaults to the unstructured base dtype plus declared
         AUX fields.
-    irdflag : int
-        Read-data flag written to the package header (default 50).
+    ipakcb : int, optional
+        IRIVCB, the second header field (GWF2RIV7U1AR): > 0 saves
+        cell-by-cell flows on that unit, < 0 prints them when ICBCFL is not
+        0, 0 (or None) neither.
+    irdflag : int, optional
+        Not part of the USG-T RIV input. Kept for backward compatibility of
+        the call signature; it is ignored (it was formerly written where the
+        engine reads IRIVCB). A value different from ``ipakcb`` warns.
     options : list of str, optional
         Package options (e.g. ``["AUX C01"]``).
     extension : str
@@ -42,8 +50,13 @@ class MfUsgRiv(ModflowRiv):
 
     Notes
     -----
-    The ``irch`` field (reach identifier) is NOT declared as an AUX variable
-    in the file header. It is written and read as a trailing integer column.
+    On unstructured grids the list is read by ULSTRDU: node, stage,
+    conductance, bottom elevation and the declared AUX values, in the order
+    of the AUX/AUXILIARY declarations. Values after them are not read by
+    USG-T; on load they are ignored with a warning. An ``irch`` field that is
+    not declared (the former undeclared trailing column) is rejected on
+    write; a variable declared as ``AUX IRCH`` (any case) is an ordinary AUX
+    variable and is kept.
 
     Examples
     --------
@@ -52,8 +65,9 @@ class MfUsgRiv(ModflowRiv):
     >>> riv = flopy.mfusg.MfUsgRiv.load("MDV.riv", m, nper=12)
     """
 
-    # Fields beyond the base dtype that are written positionally, not as AUX.
-    _NON_AUX_TRAILING = frozenset({"irch"})
+    # Extra fields that are rejected unless declared as AUX (the former
+    # undeclared trailing column, which USG-T does not read).
+    _UNDECLARED_REJECTED = frozenset({"irch"})
 
     def __init__(
         self,
@@ -61,7 +75,7 @@ class MfUsgRiv(ModflowRiv):
         ipakcb=None,
         stress_period_data=None,
         dtype=None,
-        irdflag=50,
+        irdflag=None,
         options=None,
         extension="riv",
         unitnumber=None,
@@ -89,6 +103,11 @@ class MfUsgRiv(ModflowRiv):
         self._generate_heading()
         self.url = "riv.html"
         self.np = 0
+        if irdflag is not None and irdflag != self.ipakcb:
+            warn(
+                f"MfUsgRiv: irdflag={irdflag} is ignored; the second header field "
+                f"is IRIVCB, taken from ipakcb ({self.ipakcb})"
+            )
         self.irdflag = irdflag
         self.options = options
 
@@ -129,15 +148,34 @@ class MfUsgRiv(ModflowRiv):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _declared_aux(options):
+        """AUX/AUXILIARY names declared in options, in order (whole tokens)."""
+        names = []
+        for opt in options:
+            tokens = str(opt).split()
+            i = 0
+            while i < len(tokens):
+                if tokens[i].upper() in ("AUX", "AUXILIARY") and i + 1 < len(tokens):
+                    names.append(tokens[i + 1])
+                    i += 2
+                else:
+                    i += 1
+        return names
+
     def _update_aux_options(self):
-        """Append AUX entries to options for non-trailing extra dtype fields."""
+        """Declare as AUX the extra dtype fields that are not declared yet
+        (whole-token, case-insensitive match); an undeclared 'irch' is not
+        declared automatically (it is rejected on write)."""
         n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
+        declared = {n.casefold() for n in self._declared_aux(self.options)}
         for name in self.dtype.names[n_base:]:
-            if name.lower() in self._NON_AUX_TRAILING:
+            if name.casefold() in declared:
                 continue
-            token = f"AUX {name.upper()}"
-            if not any(name.lower() in o.lower() for o in self.options):
-                self.options.append(token)
+            if name.casefold() in self._UNDECLARED_REJECTED:
+                continue
+            self.options.append(f"AUX {name.upper()}")
+            declared.add(name.casefold())
 
     # ------------------------------------------------------------------
     # write_file
@@ -150,12 +188,34 @@ class MfUsgRiv(ModflowRiv):
             return
         nper = self.parent.nper
         n_base = len(self.get_default_dtype(structured=self.parent.structured).names)
+        # checks done before the file is opened
+        fields = {n.casefold(): n for n in self.dtype.names[n_base:]}
+        declared = self._declared_aux(self.options)
+        undeclared = [
+            n
+            for c, n in fields.items()
+            if c in self._UNDECLARED_REJECTED
+            and c not in {d.casefold() for d in declared}
+        ]
+        if undeclared:
+            raise ValueError(
+                f"MfUsgRiv: field(s) {undeclared} are not declared as AUX; an "
+                "undeclared trailing column is not read by USG-T RIV "
+                "(GWF2RIV7U1RP/ULSTRDU read node, stage, cond, rbot and the "
+                "declared AUX values). Remove the field, or declare it "
+                "explicitly (e.g. options=['AUX IRCH']) if it is an AUX variable"
+            )
+        missing = [d for d in declared if d.casefold() not in fields]
+        if missing:
+            raise ValueError(f"MfUsgRiv: AUX variable(s) {missing} have no data field")
+        # AUX values are read in the order of the declarations
+        aux_fields = [fields[d.casefold()] for d in declared]
 
         with open(self.fn_path, "w") as f:
             f.write(f"{self.heading}\n")
 
-            # Header: MXACTR IRDFLAG [AUX ...]
-            line = f" {self.stress_period_data.mxact} {self.irdflag}"
+            # Header: MXACTR IRIVCB [options] (GWF2RIV7U1AR)
+            line = f" {self.stress_period_data.mxact} {self.ipakcb}"
             for opt in self.options:
                 line += f" {opt}"
             f.write(line + "\n")
@@ -169,11 +229,8 @@ class MfUsgRiv(ModflowRiv):
                                f"  {float(rec['stage']):.6f}"
                                f"  {float(rec['cond']):.6e}"
                                f"  {float(rec['rbot']):.6f}")
-                        for name in self.dtype.names[n_base:]:
-                            if name.lower() in self._NON_AUX_TRAILING:
-                                row += f" {int(rec[name])}"
-                            else:
-                                row += f" {float(rec[name]):.6e}"
+                        for name in aux_fields:
+                            row += f" {float(rec[name]):.6e}"
                         f.write(row + "\n")
                 else:
                     f.write(f" -1 0    Stress Period {kper + 1}\n")
@@ -216,16 +273,16 @@ class MfUsgRiv(ModflowRiv):
         while line.startswith("#"):
             line = f.readline()
 
-        # Parse header: MXACTR IRDFLAG [AUX varname ...]
+        # Parse header: MXACTR IRIVCB [options] (GWF2RIV7U1AR)
         tokens = line.split()
-        irdflag = int(tokens[1])
+        ipakcb = int(tokens[1])
         options = []
         aux_names = []
         i = 2
         while i < len(tokens):
-            if tokens[i].upper() == "AUX" and i + 1 < len(tokens):
+            if tokens[i].upper() in ("AUX", "AUXILIARY") and i + 1 < len(tokens):
                 aux_names.append(tokens[i + 1])
-                options.append(f"AUX {tokens[i + 1]}")
+                options.append(f"{tokens[i]} {tokens[i + 1]}")
                 i += 2
             else:
                 options.append(tokens[i])
@@ -238,10 +295,9 @@ class MfUsgRiv(ModflowRiv):
         n_base = len(cls.get_default_dtype(structured=model.structured).names)
         n_expected = n_base + len(aux_names)
 
-        # irch detection is deferred to first non-empty data row
-        has_irch = None
         spd = {}
         current = None
+        extra_values = False
 
         for kper in range(nper):
             line = f.readline()
@@ -256,44 +312,32 @@ class MfUsgRiv(ModflowRiv):
                     spd[kper] = current.copy()
                 continue
 
-            # On first non-empty SP, peek at the first data row to detect irch
-            if has_irch is None and nact > 0:
-                first_line = f.readline()
-                first_vals = first_line.split()
-                has_irch = len(first_vals) > n_expected
-                if has_irch:
-                    dtype = np.dtype(list(dtype.descr) + [("irch", np.int32)])
-
-                current = create_empty_recarray(nact, dtype, default_value=0.0)
-                _fill_row(current, 0, first_vals, dtype)
-                for idx in range(1, nact):
-                    _fill_row(current, idx, f.readline().split(), dtype)
-            else:
-                current = create_empty_recarray(nact, dtype, default_value=0.0)
-                for idx in range(nact):
-                    _fill_row(current, idx, f.readline().split(), dtype)
+            current = create_empty_recarray(nact, dtype, default_value=0.0)
+            for idx in range(nact):
+                vals = f.readline().split()
+                # USG-T (ULSTRDU) does not read values after the AUX values
+                extra_values |= len(vals) > n_expected
+                _fill_row(current, idx, vals, dtype)
 
             spd[kper] = current
 
         if openfile:
             f.close()
-
-        unitnumber = None
-        filenames = [None]
-        if ext_unit_dict is not None:
-            unitnumber_ext, fname_ext = model.get_ext_dict_attr(
-                ext_unit_dict, filetype=cls._ftype()
+        if extra_values:
+            warn(
+                "MfUsgRiv.load: values after node, stage, cond, rbot and the "
+                "declared AUX values are not read by USG-T and were ignored"
             )
-            if unitnumber_ext is not None:
-                unitnumber = unitnumber_ext
-            if fname_ext is not None:
-                filenames = [fname_ext]
+
+        unitnumber, filenames = get_unitnumber_from_ext_unit_dict(
+            model, cls, ext_unit_dict, ipakcb
+        )
 
         return cls(
             model,
+            ipakcb=ipakcb,
             stress_period_data=spd,
             dtype=dtype,
-            irdflag=irdflag,
             options=options,
             extension="riv",
             unitnumber=unitnumber,
