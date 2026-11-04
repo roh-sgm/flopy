@@ -2,6 +2,7 @@ import io
 import os
 import shutil
 import sys
+import threading
 import warnings
 from pathlib import Path
 
@@ -7808,6 +7809,71 @@ def test_mfusgbcf_laycon_codes_free_format(function_tmpdir):
     for pkg in (bcf, loaded):
         assert list(pkg.intercellt.array) == [1, 0, 2]
         assert list(pkg.laycon.array) == [3, 0, 0]
+
+
+def _laycon_model(nlay):
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname="bcf")
+    ModflowDis(ml, nlay=nlay, nrow=1, ncol=2, nper=1, steady=True)
+    MfUsgBas(ml, ibound=1, strt=1.0, ifrefm=True)
+    return ml
+
+
+# READ(IN,*) (LAYCON(I),I=1,NLAY) (GWF2BCFU1AR, 2.8.1) takes NLAY values from
+# as many lines as needed and ignores the rest of the line holding the last one
+@pytest.mark.parametrize(
+    "nlay, text, codes",
+    [
+        (1, "4  Ltype(NLAY)\n", [4]),
+        (2, "04 04                          Ltype(NLAY)\n", [4, 4]),
+        (2, "04 04 # Ltype(NLAY)\n", [4, 4]),
+        (2, "13 0 99 1.5e3 x\n", [13, 0]),
+        (3, "13\n\n 0 \n 20 30 Ltype(NLAY)\n", [13, 0, 20]),
+        (45, "3 " * 40 + "\n" + "11 " * 5 + "Ltype(NLAY)\n", [3] * 40 + [11] * 5),
+    ],
+    ids=[
+        "one-layer",
+        "ex3",
+        "comment-marker",
+        "extra-numbers",
+        "continuation",
+        "45-layers",
+    ],
+)
+def test_mfusgbcf_laycon_free_format_reads_nlay_values(nlay, text, codes):
+    """Only the NLAY required values are converted; the next record is intact."""
+    f_obj = io.StringIO(text + "constant 1.0  TRPY(NLAY)\n")
+    laycon, intercellt = MfUsgBcf._load_laycon(f_obj, _laycon_model(nlay))
+    assert list(laycon) == [c % 10 for c in codes]
+    assert list(intercellt) == [c // 10 for c in codes]
+    assert f_obj.readline() == "constant 1.0  TRPY(NLAY)\n"
+
+
+@pytest.mark.parametrize("text", ["4 Ltype(NLAY) 4\n", "4\nx 4\n", "4 4.5\n"])
+def test_mfusgbcf_laycon_free_format_invalid_value_fails(text):
+    """A token that is not an integer among the NLAY values is an error."""
+    with pytest.raises(ValueError, match="invalid literal"):
+        MfUsgBcf._load_laycon(io.StringIO(text), _laycon_model(2))
+
+
+def test_mfusgbcf_laycon_free_format_end_of_file_fails():
+    """End of file before NLAY values fails instead of reading forever; the
+    read runs in a thread so that a hang fails the test after 10 s."""
+    ml = _laycon_model(3)
+    result = {}
+
+    def load():
+        try:
+            MfUsgBcf._load_laycon(io.StringIO("13 0\n"), ml)
+        except ValueError as err:
+            result["error"] = err
+
+    worker = threading.Thread(target=load, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert not worker.is_alive(), "LAYCON read did not stop at end of file"
+    assert "end of file while reading LAYCON: 2 of 3" in str(result.get("error"))
 
 
 @pytest.mark.parametrize("nlay", [3, 45])

@@ -789,9 +789,16 @@ class MfUsgBcf(ModflowBcf):
 
         codes = []
         if ifrefm:
-            # READ(IN,*): NLAY integers, possibly on several lines
+            # READ(IN,*): NLAY integers, possibly on several lines; the rest of
+            # the line holding the last value is not read (ex3.bcf "Ltype(NLAY)")
             while len(codes) < nlay:
-                codes += [int(item) for item in f_obj.readline().split()]
+                line = f_obj.readline()
+                if not line:
+                    raise ValueError(
+                        f"end of file while reading LAYCON: {len(codes)} of "
+                        f"{nlay} values read"
+                    )
+                codes += [int(item) for item in line.split()[: nlay - len(codes)]]
         else:
             # FORMAT(40I2): 2-character fields, blanks ignored, 40 per line
             while len(codes) < nlay:
