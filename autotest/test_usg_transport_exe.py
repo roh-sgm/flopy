@@ -642,6 +642,37 @@ def _perturb_record(text, prop, layer, factor):
     return "\n".join(lines) + "\n"
 
 
+_LISTING_TAIL = 40
+
+
+def _usgt_run_report(label, ws, success, buff, listing):
+    """Failure message for a USG-T run: label, executable, workspace, success,
+    the engine output and the end of the listing file (kept in full in ws)."""
+    if listing is None:
+        lst = "listing: no LIST entry in the name file"
+    elif not Path(listing).exists():
+        lst = f"listing {listing}: not found"
+    else:
+        lines = Path(listing).read_text(errors="replace").splitlines()
+        tail = lines[-_LISTING_TAIL:]
+        head = f"listing {listing} ({len(lines)} lines, last {len(tail)}):"
+        lst = "\n".join([head] + tail)
+    out = "\n".join(buff) if buff else "(none)"
+    return (
+        f"{label}\nexecutable: {USGT_EXE}\nworkspace: {ws}\nsuccess: {success}\n"
+        f"engine output ({len(buff)} lines):\n{out}\n{lst}"
+    )
+
+
+def _nam_listing(ws, namefile):
+    """Path of the LIST file named in a MODFLOW name file, or None."""
+    for line in (Path(ws) / namefile).read_text(errors="replace").splitlines():
+        items = line.split()
+        if len(items) >= 3 and items[0].upper() == "LIST":
+            return Path(ws) / items[2]
+    return None
+
+
 @requires_usgt
 @pytest.mark.parametrize("name", list(_BCF_EXE_CASES))
 def test_usgt_exe_bcf_written_matches_fortran_order(function_tmpdir, name):
@@ -710,7 +741,15 @@ def test_usgt_exe_bcf_example_rewrite_keeps_heads(
         success, buff = flopy.mbase.run_model(
             USGT_EXE, namefile, model_ws=str(ws), silent=True, report=True
         )
-        assert success and any("normal termination" in b.lower() for b in buff)
+        assert success and any("normal termination" in b.lower() for b in buff), (
+            _usgt_run_report(
+                f"{subdir}/{namefile}, {ws.name} files: no normal termination",
+                ws,
+                success,
+                buff,
+                _nam_listing(ws, namefile),
+            )
+        )
         path = os.path.join(ws, heads)
         if disu:
             hds = HeadUFile(path)
@@ -2094,7 +2133,12 @@ def _g04x_run(ws):
     success, buff = run_model(
         USGT_EXE, "t.nam", model_ws=str(ws), silent=True, report=True
     )
+    if not (ws / "t.list").exists():
+        raise FileNotFoundError(
+            _usgt_run_report("t.nam run: no listing", ws, success, buff, ws / "t.list")
+        )
     lst = (ws / "t.list").read_text()
+    hds = ws / "t.hds"
     out = {
         "normal": success and any("normal termination" in b.lower() for b in buff),
         "echo": {
@@ -2108,8 +2152,9 @@ def _g04x_run(ws):
         "pct": [float(x) for x in re.findall(r"PERCENT DISCREPANCY =\s+(\S+)", lst)],
         "times": [],
         "heads": None,
+        # for failure messages only; not compared between runs
+        "diag": {"ws": ws, "success": success, "buff": buff, "hds": hds.exists()},
     }
-    hds = ws / "t.hds"
     if out["normal"] and hds.exists():
         hf = HeadFile(str(hds)) if (ws / "t.dis").exists() else HeadUFile(str(hds))
         out["times"] = hf.get_times()
@@ -2252,6 +2297,16 @@ def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     assert runs[" SHIFT"]["messages"] == ["SHIFT"]
     assert runs[" SHIFT"]["outer"] != runs[""]["outer"]
     assert runs[" DAMPBOT"]["outer"] == runs[""]["outer"]
+    for opt in (" SHIFT", ""):
+        run, diag = runs[opt], runs[opt]["diag"]
+        assert run["heads"] is not None, _usgt_run_report(
+            f"SMS option {opt.strip() or '(none)'}: no heads read "
+            f"(normal={run['normal']}, t.hds exists={diag['hds']})",
+            diag["ws"],
+            diag["success"],
+            diag["buff"],
+            diag["ws"] / "t.list",
+        )
     assert np.max(np.abs(runs[" SHIFT"]["heads"])) >= 1.0e29  # dry cells
     assert np.max(np.abs(runs[""]["heads"])) < 1.0e29
 
