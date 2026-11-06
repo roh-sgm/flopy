@@ -12,6 +12,12 @@ from flaky import flaky
 from modflow_devtools.markers import requires_exe, requires_pkg
 
 from autotest.conftest import get_example_data_path
+from autotest.usgt_exe import (
+    USGT_EXE,
+    USGT_EXE_NAMES,
+    requires_usgt,
+    select_usgt_exe,
+)
 from flopy.mfusg import (
     MfUsg,
     MfUsgBas,
@@ -50,11 +56,75 @@ from flopy.modflow import (
 )
 from flopy.utils import Util2d, Util3d
 
-# USG-Transport 2.7 executable for the optional real-model run tests. Resolved
-# via the USGT_EXE environment variable (executable name on PATH or an absolute
-# path), defaulting to "mfusg_gsi". @requires_exe skips these tests cleanly when
-# the executable cannot be resolved, so the default suite stays light.
-USGT_EXE = os.environ.get("USGT_EXE", "mfusg_gsi")
+# USG-Transport executable for the optional real-model run tests: USGT_EXE, or
+# mfusgt / mfusg_gsi on PATH (autotest/usgt_exe.py). @requires_usgt skips these
+# tests cleanly when no executable is selected, so the default suite stays light.
+
+
+@pytest.mark.parametrize(
+    "environ, available, expected",
+    [
+        ({}, {"mfusgt": "/new/mfusgt"}, "/new/mfusgt"),
+        ({}, {"mfusg_gsi": "/old/mfusg_gsi"}, "/old/mfusg_gsi"),
+        ({}, {"mfusgt": "/new/mfusgt", "mfusg_gsi": "/old/mfusg_gsi"}, "/new/mfusgt"),
+        (
+            {"USGT_EXE": "mfusg_gsi"},
+            {"mfusgt": "/new/mfusgt", "mfusg_gsi": "/old/mfusg_gsi"},
+            "/old/mfusg_gsi",
+        ),
+        (
+            {"USGT_EXE": "/opt/usg t/usgt_281"},
+            {"mfusgt": "/new/mfusgt", "/opt/usg t/usgt_281": "/opt/usg t/usgt_281"},
+            "/opt/usg t/usgt_281",
+        ),
+    ],
+    ids=["new-name", "old-name", "both-names", "override-name", "override-path"],
+)
+def test_usgt_exe_selection(environ, available, expected):
+    """USGT_EXE wins; otherwise mfusgt is preferred over mfusg_gsi."""
+    calls = []
+
+    def which(name):
+        calls.append(name)
+        return available.get(name)
+
+    assert select_usgt_exe(environ, which) == (os.path.abspath(expected), None)
+    # names are looked up as given, so shutil.which applies PATHEXT on Windows
+    if "USGT_EXE" in environ:
+        assert calls == [environ["USGT_EXE"]]
+    else:
+        found = USGT_EXE_NAMES.index(Path(expected).name)
+        assert calls == list(USGT_EXE_NAMES[: found + 1])
+
+
+@pytest.mark.parametrize("override", ["missing_usgt", "/no/such/usgt", ""])
+def test_usgt_exe_invalid_override_does_not_fall_back(override):
+    available = {"mfusgt": "/new/mfusgt", "mfusg_gsi": "/old/mfusg_gsi"}
+    exe, reason = select_usgt_exe({"USGT_EXE": override}, available.get)
+    assert exe is None
+    assert reason == f"USGT_EXE={override!r} is not an executable (no fallback)"
+
+
+def test_usgt_exe_none_available():
+    exe, reason = select_usgt_exe({}, {}.get)
+    assert exe is None
+    assert reason.startswith("missing executable: none of mfusgt, mfusg_gsi")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable bits")
+def test_usgt_exe_selection_on_path_with_spaces(function_tmpdir, monkeypatch):
+    """Real PATH lookup; the empty files are only selected, never run."""
+    bindir = function_tmpdir / "bin with spaces"
+    bindir.mkdir()
+    for name in USGT_EXE_NAMES:
+        (bindir / name).write_text("")
+        (bindir / name).chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    assert select_usgt_exe({}) == (str(bindir / "mfusgt"), None)
+    override = str(bindir / "mfusg_gsi")
+    assert select_usgt_exe({"USGT_EXE": override}) == (override, None)
+    (bindir / "mfusgt").chmod(0o644)
+    assert select_usgt_exe({}) == (str(bindir / "mfusg_gsi"), None)
 
 
 def test_mfusgcln():
@@ -153,7 +223,7 @@ def mfusg_transport_Ex9_PFAS_model_path(example_data_path: Path):
     return example_data_path / "mfusg_transport" / "Ex9_PFAS"
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex1_1D(function_tmpdir, mfusg_transport_Ex1_1D_model_path):
     print("testing mfusg transport model loading: BTN_Test1.nam")
 
@@ -187,7 +257,7 @@ def test_usg_load_Ex1_1D(function_tmpdir, mfusg_transport_Ex1_1D_model_path):
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex2_Radial_adv(
     function_tmpdir, mfusg_transport_Ex2_Radial_2D_model_path
 ):
@@ -223,7 +293,7 @@ def test_usg_load_Ex2_Radial_adv(
     assert success
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex2_Radial_Disp(
     function_tmpdir, mfusg_transport_Ex2_Radial_2D_model_path
 ):
@@ -259,7 +329,7 @@ def test_usg_load_Ex2_Radial_Disp(
     assert success
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex3_CLN_Conduit(
     function_tmpdir, mfusg_transport_Ex3_CLN_Conduit_model_path
 ):
@@ -299,7 +369,7 @@ def test_usg_load_Ex3_CLN_Conduit(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex3_CLN_Conduit_Dispersion(
     function_tmpdir, mfusg_transport_Ex3_CLN_Conduit_model_path
 ):
@@ -341,7 +411,7 @@ def test_usg_load_Ex3_CLN_Conduit_Dispersion(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex3_CLN_Conduit_Nest(
     function_tmpdir, mfusg_transport_Ex3_CLN_Conduit_model_path
 ):
@@ -381,7 +451,7 @@ def test_usg_load_Ex3_CLN_Conduit_Nest(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex4_Dual_Domain(
     function_tmpdir, mfusg_transport_Ex4_Dual_Domain_model_path
 ):
@@ -428,7 +498,7 @@ def test_usg_load_Ex4_Dual_Domain(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex5_Henry(function_tmpdir, mfusg_transport_Ex5_Henry_model_path):
     print("testing mfusg transport model loading: Conduit.nam")
 
@@ -468,7 +538,7 @@ def test_usg_load_Ex5_Henry(function_tmpdir, mfusg_transport_Ex5_Henry_model_pat
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex6_Stallman_Heat(
     function_tmpdir, mfusg_transport_Ex6_Stallman_model_path
 ):
@@ -506,7 +576,7 @@ def test_usg_load_Ex6_Stallman_Heat(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex6_Stallman_Solute(
     function_tmpdir, mfusg_transport_Ex6_Stallman_model_path
 ):
@@ -544,7 +614,7 @@ def test_usg_load_Ex6_Stallman_Solute(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex6_Stallman_Solute_Heat(
     function_tmpdir, mfusg_transport_Ex6_Stallman_model_path
 ):
@@ -582,7 +652,7 @@ def test_usg_load_Ex6_Stallman_Solute_Heat(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex7_Matrix_Diffusion_DiscreteFracture(
     function_tmpdir, mfusg_transport_Ex7_Matrix_Diffusion_model_path
 ):
@@ -625,7 +695,7 @@ def test_usg_load_Ex7_Matrix_Diffusion_DiscreteFracture(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex7_Matrix_Diffusion(
     function_tmpdir, mfusg_transport_Ex7_Matrix_Diffusion_model_path
 ):
@@ -668,7 +738,7 @@ def test_usg_load_Ex7_Matrix_Diffusion(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex7_SandTank(
     function_tmpdir, mfusg_transport_Ex7_Matrix_Diffusion_model_path
 ):
@@ -712,7 +782,7 @@ def test_usg_load_Ex7_SandTank(
     assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex8_Lake(function_tmpdir, mfusg_transport_Ex8_Lake_model_path):
     print("testing mfusg transport model loading: lak_usg_01.nam")
 
@@ -755,7 +825,7 @@ def test_usg_load_Ex8_Lake(function_tmpdir, mfusg_transport_Ex8_Lake_model_path)
     # assert success, msg
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usg_load_Ex9_PFAS(function_tmpdir, mfusg_transport_Ex9_PFAS_model_path):
     print("testing mfusg transport model loading: PFAS_C1.nam")
 

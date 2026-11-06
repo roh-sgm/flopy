@@ -10,9 +10,11 @@ executable is available.
 Executable selection (single contract for the whole executable tier):
 
 - Set ``USGT_EXE`` to a **USG-Transport 2.7** executable (a name on ``PATH`` or
-  an absolute path). If unset, it defaults to ``mfusg_gsi``.
-- ``@requires_exe(USGT_EXE)`` skips every test here cleanly when the executable
-  cannot be resolved, so the default suite is unaffected.
+  an absolute path); it is used without falling back to another executable. If
+  unset, ``mfusgt`` and then ``mfusg_gsi`` are looked up on ``PATH``
+  (``autotest/usgt_exe.py``).
+- ``@requires_usgt`` skips every test here cleanly when no executable is
+  selected, so the default suite is unaffected.
 
 The real-model ``Ex1..Ex9`` run tests in `test_usg_transport.py` use the **same**
 ``USGT_EXE`` contract (they ``load + write + run`` real USG-T models, including
@@ -29,6 +31,7 @@ import numpy as np
 import pytest
 from modflow_devtools.markers import requires_exe, requires_pkg
 
+from autotest.usgt_exe import USGT_EXE, requires_usgt
 from flopy.mfusg import (
     MfUsg,
     MfUsgBas,
@@ -52,10 +55,8 @@ from flopy.utils import (
     MfusgTransportListBudget,
 )
 
-USGT_EXE = os.environ.get("USGT_EXE", "mfusg_gsi")
 
-
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_minimal_flow_from_scratch(function_tmpdir):
     """A 1-D CHD-driven steady flow model authored from scratch runs and
     reproduces the analytical linear head gradient with a closed budget."""
@@ -90,7 +91,7 @@ def test_usgt_exe_minimal_flow_from_scratch(function_tmpdir):
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_minimal_transport_from_scratch(function_tmpdir):
     """A from-scratch BCT transport model with a PCB concentration source runs,
     produces a concentration (`.con`) output file, and closes the
@@ -136,7 +137,7 @@ def test_usgt_exe_minimal_transport_from_scratch(function_tmpdir):
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_tib_prescribed_head_from_scratch(function_tmpdir):
     """A from-scratch semantic TIB package runs under USG-T 2.7.
 
@@ -182,7 +183,7 @@ def test_usgt_exe_tib_prescribed_head_from_scratch(function_tmpdir):
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_evt_from_scratch(function_tmpdir):
     """A from-scratch EVT package runs under USG-T 2.7.
 
@@ -220,7 +221,7 @@ def test_usgt_exe_evt_from_scratch(function_tmpdir):
     assert abs(inc["PERCENT_DISCREPANCY"][-1]) < 0.1
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_oc_atsa_from_scratch(function_tmpdir):
     """OC adaptive time-stepping (ATSA) runs under USG-T 2.7. A transient model
     with ``MfUsgOc(atsa=1)`` exercises the ATS path: the Fortran overrides NSTP
@@ -259,7 +260,7 @@ def test_usgt_exe_oc_atsa_from_scratch(function_tmpdir):
     assert np.allclose(heads, [8.0, 6.5, 5.0, 3.5, 2.0], atol=1e-3)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_dpf_layer_order_matches_fortran_contract(function_tmpdir):
     """A two-layer DPF written by FloPy (default DPF unit) runs exactly like a
     hand-written DPF in the GWF2DPFU1AR order (PHIF, DDFTR, SC1IM per layer,
@@ -464,7 +465,7 @@ def _lpf_exe_heads(ml, disu):
     return hds.get_times(), hds.get_alldata()
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("name", list(_LPF_EXE_CASES))
 def test_usgt_exe_lpf_written_matches_fortran_order(function_tmpdir, name):
     """FloPy-written LPF = hand-written LPF in the READLPF order (all cells and
@@ -641,7 +642,7 @@ def _perturb_record(text, prop, layer, factor):
     return "\n".join(lines) + "\n"
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("name", list(_BCF_EXE_CASES))
 def test_usgt_exe_bcf_written_matches_fortran_order(function_tmpdir, name):
     """FloPy-written BCF = hand-written BCF in the READBCF order (all cells and
@@ -675,7 +676,7 @@ def test_usgt_exe_bcf_written_matches_fortran_order(function_tmpdir, name):
     assert np.abs(h_p - h_m).max() > 1e-3
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize(
     "subdir, namefile, heads, disu",
     [
@@ -725,7 +726,7 @@ def test_usgt_exe_bcf_example_rewrite_keeps_heads(
     np.testing.assert_allclose(h_r, h_o, rtol=0, atol=1e-5)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_bcf_fixed_format_reals_echoed(function_tmpdir):
     """READBCF echoes the fixed-format item 1 reals (HDRY with G13.5, WETFCT
     with F10.5): HDRY=-1e30 and WETFCT=1.2345678 written by FloPy must be read
@@ -973,7 +974,7 @@ def _dpfchd_under_chd(immobile):
     )
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_dpf_chd_residual_equals_immobile_storage_under_chd(
     function_tmpdir,
 ):
@@ -994,7 +995,7 @@ def test_usgt_exe_dpf_chd_residual_equals_immobile_storage_under_chd(
     )  # printed with two decimals
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_dpf_no_immobile_under_chd_closes_budget(function_tmpdir):
     """Control for this case only: without immobile cells under the CHD cells
     (a different physical model there) the printed budget closes and the
@@ -1010,7 +1011,7 @@ def test_usgt_exe_dpf_no_immobile_under_chd_closes_budget(function_tmpdir):
     np.testing.assert_allclose(heads1, heads0, rtol=0, atol=1e-6)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_dpf_chd_manual_dpf_matches_writer(function_tmpdir):
     """A DPF file written by hand in the GWF2DPFU1AR order gives the same heads
     and per-cell IMMOBILE STORAGE as the file written by MfUsgDpf."""
@@ -1167,7 +1168,7 @@ def _d7x_run_saved(ml, fname="d7.imh", unstructured=False):
     return layers if unstructured else np.array(layers)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("options", [("dpio",), ("dpin", "dpout")])
 def test_usgt_exe_hnewim_double_written_by_flopy(function_tmpdir, options):
     ml = _d7x_model(function_tmpdir, options)
@@ -1179,7 +1180,7 @@ def test_usgt_exe_hnewim_double_written_by_flopy(function_tmpdir, options):
     assert saved[0, 0] != saved[0, 1]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_text_matches_manual_binary(function_tmpdir):
     """FloPy text, a hand-written REAL*8 binary record, and the binary file
     loaded and rewritten by FloPy all reach the executable identically."""
@@ -1209,7 +1210,7 @@ def test_usgt_exe_hnewim_text_matches_manual_binary(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(rewrite), _D7X_HNEWIM)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_uniform_not_real_written_internal(function_tmpdir):
     ml = _d7x_model(function_tmpdir)
     MfUsgDpf(ml, hnewim=_D7X_NOT_REAL, **_d7x_dpf_kwargs())
@@ -1222,7 +1223,7 @@ def test_usgt_exe_hnewim_uniform_not_real_written_internal(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(ml), np.full((2, 3), _D7X_NOT_REAL))
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_assigned_multiplier_is_real(function_tmpdir):
     ml = _d7x_model(function_tmpdir)
     dpf = MfUsgDpf(ml, hnewim=_D7X_HNEWIM.reshape(2, 1, 3), **_d7x_dpf_kwargs())
@@ -1234,7 +1235,7 @@ def test_usgt_exe_hnewim_assigned_multiplier_is_real(function_tmpdir):
     assert np.any(saved != _D7X_HNEWIM * 0.1)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_multiplier_not_applied(function_tmpdir):
     ml = _d7x_manual(
         function_tmpdir,
@@ -1249,7 +1250,7 @@ def test_usgt_exe_hnewim_binary_multiplier_not_applied(function_tmpdir):
     )
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_fixed_format_records(function_tmpdir):
     """HNEWIM written with fixed control records (I10,F10.0,A20,I10) in a
     free-format model; U1DREL8 detects them by the missing keyword."""
@@ -1268,7 +1269,7 @@ def test_usgt_exe_hnewim_fixed_format_records(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(ml), _D7X_HNEWIM)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_without_dpin_is_single(function_tmpdir):
     """Control: without DPIN/DPIO FloPy keeps float32 and the executable reads
     REAL (saved in double with DPOUT)."""
@@ -1282,7 +1283,7 @@ def test_usgt_exe_hnewim_without_dpin_is_single(function_tmpdir):
     assert saved[0, 0] == saved[0, 1]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_disu_irregular_double(function_tmpdir):
     """DISU with 3 and 2 nodes per layer: U1DREL8 reads NDSLAY values per
     layer; the saved records carry NSTRT,NNDLAY."""
@@ -1337,7 +1338,7 @@ def test_usgt_exe_hnewim_disu_irregular_double(function_tmpdir):
     np.testing.assert_array_equal(saved[1], values[3:])
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_layer_replaced_with_double_util2d(function_tmpdir):
     """A layer replaced by a float64 Util2d after construction reaches the
     executable with values that are distinct only in float64."""
@@ -1371,7 +1372,7 @@ def _d7x_bin_size(ws, fname="d7.hnewim.bin"):
     return (Path(ws) / fname).stat().st_size
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("options", [("dpio",), ("dpin", "dpout")])
 def test_usgt_exe_hnewim_binary_double(function_tmpdir, options):
     ml = _d7x_model(function_tmpdir, options)
@@ -1383,7 +1384,7 @@ def test_usgt_exe_hnewim_binary_double(function_tmpdir, options):
     assert saved[0, 0] != saved[0, 1]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_single(function_tmpdir):
     ml = _d7x_model(function_tmpdir, ("dpout",))
     _d7x_binary_dpf(ml)
@@ -1394,7 +1395,7 @@ def test_usgt_exe_hnewim_binary_single(function_tmpdir):
     assert saved[0, 0] == saved[0, 1]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("options", [("dpio",), ("dpout",)])
 def test_usgt_exe_hnewim_binary_multiplier_applied_once(function_tmpdir, options):
     ml = _d7x_model(function_tmpdir, options)
@@ -1404,7 +1405,7 @@ def test_usgt_exe_hnewim_binary_multiplier_applied_once(function_tmpdir, options
     np.testing.assert_array_equal(_d7x_run_saved(ml), dpf.hnewim.array.reshape(2, 3))
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize(
     "value, options", [(_D7X_NOT_REAL, ("dpio",)), (22.75, ("dpout",))]
 )
@@ -1415,7 +1416,7 @@ def test_usgt_exe_hnewim_binary_scalar(function_tmpdir, value, options):
     np.testing.assert_array_equal(_d7x_run_saved(ml), dpf.hnewim.array.reshape(2, 3))
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_mixed_layers(function_tmpdir):
     ml = _d7x_model(function_tmpdir)
     _d7x_binary_dpf(ml, layers=(1,))
@@ -1424,7 +1425,7 @@ def test_usgt_exe_hnewim_binary_mixed_layers(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(ml), _D7X_HNEWIM)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_fixed_format(function_tmpdir):
     ml = _d7x_model(function_tmpdir)
     ml.array_free_format = False
@@ -1440,7 +1441,7 @@ def test_usgt_exe_hnewim_binary_fixed_format(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(ml), _D7X_HNEWIM)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_matches_manual_text(function_tmpdir):
     binary = _d7x_model(function_tmpdir / "bin")
     _d7x_binary_dpf(binary)
@@ -1456,7 +1457,7 @@ def test_usgt_exe_hnewim_binary_matches_manual_text(function_tmpdir):
     np.testing.assert_array_equal(_d7x_run_saved(binary), _d7x_run_saved(manual))
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_disu_irregular(function_tmpdir):
     from flopy.mfusg import MfUsgDisU
 
@@ -1508,7 +1509,7 @@ def test_usgt_exe_hnewim_binary_disu_irregular(function_tmpdir):
     np.testing.assert_array_equal(np.concatenate(saved), values)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_foreign_file_and_new_folder(function_tmpdir):
     """With a foreign d7.hnewim.bin registered on unit 777, the run uses the
     free name, leaves the foreign file and entry, and a later workspace
@@ -1531,7 +1532,7 @@ def test_usgt_exe_hnewim_binary_foreign_file_and_new_folder(function_tmpdir):
     assert (function_tmpdir / "a" / "d7.hnewim.bin").read_bytes() == first
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_hnewim_binary_own_path_replaced_by_link(function_tmpdir):
     """The own file is kept as preserved.bin and its path is replaced by a
     link to a foreign file: the next write uses a new file, the foreign and
@@ -1615,7 +1616,7 @@ def _rivx_budget_in(lst):
     return float(line.split("=")[1].split()[0])
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("unit", [55, 61])
 def test_usgt_exe_riv_disu_cbc_on_requested_unit(function_tmpdir, unit):
     written = _rivx_model(function_tmpdir / "w", unit)
@@ -1652,7 +1653,7 @@ def test_usgt_exe_riv_disu_cbc_on_requested_unit(function_tmpdir, unit):
     assert results[0][1] == results[1][1]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("unit", [0, -1])
 def test_usgt_exe_riv_disu_irivcb_zero_and_negative(function_tmpdir, unit):
     reference, _ = _rivx_run(_rivx_model(function_tmpdir / "ref", 55))
@@ -1670,7 +1671,7 @@ def test_usgt_exe_riv_disu_irivcb_zero_and_negative(function_tmpdir, unit):
     assert abs(_rivx_budget_in(lst) - 5.0 * (12.0 - heads[2])) < 1e-4
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_riv_disu_declared_aux_irch(function_tmpdir):
     """A hand-written RIV with 'AUX IRCH' and the same file loaded and
     rewritten by FloPy give the same heads, RIV flow and CBC (with the AUX
@@ -1764,7 +1765,7 @@ def _g03x_run(ws, expect_success=True):
     return steps, heads
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_evsrts_control_analytic(function_tmpdir):
     """Hand-written control: ATS step ends, recharge/ET rates and cumulative
     volumes match the analytical values of the RTS/EVS series."""
@@ -1781,7 +1782,7 @@ def test_usgt_exe_evsrts_control_analytic(function_tmpdir):
     assert heads[0] == 10.0 and np.all(heads[1:] > 10.0)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_evsrts_sensitivity(function_tmpdir):
     """Without the series (plain RCH/EVT) the rates change; with the RCH/EVT
     options but without the EVS/RTS entries USG-T stops (reads unit 0)."""
@@ -1808,7 +1809,7 @@ def test_usgt_exe_evsrts_sensitivity(function_tmpdir):
     _g03x_run(dropped, expect_success=False)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("series", ["both", "rts", "evs"])
 @pytest.mark.parametrize("target", ["same_ws", "new_ws"])
 def test_usgt_exe_evsrts_rewrite_matches_control(function_tmpdir, series, target):
@@ -1837,7 +1838,7 @@ def test_usgt_exe_evsrts_rewrite_matches_control(function_tmpdir, series, target
     np.testing.assert_allclose(heads, control[1], rtol=0, atol=1e-6)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_evsrts_quoted_path(function_tmpdir):
     """A quoted RTS name with spaces is read by USG-T and kept by FloPy."""
     from autotest.test_usg_transport import _G03_BASE, _g03_fixture
@@ -1933,7 +1934,7 @@ def _g06x_sp(run, kper):
     return [s for s in run["steps"] if s["kper"] == kper]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("grid", ["dis", "disu"])
 def test_usgt_exe_trtoss_criterion_and_sensitivity(function_tmpdir, grid):
     """The period ends at the step after the first one with storage
@@ -1955,7 +1956,7 @@ def test_usgt_exe_trtoss_criterion_and_sensitivity(function_tmpdir, grid):
     assert len(e6) > len(e3) and e6[-1]["totim"] > e3[-1]["totim"]
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_trtoss_without_ats_runs_like_tr(function_tmpdir):
     """Without ATS the TRTOSS period is not ended early."""
     from autotest.test_usg_transport import _G06_E3, _g06_model
@@ -1994,7 +1995,7 @@ _G06X_CASES = {
 }
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("grid", ["dis", "disu"])
 @pytest.mark.parametrize("flow", ["lpf", "bcf"])
 @pytest.mark.parametrize("case", list(_G06X_CASES))
@@ -2035,7 +2036,7 @@ def test_usgt_exe_trtoss_rewrite_matches_control(function_tmpdir, grid, flow, ca
     np.testing.assert_allclose(run["heads"], control["heads"], rtol=0, atol=1e-6)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("grid", ["dis", "disu"])
 def test_usgt_exe_trtoss_short_is_not_ss(function_tmpdir, grid):
     """A TRTOSS period that does not reach its criterion runs like TR and
@@ -2215,7 +2216,7 @@ _G04X_CASES = {
 }
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("case", list(_G04X_CASES))
 def test_usgt_exe_sms_rewrite_matches_control(function_tmpdir, case):
     from autotest.test_usg_transport import _g04_model
@@ -2237,7 +2238,7 @@ def test_usgt_exe_sms_rewrite_matches_control(function_tmpdir, case):
         np.testing.assert_array_equal(run["heads"], control["heads"])
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     """SHIFT is read by the engine and changes this PCGU run (engine
     behaviour observed with CHD: dry cells), unlike DAMPBOT or no option;
@@ -2255,7 +2256,7 @@ def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     assert np.max(np.abs(runs[""]["heads"])) < 1.0e29
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 def test_usgt_exe_sms_option_separators(function_tmpdir):
     """Record 1b with commas, tabs, mixed case and two cutoffs (both read by
     USG-T, in order): the FloPy rewrite reads the same."""
@@ -2539,6 +2540,7 @@ def _g05x_run(ws):
     return out
 
 
+@requires_usgt
 @pytest.mark.parametrize("case", list(_G05X_CASES))
 def test_usgt_exe_oc_ats_rewrite_matches_control(function_tmpdir, case):
     """A FloPy load -> write of the OC file gives the same output times
@@ -2564,6 +2566,7 @@ def test_usgt_exe_oc_ats_rewrite_matches_control(function_tmpdir, case):
     np.testing.assert_array_equal(rewrite["heads"], control["heads"])
 
 
+@requires_usgt
 def test_usgt_exe_oc_ats_contract(function_tmpdir):
     """The engine behaviour the G05 rules rely on: decimal output times are
     reached exactly with variable steps; NPTIMES as first word stops USG-T;
@@ -2622,7 +2625,7 @@ def _g01x_same(a, b):
     np.testing.assert_array_equal(a["rch_cbc"], b["rch_cbc"])
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("grid", ["dis", "disu"])
 @pytest.mark.parametrize("source", ["load_write", "api"])
 def test_usgt_exe_rch_seepelev_matches_control(function_tmpdir, grid, source):
@@ -2669,7 +2672,7 @@ def test_usgt_exe_rch_seepelev_matches_control(function_tmpdir, grid, source):
     _g01x_same(_g01x_run(ws), control)
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("grid", ["dis", "disu"])
 def test_usgt_exe_rch_seepelev_sensitivity(function_tmpdir, grid):
     """SELEV changes the results: one period 1 value changed (also used in
@@ -2711,7 +2714,7 @@ def _g01x_rts(ws, zones="1 0 1"):
     return ws
 
 
-@requires_exe(USGT_EXE)
+@requires_usgt
 @pytest.mark.parametrize("source", ["load_write", "api"])
 def test_usgt_exe_rch_rts_zones_match_control(function_tmpdir, source):
     """One RTS zone on node 3 (node 1 is CHD): recharge 0.1 then 0.3. The
@@ -2784,7 +2787,8 @@ def _vorx_x(vor, x):
 
 
 @requires_pkg("scipy")
-@requires_exe("triangle", USGT_EXE)
+@requires_exe("triangle")
+@requires_usgt
 def test_usgt_exe_voronoi_disu5_linear_flow(tmp_path):
     """CHD on x=0 and x=1000, no-flow sides: the linear head and the inflow
     K b W dh / L are exact on a voronoi grid. Horizontal FAHL given as a
@@ -2809,7 +2813,8 @@ def test_usgt_exe_voronoi_disu5_linear_flow(tmp_path):
 
 
 @requires_pkg("scipy", "shapely")
-@requires_exe("triangle", USGT_EXE)
+@requires_exe("triangle")
+@requires_usgt
 def test_usgt_exe_voronoi_disu5_vertical_series(tmp_path):
     """Three layers of variable thickness; layers 1 and 3 all CHD (50, 30),
     layer 2 with HK 0: every column is a series of vertical conductances
@@ -2908,7 +2913,8 @@ def _vorx_reference(vor, top, botm, hk, vka, chd):
 
 
 @requires_pkg("scipy", "shapely")
-@requires_exe("triangle", USGT_EXE)
+@requires_exe("triangle")
+@requires_usgt
 def test_usgt_exe_voronoi_disu5_two_layers_reference(tmp_path):
     """Two layers of variable thickness with horizontal and vertical flow:
     USG-T heads equal the independent reference within 1e-4."""

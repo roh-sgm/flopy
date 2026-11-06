@@ -40,6 +40,9 @@
 # results from an MT3D (Zheng and Wang, 1999) simulation with an identical setup.
 
 # +
+import os
+import shutil
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -50,13 +53,26 @@ from flopy.utils import HeadFile
 
 # -
 # +
+# USG-Transport executable: USGT_EXE if set (no fallback), otherwise mfusgt
+# (MODFLOW executables 30.0 and later) or mfusg_gsi (earlier releases)
+if "USGT_EXE" in os.environ:
+    exe_name = shutil.which(os.environ["USGT_EXE"])
+    if exe_name is None:
+        raise FileNotFoundError(
+            f"USGT_EXE={os.environ['USGT_EXE']!r} is not an executable"
+        )
+else:
+    exe_name = shutil.which("mfusgt") or shutil.which("mfusg_gsi")
+    if exe_name is None:
+        raise FileNotFoundError("USG-Transport executable not found: set USGT_EXE")
+
 model_ws = "Ex2_Radial"
 mf = MfUsg(
     version="mfusg",
     structured=True,
     model_ws=model_ws,
     modelname="Ex2_Radial",
-    exe_name="mfusg_gsi",
+    exe_name=exe_name,
 )
 # -
 # +
