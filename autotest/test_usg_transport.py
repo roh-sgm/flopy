@@ -369,6 +369,29 @@ def test_usg_load_Ex3_CLN_Conduit(
     assert success, msg
 
 
+def test_usg_Ex3_CLN_Conduit_nam_names_match_files(
+    mfusg_transport_Ex3_CLN_Conduit_model_path,
+):
+    """Every Conduit.nam entry naming a file of the example folder uses its
+    exact name: a case-only difference (e.g. Conduit.WEL for Conduit.wel)
+    stops the engine on case-sensitive file systems. Output files written by
+    a run (LIST, DATA(BINARY)) are not required to exist."""
+    folder = mfusg_transport_Ex3_CLN_Conduit_model_path / "Conduit"
+    files = os.listdir(folder)
+    by_lower = {name.lower(): name for name in files}
+    entries = [
+        line.split()[2]
+        for line in (folder / "Conduit.nam").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    existing = [name for name in entries if name.lower() in by_lower]
+    mismatched = [
+        (name, by_lower[name.lower()]) for name in existing if name not in files
+    ]
+    assert not mismatched, f"name file entry -> file in {folder}: {mismatched}"
+    assert {"Conduit.wel", "Conduit.cln", "Conduit.chd"} <= set(existing)
+
+
 @requires_usgt
 def test_usg_load_Ex3_CLN_Conduit_Dispersion(
     function_tmpdir, mfusg_transport_Ex3_CLN_Conduit_model_path

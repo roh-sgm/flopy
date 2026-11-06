@@ -1,11 +1,11 @@
 LIST 7 Conduit.lst
 BAS6  1 Conduit.bas
-WEL  14 Conduit.WEL
+WEL  14 Conduit.wel
 DIS  12 Conduit.dis
 BCF6 11 Conduit.bcf
 BCT 43 Conduit.btn
-CLN 13 Conduit.Cln
-CHD 16 Conduit.CHD
+CLN 13 Conduit.cln
+CHD 16 Conduit.chd
 OC  22 Conduit.oc
 SMS 19 Conduit.SMS
 DATA(BINARY) 33 Conduit.con
