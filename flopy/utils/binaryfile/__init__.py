@@ -413,6 +413,11 @@ class BinaryLayerFile(LayerFile):
         Build the recordarray and iposarray, which maps the header information
         to the position in the binary file.
 
+        Only records whose header text contains ``self.text`` in upper case
+        (substring match) are indexed; the data of the other records are
+        skipped. recordarray, iposarray and headers hold the
+        same selected records in file order.
+
         """
         header = self._get_header()
         self.nrow = header["nrow"]
@@ -435,26 +440,31 @@ class BinaryLayerFile(LayerFile):
         ipos = 0
         while ipos < self.totalbytes:
             header = self._get_header()
-            self.recordarray.append(header)
-            if self.text.upper() not in header["text"]:
-                continue
-            if ipos == 0:
-                self.times.append(header["totim"])
-                self.kstpkper.append((header["kstp"], header["kper"]))
-            else:
-                totim = header["totim"]
-                if totim != self.times[-1]:
-                    self.times.append(totim)
-                    self.kstpkper.append((header["kstp"], header["kper"]))
-            ipos = self.file.tell()
-            self.iposarray.append(ipos)
             databytes = self.get_databytes(header)
+            if self.text.upper() in header["text"]:
+                self.recordarray.append(header)
+                if len(self.times) == 0:
+                    self.times.append(header["totim"])
+                    self.kstpkper.append((header["kstp"], header["kper"]))
+                else:
+                    totim = header["totim"]
+                    if totim != self.times[-1]:
+                        self.times.append(totim)
+                        self.kstpkper.append((header["kstp"], header["kper"]))
+                self.iposarray.append(self.file.tell())
             self.file.seek(databytes, 1)
             ipos = self.file.tell()
 
-        # self.recordarray contains a recordarray of all the headers.
+        if len(self.recordarray) == 0:
+            raise ValueError(
+                f"text '{self.text.decode()}' not found in {self.filename}"
+            )
+
+        # self.recordarray contains a recordarray of the selected headers.
         self.recordarray = np.array(self.recordarray, dtype=self.header_dtype)
         self.iposarray = np.array(self.iposarray, dtype=np.int64)
+        self.nrow = self.recordarray["nrow"][0]
+        self.ncol = self.recordarray["ncol"][0]
         self.nlay = np.max(self.recordarray["ilay"])
 
         # provide headers as a pandas frame
@@ -1394,6 +1404,14 @@ class HeadUFile(BinaryLayerFile):
     array for a layer. If the heads for a layer were not saved, then
     None will be returned for that layer.
 
+    Only records whose label contains text in upper case are read, so
+    a file with several labels, such as the concentrations of several
+    species, can be read one label at a time (for example, text='conc01').
+    If text matches records with different labels for the same layer and
+    time, get_data raises a ValueError; use a more specific text. If the
+    same label is saved more than once for a layer and time, the last
+    record is returned.
+
     Examples
     --------
 
@@ -1441,9 +1459,21 @@ class HeadUFile(BinaryLayerFile):
 
         # fill a list of 1d arrays with heads from binary file
         data = self.nlay * [None]
+        texts = self.nlay * [None]
         for idx in keyindices:
             ipos = self.iposarray[idx]
             ilay = self.recordarray["ilay"][idx]
+            text = self.recordarray["text"][idx]
+            if texts[ilay - 1] is not None and texts[ilay - 1] != text:
+                labels = sorted(
+                    {texts[ilay - 1].decode().strip(), text.decode().strip()}
+                )
+                raise ValueError(
+                    f"text '{self.text.decode()}' matches several labels "
+                    f"({', '.join(labels)}) for layer {ilay} at totim {totim}; "
+                    "use a more specific text"
+                )
+            texts[ilay - 1] = text
             nstrt = self.recordarray["ncol"][idx]
             nend = self.recordarray["nrow"][idx]
             npl = nend - nstrt + 1
