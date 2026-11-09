@@ -27,6 +27,7 @@
 # +
 import os
 import shutil
+import tempfile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -49,6 +50,104 @@ from flopy.plot import PlotCrossSection
 from flopy.utils import HeadUFile
 from flopy.utils.gridgen import Gridgen
 
+
+# -
+# +
+def new_run_root(parent="."):
+    """Create a new, persistent output folder for one run of this notebook,
+    with one workspace per simulation, so that reruns and the three
+    simulations never write over each other's output files."""
+    root = tempfile.mkdtemp(prefix="Ex6_Stallman_", dir=parent)
+    ws = {}
+    for name in ("heat", "solute", "heat_solute"):
+        ws[name] = os.path.join(root, name)
+        os.mkdir(ws[name])
+    return root, ws
+
+
+def write_and_run(mf):
+    """Write the input files and run the model; stop if the run failed."""
+    mf.write_input()
+    success, buff = mf.run_model(silent=True, report=True)
+    if not success:
+        raise RuntimeError(
+            f"{mf.name} did not terminate normally in {mf.model_ws}:\n"
+            + "\n".join(buff[-20:])
+        )
+
+
+def check_records(fname):
+    """Index every record of a USG-T binary output file and reject
+    truncated files and records that go back in time, such as stale
+    records left by an earlier, longer run. Return the labels found."""
+    try:
+        hdobj = HeadUFile(fname, text="")
+    except EOFError as err:
+        raise ValueError(f"{fname}: truncated record header") from err
+    with hdobj:
+        hdr = hdobj.headers
+        last = hdr.iloc[-1]
+        nval = last["nrow"] - last["ncol"] + 1
+        end = hdr.index[-1] + nval * hdobj.realtype(1).nbytes
+        if end > hdobj.totalbytes:
+            raise ValueError(
+                f"{fname}: last record ({last['text']}, kstp {last['kstp']}, "
+                f"kper {last['kper']}) is truncated"
+            )
+        totim = hdr["totim"].to_numpy()
+        back = np.flatnonzero(totim[1:] < totim[:-1])
+        if back.size > 0:
+            i = back[0] + 1
+            raise ValueError(
+                f"{fname}: totim goes back from {totim[i - 1]} to {totim[i]} "
+                f"at record {i + 1} ({hdr['text'].iloc[i]}); "
+                "stale records from an earlier run?"
+            )
+        return set(hdr["text"])
+
+
+def solute_label(fname):
+    """Exact label of the solute concentrations in fname, as found in the
+    file: CONC01 (numbered species) or CONC (single species)."""
+    found = check_records(fname) & {"CONC", "CONC01"}
+    if len(found) != 1:
+        raise ValueError(
+            f"{fname}: expected exactly one of CONC or CONC01, found {sorted(found)}"
+        )
+    return found.pop()
+
+
+def read_profile(fname, label, kstpkper, size):
+    """Values labelled exactly `label` at the zero-based time step
+    kstpkper, in layer order, after checking the records of fname."""
+    check_records(fname)
+    kstp, kper = kstpkper[0] + 1, kstpkper[1] + 1
+    with HeadUFile(fname, text=label.lower()) as hdobj:
+        hdr = hdobj.headers
+        other = sorted(set(hdr["text"]) - {label})
+        if other:
+            raise ValueError(f"{fname}: text {label!r} also selects {other}")
+        step = hdr[(hdr["kstp"] == kstp) & (hdr["kper"] == kper)]
+        if step["ilay"].duplicated().any():
+            raise ValueError(
+                f"{fname}: repeated {label} records at kstp {kstp}, kper {kper}"
+            )
+        data = hdobj.get_data(kstpkper=kstpkper)
+    missing = [k + 1 for k, values in enumerate(data) if values is None]
+    if missing:
+        raise ValueError(
+            f"{fname}: no {label} values for layers {missing} "
+            f"at kstp {kstp}, kper {kper}"
+        )
+    profile = np.concatenate(data)
+    if profile.size != size or not np.all(np.isfinite(profile)):
+        raise ValueError(
+            f"{fname}: {label} profile at kstp {kstp}, kper {kper} has "
+            f"{profile.size} values (expected {size}) or non-finite values"
+        )
+    return profile
+
+
 # -
 # +
 # USG-Transport executable: USGT_EXE if set (no fallback), otherwise mfusgt
@@ -64,11 +163,12 @@ else:
     if exe_name is None:
         raise FileNotFoundError("USG-Transport executable not found: set USGT_EXE")
 
-model_ws = "Ex6a_Stallman_Heat"
+run_root, run_ws = new_run_root()
+print(f"Model output files are written in {run_root}")
 mf = MfUsg(
     version="mfusg",
     structured=False,
-    model_ws=model_ws,
+    model_ws=run_ws["heat"],
     modelname="Ex6_Stallman",
     exe_name=exe_name,
 )
@@ -93,7 +193,7 @@ dis = flopy.modflow.ModflowDis(
 )
 # -
 # +
-gridgen_ws = os.path.join(model_ws, "gridgen")
+gridgen_ws = os.path.join(run_root, "gridgen")
 if not os.path.exists(gridgen_ws):
     os.mkdir(gridgen_ws)
 g = Gridgen(ms.modelgrid, model_ws=gridgen_ws)
@@ -111,6 +211,8 @@ nstp = [6] * nper
 nstp[0] = 1
 steady = [False] * nper
 steady[0] = True
+# zero-based (kstp, kper) of the last time step, read for the plots below
+last_step = (nstp[-1] - 1, nper - 1)
 
 disu = MfUsgDisU(
     mf, **gridprops, itmuni=1, nper=nper, perlen=perlen, nstp=nstp, steady=steady
@@ -222,16 +324,16 @@ oc = MfUsgOc(
 )
 # -
 # +
-mf.write_input()
-success, buff = mf.run_model(silent=True)
+write_and_run(mf)
 # -
 # +
-tempobj = HeadUFile(f"{mf.model_ws}/{mf.name}.con", text="tmpr")
-simtemp = np.concatenate(tempobj.get_data())
+fname = os.path.join(mf.model_ws, f"{mf.name}.con")
+simtemp = read_profile(fname, "TMPR", last_step, nlay)
 # -
 
 # ## Solute Transport
 # +
+mf.change_model_ws(run_ws["solute"])
 mf.remove_package("CHD")
 dtype = np.dtype(
     [("node", int), ("shead", np.float32), ("ehead", np.float32), ("c01", np.float32)]
@@ -263,12 +365,11 @@ bct = MfUsgBct(
 )
 # -
 # +
-mf.write_input()
-success, buff = mf.run_model(silent=True)
+write_and_run(mf)
 # -
 # +
-concobj = HeadUFile(f"{mf.model_ws}/{mf.name}.con", text="conc")
-simconc = concobj.get_data()
+fname = os.path.join(mf.model_ws, f"{mf.name}.con")
+simconc = read_profile(fname, solute_label(fname), last_step, nlay)
 # -
 # +
 depth = top - np.squeeze(dis.botm.array)
@@ -285,6 +386,7 @@ ax.legend()
 
 # ## Heat and Solute Transport
 # +
+mf.change_model_ws(run_ws["heat_solute"])
 mf.remove_package("BCT")
 bct = MfUsgBct(
     mf,
@@ -321,33 +423,12 @@ for iper in range(nper):
 pcb = MfUsgPcb(mf, stress_period_data=lrcsc)
 # -
 # +
-mf.write_input()
-success, buff = mf.run_model(silent=True)
+write_and_run(mf)
 # -
 # +
-vartype = [
-    ("kstp", "<i4"),
-    ("kper", "<i4"),
-    ("pertim", "<f4"),
-    ("totim", "<f4"),
-    ("text", "S16"),
-    ("nstrt", "<i4"),
-    ("nndlay", "<i4"),
-    ("ilay", "<i4"),
-    ("data", "<f4"),
-]
-hdr = np.fromfile(f"{mf.model_ws}/{mf.name}.con", vartype)
-
-tmpr_data = hdr[np.char.strip(hdr["text"].astype(str)) == "TMPR"]
-conc_data = hdr[np.char.strip(hdr["text"].astype(str)) == "CONC"]
-simtemp = tmpr_data[(tmpr_data["kper"] == 601) & (tmpr_data["kstp"] == 6)]["data"]
-simconc = conc_data[(conc_data["kper"] == 601) & (conc_data["kstp"] == 6)]["data"]
-
-# tempobj = HeadUFile(f"{mf.model_ws}/{mf.name}.con", precision="single", text=' TMPR           ')
-# simtemp = np.concatenate(tempobj.get_data())
-#
-# concobj = HeadUFile(f"{mf.model_ws}/{mf.name}.con", text="CONC")
-# simconc = concobj.get_data()
+fname = os.path.join(mf.model_ws, f"{mf.name}.con")
+simtemp = read_profile(fname, "TMPR", last_step, nlay)
+simconc = read_profile(fname, solute_label(fname), last_step, nlay)
 # -
 # +
 depth = top - np.squeeze(dis.botm.array)
