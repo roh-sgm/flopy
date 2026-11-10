@@ -85,14 +85,37 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-extras
 
-      - name: Install Modflow executables
-        uses: modflowpy/install-modflow-action@v1
+      - name: Install MODFLOW executables 29.0 (pinned asset)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/modflow-downloads"
+          mkdir -p "$dl" ~/.local/bin/modflow
+          python3 .github/scripts/usgt_engine.py fetch --asset executables-29.0 --dest "$dl" --out usgt-engine
+          python3 flopy/utils/get_modflow.py ~/.local/bin/modflow --owner MODFLOW-ORG --repo executables --release-id 29.0 --downloads-dir "$dl"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then cygpath -w ~/.local/bin/modflow; else echo ~/.local/bin/modflow; fi >> "$GITHUB_PATH"
+
+      - name: Install USG-Transport 2.8.1 (pinned asset)
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/modflow-downloads"
+          python3 .github/scripts/usgt_engine.py fetch --asset mfusgt-v2.8.1 --dest "$dl" --out usgt-engine
+          python3 .github/scripts/usgt_engine.py install-usgt --downloads "$dl" --bindir ~/.local/bin/mfusgt-2.8.1 --others ~/.local/bin/modflow --out usgt-engine
 
       - name: Smoke test
         working-directory: autotest
         run: uv run pytest -v -n=auto --smoke --cov=flopy --cov-report=xml --durations=0 --keep-failed=.failed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload USG-Transport engine record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: usgt-engine-smoke-${{ runner.os }}
+          path: usgt-engine/**
+          if-no-files-found: warn
 
       - name: Upload failed test outputs
         uses: actions/upload-artifact@v7
@@ -132,16 +155,31 @@ jobs:
           repository: MODFLOW-ORG/modflow6
           path: modflow6
 
-      - name: Install Modflow-related executables
-        uses: modflowpy/install-modflow-action@v1
+      - name: Install MODFLOW executables 29.0 (pinned asset)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/modflow-downloads"
+          mkdir -p "$dl" ~/.local/bin/modflow
+          python3 flopy/.github/scripts/usgt_engine.py fetch --asset executables-29.0 --dest "$dl" --out usgt-engine
+          python3 flopy/flopy/utils/get_modflow.py ~/.local/bin/modflow --owner MODFLOW-ORG --repo executables --release-id 29.0 --downloads-dir "$dl"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then cygpath -w ~/.local/bin/modflow; else echo ~/.local/bin/modflow; fi >> "$GITHUB_PATH"
 
       - name: Install triangle (macOS workaround)
         if: runner.os == 'macOS'
-        uses: modflowpy/install-modflow-action@v1
-        with:
-          repo: executables
-          ostag: mac
-          subset: triangle
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 flopy/flopy/utils/get_modflow.py ~/.local/bin/modflow --owner MODFLOW-ORG --repo executables --release-id 29.0 --ostag mac --subset triangle --downloads-dir "$RUNNER_TEMP/modflow-downloads"
+
+      - name: Install USG-Transport 2.8.1 (pinned asset)
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/modflow-downloads"
+          python3 flopy/.github/scripts/usgt_engine.py fetch --asset mfusgt-v2.8.1 --dest "$dl" --out usgt-engine
+          python3 flopy/.github/scripts/usgt_engine.py install-usgt --downloads "$dl" --bindir ~/.local/bin/mfusgt-2.8.1 --others ~/.local/bin/modflow --out usgt-engine
 
       - name: Setup GNU Fortran
         uses: fortran-lang/setup-fortran@v1
@@ -184,6 +222,14 @@ jobs:
       - name: Report coverage
         working-directory: flopy/autotest
         run: pixi run --manifest-path=../../modflow6/pixi.toml coverage report
+
+      - name: Upload USG-Transport engine record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: usgt-engine-test-${{ matrix.os }}-${{ matrix.python-version }}
+          path: usgt-engine/**
+          if-no-files-found: warn
 
       - name: Upload failed test outputs
         uses: actions/upload-artifact@v7
