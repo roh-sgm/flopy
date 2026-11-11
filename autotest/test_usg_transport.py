@@ -9401,6 +9401,275 @@ def test_mfusgbct_multispecies_authoring_roundtrip(function_tmpdir):
     assert bct2.mcomp == 2
 
 
+# BCT per-layer property arrays (tutorial03 form ``conc=[[0.0, 1.0]]``).
+# The written text is checked with _read_bct_layer_arrays, a reader of the
+# CONSTANT / INTERNAL entries that does not use FloPy.
+
+
+def _bct_layer_model(ws, nodelay=None, nlay=2, nrow=3, ncol=4):
+    """MfUsg + DIS (nlay x nrow x ncol) or DISU (nodes per layer = nodelay) + BAS."""
+    from flopy.modflow import ModflowDis
+
+    if nodelay is None:
+        ml = MfUsg(modelname="t", model_ws=str(ws))
+        ModflowDis(ml, nlay, nrow, ncol, top=0.0, botm=list(-1.0 - np.arange(nlay)))
+    else:
+        ml = MfUsg(modelname="t", model_ws=str(ws), structured=False)
+        n = int(np.sum(nodelay))
+        MfUsgDisU(
+            ml,
+            nodes=n,
+            nlay=len(nodelay),
+            nodelay=list(nodelay),
+            njag=n,
+            iac=np.ones(n, dtype=int),
+            ja=np.arange(1, n + 1),
+            cl12=np.ones(n),
+            fahl=np.ones(n),
+            area=1.0,
+            top=[0.0] * n,
+            bot=[-1.0] * n,
+        )
+    MfUsgBas(ml)
+    return ml
+
+
+def _read_bct_layer_arrays(text, sizes):
+    """Arrays of a BCT file after its header and item-1 lines, one per entry of
+    sizes (CONSTANT c or INTERNAL mult + values); nothing may be left over."""
+    lines = text.splitlines()[2:]
+    arrays, i = [], 0
+    for size in sizes:
+        tok = lines[i].split()
+        i += 1
+        if tok[0].upper() == "CONSTANT":
+            arrays.append(np.full(size, float(tok[1])))
+        else:
+            assert tok[0].upper() == "INTERNAL", lines[i - 1]
+            vals = []
+            while len(vals) < size:
+                vals += [float(v) for v in lines[i].split()]
+                i += 1
+            assert len(vals) == size
+            arrays.append(float(tok[1]) * np.array(vals))
+    assert not "".join(lines[i:]).strip(), lines[i:]
+    return arrays
+
+
+def _bct_written_arrays(ml, mcomp, nodelay=None, nlay=2, ncell=12):
+    """(prsity, conc) as read back from the written BCT file (IDISP=1)."""
+    text = Path(ml.bct.fn_path).read_text()
+    lay = list(nodelay) if nodelay is not None else [ncell] * nlay
+    angx = [int(np.sum(lay))] if nodelay is not None else []  # ANGLEX (njag)
+    arrs = _read_bct_layer_arrays(text, lay + angx + lay + lay + lay * mcomp)
+    nl = len(lay)
+    conc = arrs[-mcomp * nl :]
+    return arrs[:nl], [conc[c * nl : (c + 1) * nl] for c in range(mcomp)]
+
+
+_ARR = np.arange(12, dtype=np.float32).reshape(3, 4)
+
+
+@pytest.mark.parametrize(
+    "nodelay, nlay, mcomp, kwargs, exp_conc, exp_prsity",
+    [
+        # tutorial03: one component, constant per layer
+        (None, 2, 1, {"conc": [[0.0, 1.0]]}, [[0.0, 1.0]], [0.01, 0.01]),
+        # (nlay, nrow, ncol) array wrapped in the component list
+        (
+            None,
+            2,
+            1,
+            {"conc": [np.stack([_ARR, _ARR + 100])]},
+            [[_ARR, _ARR + 100]],
+            [0.01, 0.01],
+        ),
+        # list of per-layer arrays
+        (
+            None,
+            2,
+            1,
+            {"conc": [[_ARR, _ARR + 100]]},
+            [[_ARR, _ARR + 100]],
+            [0.01, 0.01],
+        ),
+        # two components, each with a per-layer list
+        (
+            None,
+            2,
+            2,
+            {"conc": [[0.0, 1.0], [2.0, 3.0]]},
+            [[0.0, 1.0], [2.0, 3.0]],
+            [0.01, 0.01],
+        ),
+        # nlay=1: the outer list is the component axis, the inner one the layer axis
+        (None, 1, 2, {"conc": [[1.0], [2.0]]}, [[1.0], [2.0]], [0.01]),
+        (None, 1, 1, {"conc": [[2.5]], "prsity": [0.3]}, [[2.5]], [0.3]),
+        # porosity per layer
+        (None, 2, 1, {"conc": 0.0, "prsity": [0.01, 0.02]}, [[0.0, 0.0]], [0.01, 0.02]),
+        # DISU with a different number of nodes per layer
+        ([5, 7], 2, 1, {"conc": [[0.0, 1.0]]}, [[0.0, 1.0]], [0.01, 0.01]),
+        (
+            [5, 7],
+            2,
+            1,
+            {"conc": [np.r_[np.arange(5.0), 10 + np.arange(7.0)]]},
+            [[np.arange(5.0), 10 + np.arange(7.0)]],
+            [0.01, 0.01],
+        ),
+        (
+            [5, 7],
+            2,
+            1,
+            {"conc": 0.0, "prsity": np.r_[np.full(5, 0.1), np.full(7, 0.2)]},
+            [[0.0, 0.0]],
+            [0.1, 0.2],
+        ),
+        ([6], 1, 1, {"conc": [np.arange(6.0)]}, [[np.arange(6.0)]], [0.01]),
+    ],
+    ids=[
+        "t03_list",
+        "wrapped_arr3d",
+        "layer_arrays",
+        "mcomp2_lists",
+        "nlay1_mcomp2",
+        "nlay1_list",
+        "prsity_list",
+        "disu_list_5_7",
+        "disu_flat_5_7",
+        "disu_prsity_flat_5_7",
+        "disu_nlay1_flat",
+    ],
+)
+def test_mfusgbct_per_layer_values(
+    function_tmpdir, nodelay, nlay, mcomp, kwargs, exp_conc, exp_prsity
+):
+    """Per-layer BCT values (Util3d forms) are written one entry per layer."""
+    ml = _bct_layer_model(function_tmpdir, nodelay=nodelay, nlay=nlay)
+    kw = {"prsity": 0.01, "dl": 0.0, "dt": 0.0} | kwargs
+    MfUsgBct(ml, mcomp=mcomp, **kw)
+    ml.write_input()
+    prsity, conc = _bct_written_arrays(ml, mcomp, nodelay=nodelay, nlay=nlay)
+    lay = list(nodelay) if nodelay is not None else [12] * nlay
+    for k, n in enumerate(lay):
+        assert np.allclose(prsity[k], exp_prsity[k])
+        for c in range(mcomp):
+            exp = np.broadcast_to(np.ravel(exp_conc[c][k]), (n,))
+            assert np.allclose(conc[c][k], exp), (c, k)
+
+
+def test_mfusgbct_t03_form_matches_ex3_starting_concs(
+    function_tmpdir, mfusg_transport_Ex3_CLN_Conduit_model_path
+):
+    """tutorial03 writes conc=[[0.0, 1.0]] and prsity=0.01; the published Ex3
+    BCT files hold the same per-layer constants (old-style control records)."""
+    for folder, fname in (
+        ("Conduit", "Conduit.btn"),
+        ("Dispersion", "Conduit_Dispersion.btn"),
+    ):
+        lines = (
+            (mfusg_transport_Ex3_CLN_Conduit_model_path / folder / fname)
+            .read_text()
+            .splitlines()
+        )
+        ex3 = {
+            key: [
+                float(ln[10:20].split("(")[0])
+                for ln in lines
+                if key in ln and int(ln[:10]) == 0
+            ]
+            for key in ("POROSITY", "STARTING CONCS")
+        }
+        assert ex3 == {"POROSITY": [0.01, 0.01], "STARTING CONCS": [0.0, 1.0]}
+
+    ml = _bct_layer_model(function_tmpdir)
+    MfUsgBct(ml, ipakcb=55, itvd=0, prsity=0.01, dl=0.0, dt=0.0, conc=[[0.0, 1.0]])
+    ml.write_input()
+    prsity, conc = _bct_written_arrays(ml, 1)
+    assert [float(np.unique(a)[0]) for a in prsity] == ex3["POROSITY"]
+    assert [float(np.unique(a)[0]) for a in conc[0]] == ex3["STARTING CONCS"]
+
+
+def test_mfusgbct_per_layer_wrong_count(function_tmpdir):
+    """A per-layer list whose length is not nlay fails at construction."""
+    ml = _bct_layer_model(function_tmpdir)
+    with pytest.raises(ValueError, match="3 layer values for 2 layers"):
+        MfUsgBct(ml, prsity=0.01, conc=[[0.0, 1.0, 2.0]])
+    with pytest.raises(ValueError, match="1 layer values for 2 layers"):
+        MfUsgBct(ml, prsity=[0.01], conc=0.0)
+
+
+def test_mfusgbct_keeps_util2d_items(function_tmpdir):
+    """Util2d items (e.g. loaded arrays) are kept as the same objects."""
+    ml = _bct_layer_model(function_tmpdir)
+    u = [Util2d(ml, (3, 4), np.float32, v, "conc") for v in (3.0, 4.0)]
+    bct = MfUsgBct(ml, prsity=0.01, dl=0.0, dt=0.0, conc=[u])
+    assert all(a is b for a, b in zip(bct.conc[0], u))
+    conc = MfUsgBct.mcomp_arrays(ml, 2, np.float32, [[0.0, 1.0]], "conc", 1)
+    assert [float(u2d.array.mean()) for u2d in conc[0]] == [0.0, 1.0]
+
+
+def test_mfusgbct_per_layer_load_roundtrip(function_tmpdir):
+    """tutorial03 form: write, load, write again gives the same values."""
+    ml = _bct_layer_model(function_tmpdir / "a")
+    MfUsgBct(ml, prsity=0.01, dl=0.0, dt=0.0, conc=[[0.0, 1.0]])
+    ml.write_input()
+    ml2 = MfUsg.load(
+        "t.nam",
+        model_ws=str(function_tmpdir / "a"),
+        load_only=["DIS", "BAS6", "BCT"],
+        check=False,
+    )
+    assert all(isinstance(u2d, Util2d) for u2d in ml2.bct.conc[0])
+    ml2.change_model_ws(str(function_tmpdir / "b"))
+    ml2.bct.write_file()
+    for ws in ("a", "b"):
+        ml2.bct.fn_path = str(function_tmpdir / ws / "t.bct")
+        _, conc = _bct_written_arrays(ml2, 1)
+        assert [float(np.unique(a)[0]) for a in conc[0]] == [0.0, 1.0]
+
+
+@pytest.mark.parametrize(
+    "mcomp, conc, body",
+    [
+        (1, 0.0, ["0.000000E+00"] * 2),
+        (2, [0.0, 1.0], ["0.000000E+00"] * 2 + ["1.000000E+00"] * 2),
+    ],
+    ids=["scalar", "mcomp2_scalars"],
+)
+def test_mfusgbct_scalar_text_unchanged(function_tmpdir, mcomp, conc, body):
+    """Scalar forms keep their exact BCT text (one CONSTANT per layer)."""
+    ml = _bct_layer_model(function_tmpdir)
+    bct = MfUsgBct(ml, mcomp=mcomp, prsity=0.01, dl=0.0, dt=0.0, conc=conc)
+    bct.write_file()
+    lines = Path(bct.fn_path).read_text().splitlines(keepends=True)
+    assert lines[0].startswith("# BCT package for MODFLOW-USG generated by Flopy")
+    entry = "CONSTANT    {}                           #{:<30s}\n"
+    assert lines[1:] == [
+        f"   1   0   {mcomp}   1   1   0   0  -9.990000e+02   1.000000e-06   1   0"
+        "   0.000000e+00   0   0   0   0   0   0   0 \n",
+        *[entry.format("1.000000E-02", "prsity")] * 2,
+        *[entry.format("0.000000E+00", "dl")] * 2,
+        *[entry.format("0.000000E+00", "dt")] * 2,
+        *[entry.format(v, f"conc comp {k // 2 + 1}") for k, v in enumerate(body)],
+    ]
+
+
+def test_mfusgbct_write_file_keeps_caller_handle(function_tmpdir):
+    """write_file(f=handle) writes at the handle position and leaves it open."""
+    ml = _bct_layer_model(function_tmpdir)
+    bct = MfUsgBct(ml, prsity=0.01, dl=0.0, dt=0.0, conc=[[0.0, 1.0]])
+    bct.write_file()
+    own = Path(bct.fn_path).read_text()
+    path = function_tmpdir / "handle.bct"
+    with open(path, "w") as fh:
+        fh.write("PREFIX\n")
+        bct.write_file(f=fh)
+        assert not fh.closed
+        fh.write("SUFFIX\n")
+    assert path.read_text() == "PREFIX\n" + own + "SUFFIX\n"
+
+
 def test_mfusgddf_nonlinear_table_authoring_roundtrip(function_tmpdir):
     """DDF NONLINEAR density table authored from scratch, written, reloaded."""
     ml = _minimal_transport_model(function_tmpdir)

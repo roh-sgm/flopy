@@ -422,9 +422,33 @@ class MfUsgBct(Package):
 
     @staticmethod
     def _build_prop_arrays(model, nlay, dtype, value, name):
-        """Return a list of Util2d (one per layer) for structured or DISU grids."""
+        """Return a list of Util2d (one per layer) for structured or DISU grids.
+
+        As for Util3d, value may also be a list of nlay per-layer values
+        (scalar, layer array or Util2d), a (nlay, nrow, ncol) array or, on
+        DISU grids, a flat array of all nodes."""
+        nr, nc, _, _ = model.get_nrow_ncol_nlay_nper()
+        if isinstance(value, np.ndarray) and value.ndim == 3:
+            value = list(value)
+        elif (
+            isinstance(value, np.ndarray)
+            and value.ndim == 1
+            and nr is None
+            and nlay > 1
+            and value.size == np.sum(nc)
+        ):
+            value = np.split(value, np.cumsum(nc)[:-1])
         if isinstance(value, list):
-            return value  # already per-layer from _load_prop_arrays
+            if len(value) != nlay:
+                raise ValueError(f"{name}: {len(value)} layer values for {nlay} layers")
+            return [
+                item
+                if isinstance(item, Util2d)  # e.g. from _load_prop_arrays
+                else Util2d(
+                    model, get_util2d_shape_for_layer(model, layer=k), dtype, item, name
+                )
+                for k, item in enumerate(value)
+            ]
         out = []
         for layer in range(nlay):
             shape = get_util2d_shape_for_layer(model, layer=layer)
