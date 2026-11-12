@@ -32,7 +32,9 @@
 
 # +
 import os
+import re
 import shutil
+import tempfile
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -54,6 +56,114 @@ from flopy.utils import HeadFile
 
 # -
 # +
+# Each run of this notebook writes into a new folder, with one workspace per
+# part, and stops if the model did not terminate normally, so that output of
+# a failed part or of an earlier run is never read.
+
+
+def new_run_root(parent="."):
+    """Create a new, persistent output folder for one run of this notebook,
+    with one empty workspace per part, so that reruns and the two parts
+    never write over each other's output files."""
+    root = tempfile.mkdtemp(prefix="Ex3_CLN_Conduit_", dir=parent)
+    ws = {}
+    for part in ("no_dispersion", "dispersion"):
+        ws[part] = os.path.join(root, part)
+        os.mkdir(ws[part])
+    return root, ws
+
+
+def write_and_run(mf, part):
+    """Write the input files of one part into its empty workspace and run
+    the model; stop unless the run succeeded with exactly one 'Normal
+    termination of simulation' line."""
+    if os.listdir(mf.model_ws):
+        raise RuntimeError(f"{part}: workspace {mf.model_ws} is not empty")
+    mf.write_input()
+    success, buff = mf.run_model(silent=True, report=True)
+    normal = [
+        line.strip()
+        for line in buff
+        if line.strip().lower() == "normal termination of simulation"
+    ]
+    if not success or len(normal) != 1:
+        raise RuntimeError(
+            f"{part}: {mf.name} did not terminate normally in {mf.model_ws} "
+            f"(executable {mf.exe_name}, {len(normal)} normal termination "
+            "lines):\n" + "\n".join(buff[-20:])
+        )
+    versions = sorted(
+        {m for line in buff for m in re.findall(r"USG-TRANSPORT VERSION\s+(\S+)", line)}
+    )
+    version = ", ".join(versions) if versions else "not reported"
+    print(f"{part}: USG-Transport version {version}; {normal[0]}; {mf.model_ws}")
+
+
+def output_calendar(dis):
+    """(kstp, kper, totim) of every time step of dis, one-based, in order."""
+    steps = [
+        (kstp + 1, kper + 1)
+        for kper in range(dis.nper)
+        for kstp in range(int(dis.nstp.array[kper]))
+    ]
+    return [(kstp, kper, float(t)) for (kstp, kper), t in zip(steps, dis.get_totim())]
+
+
+def read_last_conc(fname, nlay, nrow, ncol, calendar):
+    """Concentrations (nlay, nrow, ncol) at the last time step of calendar,
+    after checking that fname holds only complete CONC records, one per
+    layer and time step of calendar, in order. Times are compared within
+    4 units of the stored precision. The file is closed on return."""
+    if not os.path.isfile(fname):
+        raise FileNotFoundError(f"{fname}: concentration file not written")
+    try:
+        hdobj = HeadFile(fname, text="conc")
+    except EOFError as err:
+        raise ValueError(f"{fname}: truncated record header") from err
+    with hdobj:
+        hdr = hdobj.headers
+        labels = sorted(set(hdr["text"]))
+        if labels != ["CONC"]:
+            raise ValueError(f"{fname}: text 'conc' selects {labels}")
+        expected = [
+            (kstp, kper, ilay, ncol, nrow, totim)
+            for kstp, kper, totim in calendar
+            for ilay in range(1, nlay + 1)
+        ]
+        cols = ["kstp", "kper", "ilay", "ncol", "nrow"]
+        found = [
+            (*map(int, rec[cols]), float(rec["totim"])) for _, rec in hdr.iterrows()
+        ]
+        rtol = 4 * np.finfo(hdobj.realtype).eps
+        for i, (got, exp) in enumerate(zip(found, expected)):
+            if got[:5] != exp[:5] or not np.isclose(got[5], exp[5], rtol=rtol, atol=0):
+                raise ValueError(
+                    f"{fname}: record {i + 1} has (kstp, kper, ilay, ncol, nrow, "
+                    f"totim) {got}; expected {exp}"
+                )
+        if len(found) != len(expected):
+            raise ValueError(
+                f"{fname}: {len(found)} CONC records; expected {len(expected)} "
+                f"({len(calendar)} time steps x {nlay} layers)"
+            )
+        size = len(found) * (
+            hdobj.header_dtype.itemsize + nrow * ncol * hdobj.realtype(1).nbytes
+        )
+        if size != hdobj.totalbytes:
+            raise ValueError(
+                f"{fname}: {hdobj.totalbytes} bytes; expected {size} "
+                "(truncated record or other data?)"
+            )
+        data = hdobj.get_data(totim=hdobj.get_times()[-1])
+    if data.shape != (nlay, nrow, ncol) or not np.all(np.isfinite(data)):
+        raise ValueError(
+            f"{fname}: last time step has shape {data.shape} or non-finite values"
+        )
+    return data
+
+
+# -
+# +
 # USG-Transport executable: USGT_EXE if set (no fallback), otherwise mfusgt
 # (MODFLOW executables 30.0 and later) or mfusg_gsi (earlier releases)
 if "USGT_EXE" in os.environ:
@@ -67,7 +177,9 @@ else:
     if exe_name is None:
         raise FileNotFoundError("USG-Transport executable not found: set USGT_EXE")
 
-model_ws = "Ex3_CLN_Conduit"
+run_root, run_ws = new_run_root()
+print(f"Model output files are written in {run_root}")
+model_ws = run_ws["no_dispersion"]
 mf = MfUsg(
     version="mfusg",
     structured=True,
@@ -219,12 +331,16 @@ oc = MfUsgOc(
 )
 # -
 # +
-mf.write_input()
-success, buff = mf.run_model()
+write_and_run(mf, "no_dispersion")
 # -
 # +
-concobj = HeadFile(f"{mf.model_ws}/{mf.name}.con", text="conc")
-simconc = concobj.get_data()
+simconc = read_last_conc(
+    os.path.join(mf.model_ws, f"{mf.name}.con"),
+    nlay,
+    nrow,
+    ncol,
+    output_calendar(dis),
+)
 # -
 # +
 levels = [0.01, 0.50, 0.99]
@@ -242,6 +358,7 @@ for ilay in range(nlay):
 
 # ### With Dispersion
 # +
+mf.change_model_ws(run_ws["dispersion"])
 mf.remove_package("SMS")
 sms = MfUsgSms(
     mf,
@@ -288,12 +405,16 @@ bct = MfUsgBct(
 )
 # -
 # +
-mf.write_input()
-success, buff = mf.run_model()
+write_and_run(mf, "dispersion")
 # -
 # +
-concobj = HeadFile(f"{mf.model_ws}/{mf.name}.con", text="conc")
-simconc = concobj.get_data()
+simconc = read_last_conc(
+    os.path.join(mf.model_ws, f"{mf.name}.con"),
+    nlay,
+    nrow,
+    ncol,
+    output_calendar(dis),
+)
 # -
 # +
 levels = [0.01, 0.50, 0.99]
