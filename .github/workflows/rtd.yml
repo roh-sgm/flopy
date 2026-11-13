@@ -165,6 +165,11 @@ jobs:
       - name: Record USG-Transport run folders before the notebooks
         run: python3 flopy/.github/scripts/usgt_engine.py snapshot --runs flopy/.docs/Notebooks --out usgt-engine
 
+      # a failed snapshot does not stop the notebooks; the tutorial03 report fails on it
+      - name: Record tutorial03 run folders before the notebooks
+        continue-on-error: true
+        run: python3 flopy/.github/scripts/usgt_engine.py snapshot-t03 --runs flopy/.docs/Notebooks --out usgt-engine
+
       - name: Run tutorial and example notebooks
         working-directory: flopy/autotest
         run: pytest -v -n auto test_example_notebooks.py
@@ -173,12 +178,24 @@ jobs:
         if: always()
         run: python3 flopy/.github/scripts/usgt_engine.py report --runs flopy/.docs/Notebooks --snapshot usgt-engine/snapshot.json --out usgt-engine
 
+      - name: Check USG-Transport runs of tutorial03
+        if: always()
+        run: python3 flopy/.github/scripts/usgt_engine.py report-t03 --runs flopy/.docs/Notebooks --snapshot usgt-engine/snapshot-t03.json --install usgt-engine/install-usgt.json --export usgt-t03-evidence --out usgt-engine
+
       - name: Upload USG-Transport engine record
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: usgt-engine-docs-${{ runner.os }}
           path: usgt-engine/**
+          if-no-files-found: warn
+
+      - name: Upload tutorial03 run evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: usgt-t03-evidence-${{ runner.os }}
+          path: usgt-t03-evidence/**
           if-no-files-found: warn
 
       - name: Upload notebooks artifact for ReadtheDocs

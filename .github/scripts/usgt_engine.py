@@ -13,6 +13,19 @@ report: check the run of the Stallman tutorial named in the executed
     report exactly the expected version and every .con file must hold
     exactly the expected record labels. Other new run folders (attempts)
     are checked and recorded too.
+snapshot-t03: record the Ex3_CLN_Conduit_* run folders and the executed
+    conduit tutorial notebook (tutorial03) found in --runs before the
+    notebooks are run.
+report-t03: check both parts (no_dispersion, dispersion) of the run of the
+    conduit tutorial named in its executed notebook, which must be new
+    with respect to the snapshot: the stdout lines of the notebook must name
+    each part once, in order, with the expected version, normal termination
+    and workspace; every listing file must report exactly the expected
+    version and every .con file must hold exactly the expected CONC records.
+    Other new run folders (attempts) are checked and recorded too. The
+    executable identity is inferred from install-usgt.json and USGT_EXE; it
+    is not observed per part. The executed notebook and the listing files
+    of the selected run are copied to a new --export folder.
 
 Every command writes a JSON record to --out, also when it fails. Only the
 standard library is used.
@@ -21,6 +34,7 @@ standard library is used.
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -377,11 +391,464 @@ def report(args, record):
             record["errors"] += errors
 
 
+# conduit tutorial (mfusg_transport_tutorial03_Conduit.py)
+T03_NOTEBOOK = "mfusg_transport_tutorial03_Conduit.ipynb"
+T03_PREFIX = "Ex3_CLN_Conduit_"
+T03_MODEL = "Ex3_CLN_Conduit"
+T03_PARTS = ("no_dispersion", "dispersion")
+T03_EXTS = (
+    "bas", "bcf", "bct", "chd", "cln", "dis", "nam", "oc", "sms", "wel",
+    "list", "con", "hds", "cbc", "BCT.cbc", "clncb", "clncn", "clnhd",
+)  # fmt: skip
+T03_FILES = tuple(f"{T03_MODEL}.{ext}" for ext in T03_EXTS)
+# (nlay, nrow, ncol) and (kstp, kper, totim) of every time step of the DIS
+# of the tutorial: nper=1, perlen=3000.0, nstp=100, tsmult 1 (the default)
+T03_SHAPE = (2, 100, 100)
+T03_CALENDAR = tuple((kstp, 1, 30.0 * kstp) for kstp in range(1, 101))
+T03_ROOT_LINE = re.compile(r"Model output files are written in (.+)")
+T03_PART_LINE = re.compile(
+    r"(no_dispersion|dispersion): USG-Transport version (.+?); (.+?); (.+)"
+)
+T03_NORMAL = "normal termination of simulation"
+T03_BASIS = (
+    "inferred from install-usgt.json and USGT_EXE of the report step; "
+    "not observed per part"
+)
+
+
+def norm_path(path, pathmod=os.path):
+    """Path string normalized for comparison on the platform of pathmod."""
+    return pathmod.normcase(pathmod.normpath(path))
+
+
+def notebook_stdout_lines(nb):
+    """(cell, line number, text) of every stdout line of a notebook: the
+    stdout stream outputs of one cell are joined in order (their text may
+    be one string or a list of fragments) before splitting into lines; a
+    line never continues into another cell."""
+    lines = []
+    for c, cell in enumerate(nb["cells"]):
+        text = ""
+        for out in cell.get("outputs", []):
+            if out.get("output_type") == "stream" and out.get("name") == "stdout":
+                part = out.get("text", "")
+                text += part if isinstance(part, str) else "".join(part)
+        lines += [(c, i, line) for i, line in enumerate(text.splitlines(), 1)]
+    return lines
+
+
+def t03_stdout(lines, pathmod=os.path):
+    """Run folder and part lines named in the stdout lines of the executed
+    conduit tutorial, and the errors: exactly one run folder line and one
+    line per part, in order, with the expected version, normal termination
+    and the workspace <run folder>/<part>."""
+    errors = []
+    roots = [(c, i, m[1]) for c, i, s in lines if (m := T03_ROOT_LINE.fullmatch(s))]
+    found = {part: [] for part in T03_PARTS}
+    for c, i, s in lines:
+        if not s.startswith(tuple(f"{part}:" for part in T03_PARTS)):
+            continue
+        m = T03_PART_LINE.fullmatch(s)
+        if m is None:
+            errors.append(f"cell {c} line {i}: malformed part line {s!r}")
+            continue
+        found[m[1]].append(
+            {"part": m[1], "version": m[2], "termination": m[3], "ws": m[4]}
+            | {"cell": c, "line": i, "text": s}
+        )
+    record = {"root_lines": [r[2] for r in roots], "root": None, "parts": {}}
+    if len(roots) != 1:
+        errors.append(f"{len(roots)} run folder lines, expected 1")
+    else:
+        root = roots[0][2]
+        if not pathmod.basename(pathmod.normpath(root)).startswith(T03_PREFIX):
+            errors.append(f"run folder {root!r} is not named {T03_PREFIX}*")
+        else:
+            record["root"] = root
+    for part in T03_PARTS:
+        record["parts"][part] = found[part]
+        if len(found[part]) != 1:
+            errors.append(f"{part}: {len(found[part])} part lines, expected 1")
+            continue
+        line = found[part][0]
+        if line["version"] != USGT_VERSION:
+            errors.append(
+                f"{part}: version {line['version']!r}, expected {USGT_VERSION}"
+            )
+        if line["termination"].lower() != T03_NORMAL:
+            errors.append(f"{part}: termination {line['termination']!r}")
+        if record["root"] is not None:
+            expected = norm_path(pathmod.join(record["root"], part), pathmod)
+            if norm_path(line["ws"], pathmod) != expected:
+                errors.append(
+                    f"{part}: workspace {line['ws']!r} is not in the run folder"
+                )
+            if (line["cell"], line["line"]) < roots[0][:2]:
+                errors.append(f"{part}: part line before the run folder line")
+    nd, d = (found[part] for part in T03_PARTS)
+    if len(nd) == len(d) == 1 and (nd[0]["cell"], nd[0]["line"]) > (
+        d[0]["cell"],
+        d[0]["line"],
+    ):
+        errors.append("part lines out of order")
+    return record, errors
+
+
+def con_structured(path, nlay, nrow, ncol, calendar):
+    """Check a structured concentration file (MODFLOW head file layout:
+    kstp, kper, pertim, totim, text, ncol, nrow, ilay, then nrow * ncol
+    reals): one CONC record per layer and time step of calendar, in order,
+    times within 4 units of the stored precision, nothing else in the file
+    and finite values at the last time step. The size is checked against
+    the expected records before any record is read. Raises ValueError."""
+    dims = (nlay, nrow, ncol)
+    if not all(type(n) is int and n > 0 for n in dims) or not calendar:
+        raise ValueError(f"invalid dimensions {dims} or empty calendar")
+    size = os.path.getsize(path)
+    nrec = len(calendar) * nlay
+    layouts = []
+    for precision, real in (("single", "f"), ("double", "d")):
+        head = struct.Struct(f"<2i2{real}16s3i")
+        layouts.append(
+            (precision, real, head, head.size + nrow * ncol * struct.calcsize(real))
+        )
+    sizes = [nrec * layout[3] for layout in layouts]
+    if size not in sizes:
+        raise ValueError(
+            f"{path}: {size} bytes; expected {sizes[0]} (single) or {sizes[1]} "
+            f"(double) for {len(calendar)} time steps x {nlay} layers"
+        )
+    precision, real, head, rec_size = layouts[sizes.index(size)]
+    eps = 2.0**-23 if real == "f" else 2.0**-52
+    expected = [(k, p, lay, t) for k, p, t in calendar for lay in range(1, nlay + 1)]
+    digest, first, last = hashlib.sha256(), None, None
+    with open(path, "rb") as f:
+        for i, (kstp, kper, ilay, totim) in enumerate(expected):
+            block = f.read(rec_size)
+            if len(block) != rec_size:
+                raise ValueError(f"{path}: record {i + 1} is truncated")
+            digest.update(block)
+            k1, k2, _, t, text, nc, nr, il = head.unpack_from(block)
+            try:
+                label = text.decode("ascii").strip()
+            except UnicodeDecodeError:
+                label = repr(text)
+            got = (k1, k2, il, nc, nr)
+            if label != "CONC" or got != (kstp, kper, ilay, ncol, nrow):
+                raise ValueError(
+                    f"{path}: record {i + 1} has label {label!r} and (kstp, "
+                    f"kper, ilay, ncol, nrow) {got}; expected 'CONC' and "
+                    f"{(kstp, kper, ilay, ncol, nrow)}"
+                )
+            if not math.isclose(t, totim, rel_tol=4 * eps, abs_tol=0.0):
+                raise ValueError(f"{path}: record {i + 1} totim {t}, expected {totim}")
+            if i >= nrec - nlay:
+                values = struct.unpack_from(f"<{nrow * ncol}{real}", block, head.size)
+                if not all(map(math.isfinite, values)):
+                    raise ValueError(f"{path}: non-finite values at the last time step")
+            first = first or [k1, k2, il, t]
+            last = [k1, k2, il, t]
+        if f.read(1):
+            raise ValueError(f"{path}: data after the last expected record")
+    return {
+        "path": str(path),
+        "sha256": digest.hexdigest(),
+        "size": size,
+        "precision": precision,
+        "n_records": nrec,
+        "labels": ["CONC"],
+        "nlay": nlay,
+        "nrow": nrow,
+        "ncol": ncol,
+        "n_steps": len(calendar),
+        "first": first,
+        "last": last,
+        "final_finite": True,
+    }
+
+
+def inside(path, parent):
+    """Whether path is a real entry (not a link) whose resolved location is
+    directly inside the resolved parent."""
+    path = Path(path)
+    return not path.is_symlink() and path.resolve().parent == Path(parent).resolve()
+
+
+def t03_roots(runs):
+    """Run folders of the conduit tutorial in runs (resolved), and the
+    entries named like one that are not real folders directly in runs."""
+    roots, rejected = [], []
+    for p in sorted(Path(runs).glob(f"{T03_PREFIX}*")):
+        if p.is_dir() and inside(p, runs):
+            roots.append(p.resolve())
+        else:
+            rejected.append(str(p))
+    return roots, rejected
+
+
+def t03_file(ws, name):
+    """ws/name if it is a regular file (not a link) directly inside ws."""
+    p = Path(ws) / name
+    try:
+        mode = os.lstat(p).st_mode
+    except FileNotFoundError:
+        return None
+    return p if stat.S_ISREG(mode) and inside(p, ws) else None
+
+
+def check_root_t03(root, stdout=None):
+    """Check both parts of one run folder of the conduit tutorial; return
+    the part records, the errors and whether every part wrote its .list and
+    .con files. stdout holds the part lines of the executed notebook for
+    the selected run folder; other run folders have no attributable stdout,
+    so their version and termination are recorded as not available."""
+    parts, errors, complete = [], [], True
+    nlay, nrow, ncol = T03_SHAPE
+    for part in T03_PARTS:
+        ws = Path(root) / part
+        rec = {"part": part, "ws": str(ws), "stdout_line": None}
+        rec.update(termination=None, termination_source=None, errors=[])
+        rec["version_observed"] = {"stdout": None, "list": None}
+        rec.update(files_missing=[], files_extra=[], files_rejected=[])
+        rec.update(list=None, con=None)
+        parts.append(rec)
+        err = rec["errors"]
+        if stdout is None or part not in stdout:
+            rec["stdout"] = "not available: no stdout of this part of this run folder"
+        else:
+            line = stdout[part]
+            rec.update(stdout_line=line["text"], termination=line["termination"])
+            rec["termination_source"] = "stdout of the executed notebook"
+            rec["version_observed"]["stdout"] = line["version"]
+        if not (ws.is_dir() and inside(ws, root)):
+            err.append(f"{ws}: not a folder directly in {root}")
+            complete = False
+            errors += err
+            continue
+        names = {p.name for p in ws.iterdir()}
+        rec["files_missing"] = sorted(set(T03_FILES) - names)
+        rec["files_extra"] = sorted(names - set(T03_FILES))
+        if rec["files_missing"]:
+            err.append(f"{ws}: missing {rec['files_missing']}")
+        files = {}
+        for name in sorted(set(T03_FILES) & names):
+            files[name] = t03_file(ws, name)
+            if files[name] is None:
+                rec["files_rejected"].append(name)
+                err.append(f"{ws / name}: not a regular file directly in {ws}")
+        lst, con = files.get(f"{T03_MODEL}.list"), files.get(f"{T03_MODEL}.con")
+        if lst is None or con is None:
+            complete = False
+        if lst is not None:
+            try:
+                found = list_versions(lst)
+                text = lst.read_text(errors="replace").lower()
+            except OSError as e:
+                err.append(f"{lst}: {e!r}")
+            else:
+                rec["list"] = {
+                    "path": str(lst),
+                    "sha256": sha256(lst),
+                    "size": lst.stat().st_size,
+                    "versions": found[:10] + (["..."] if len(found) > 10 else []),
+                    "normal_termination_lines": text.count(T03_NORMAL),
+                }
+                versions = sorted({v for _, v in found})
+                rec["version_observed"]["list"] = versions
+                if versions != [USGT_VERSION]:
+                    err.append(f"{lst}: versions {versions}, expected {USGT_VERSION}")
+        if con is not None:
+            try:
+                rec["con"] = con_structured(con, nlay, nrow, ncol, T03_CALENDAR)
+            except (OSError, ValueError) as e:
+                rec["con"] = {"path": str(con), "sha256": sha256(con)}
+                rec["con"]["size"] = con.stat().st_size
+                err.append(str(e))
+        errors += err
+    return parts, errors, complete
+
+
+def engine_identity(install, errors):
+    """Executable identity inferred from install-usgt.json (keys exe,
+    sha256, zip_sha256, errors, USGT_EXE) and USGT_EXE of this process; the
+    sha256 of the installed file is computed again without running it.
+    This does not show which executable ran each part."""
+    rec = {"basis": T03_BASIS, "install": str(install)}
+    try:
+        inst = json.loads(Path(install).read_text())
+    except (OSError, ValueError) as e:
+        errors.append(f"{install}: {e!r}")
+        return rec
+    rec.update({k: inst.get(k) for k in ("exe", "sha256", "zip_sha256")})
+    rec.update(install_errors=inst.get("errors"), USGT_EXE_install=inst.get("USGT_EXE"))
+    rec["USGT_EXE_env"] = env = os.environ.get("USGT_EXE")
+    exe = inst.get("exe")
+    if inst.get("command") != "install-usgt" or inst.get("errors") or not exe:
+        errors.append(f"{install}: install-usgt failed or names no executable")
+        return rec
+    if "USGT_EXE" in inst and norm_path(inst["USGT_EXE"]) != norm_path(exe):
+        errors.append(f"{install}: USGT_EXE {inst['USGT_EXE']!r} is not exe {exe!r}")
+    if not env:
+        errors.append("USGT_EXE is not set in the report step")
+    elif norm_path(env) != norm_path(exe):
+        errors.append(f"USGT_EXE {env!r} is not the installed executable {exe!r}")
+    try:
+        mode = os.lstat(exe).st_mode
+        if not stat.S_ISREG(mode):
+            errors.append(f"{exe} is not a regular file")
+        else:
+            rec["sha256_now"] = sha256(exe)
+            if rec["sha256_now"] != inst.get("sha256"):
+                errors.append(f"{exe}: sha256 differs from install-usgt.json")
+    except OSError as e:
+        errors.append(f"{exe}: {e!r}")
+    return rec
+
+
+def export_t03(dest, notebook, selected, errors):
+    """Copy the executed notebook and the listing files of the selected run
+    folder (only files already checked to be in scope) to the new folder
+    dest; never write into an existing folder."""
+    dest = Path(dest)
+    rec = {"dir": str(dest), "files": []}
+    if os.path.lexists(dest):
+        errors.append(f"{dest}: export folder already exists")
+        return rec
+    dest.mkdir(parents=True)
+    sources = [(notebook, T03_NOTEBOOK)] if notebook is not None else []
+    for part in T03_PARTS if selected is not None else ():
+        ws = Path(selected) / part
+        lst = t03_file(ws, f"{T03_MODEL}.list") if inside(ws, selected) else None
+        if lst is not None:
+            sources.append((lst, f"{part}/{T03_MODEL}.list"))
+    for src, rel in sources:
+        dst = dest / rel
+        dst.parent.mkdir(exist_ok=True)
+        with open(src, "rb") as a, open(dst, "xb") as b:
+            for block in iter(lambda: a.read(1 << 20), b""):
+                b.write(block)
+        entry = {"source": str(src), "path": rel, "sha256": sha256(dst)}
+        entry["size"] = dst.stat().st_size
+        rec["files"].append(entry)
+        if entry["sha256"] != sha256(src):
+            errors.append(f"{dst}: copy differs from {src}")
+    return rec
+
+
+def snapshot_t03(args, record):
+    t = time.time()
+    runs = Path(args.runs).resolve(strict=True)
+    roots, rejected = t03_roots(runs)
+    nb = runs / T03_NOTEBOOK
+    notebook = None
+    if os.path.lexists(nb):
+        st = os.lstat(nb)
+        notebook = {"path": str(nb), "mtime": st.st_mtime, "sha256": None}
+        if stat.S_ISREG(st.st_mode):
+            notebook["sha256"] = sha256(nb)
+    record.update(runs=str(runs), time=t, roots=[str(p) for p in roots])
+    record.update(rejected_roots=rejected, notebook=notebook)
+
+
+def report_t03(args, record):
+    errors = record["errors"]
+    runs = Path(args.runs).resolve()
+    record.update(expected_version=USGT_VERSION, snapshot=None, notebook=None)
+    record.update(engine_identity=None, ignored_old_roots=[], rejected_roots=[])
+    record.update(selected_root=None, attempts=[], exported=None)
+    snap, old, snap_time = {}, set(), None
+    try:
+        snap = json.loads(Path(args.snapshot).read_text())
+        record["snapshot"] = snap
+        old, snap_time = set(snap["roots"]), snap["time"]
+        if (
+            snap.get("command") != "snapshot-t03"
+            or snap["errors"]
+            or Path(snap["runs"]) != runs
+        ):
+            errors.append("snapshot-t03 failed or was taken in another folder")
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        errors.append(f"snapshot {args.snapshot}: {e!r}")
+    record["ignored_old_roots"] = sorted(old)
+    roots, rejected = t03_roots(runs)
+    record["rejected_roots"] = rejected
+    errors += [f"{p}: not a run folder directly in {runs}" for p in rejected]
+    new = [p for p in roots if str(p) not in old]
+    if not new:
+        errors.append(f"no new {T03_PREFIX}* run folder in {runs}")
+
+    # the executed notebook names the run folder and the workspace of each
+    # part of its own run; jupytext writes it next to the tutorial
+    nb = runs / T03_NOTEBOOK
+    notebook = record["notebook"] = {"path": str(nb), "exists": os.path.lexists(nb)}
+    stdout, nb_ok = None, None
+    if not notebook["exists"]:
+        errors.append(f"{nb}: missing (not written or not executed)")
+    elif t03_file(runs, T03_NOTEBOOK) is None:
+        errors.append(f"{nb}: not a regular file directly in {runs}")
+    else:
+        nb_ok = nb
+        st = nb.stat()
+        notebook.update(mtime=st.st_mtime, size=st.st_size, sha256=sha256(nb))
+        notebook["newer_than_snapshot"] = (
+            snap_time is not None and st.st_mtime >= snap_time
+        )
+        if not notebook["newer_than_snapshot"]:
+            errors.append(f"{nb}: older than the snapshot")
+        if (snap.get("notebook") or {}).get("sha256") == notebook["sha256"]:
+            errors.append(f"{nb}: unchanged since the snapshot")
+        try:
+            lines = notebook_stdout_lines(json.loads(nb.read_text(encoding="utf-8")))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+            errors.append(f"{nb}: {e!r}")
+        else:
+            parsed, errs = t03_stdout(lines)
+            notebook.update(parsed)
+            errors += [f"{nb}: {e}" for e in errs]
+            stdout = {p: v[0] for p, v in parsed["parts"].items() if len(v) == 1}
+
+    selected = None
+    named = notebook.get("root")
+    if named is not None:
+        path = Path(named) if Path(named).is_absolute() else runs / named
+        if path.is_dir() and inside(path, runs) and path.resolve() in new:
+            selected = path.resolve()
+        else:
+            errors.append(f"{named}: not a new run folder directly in {runs}")
+    record["selected_root"] = None if selected is None else str(selected)
+    for root in new:
+        try:
+            parts, errs, complete = check_root_t03(
+                root, stdout if root == selected else None
+            )
+        except OSError as e:
+            parts, errs, complete = [], [f"{root}: {e!r}"], False
+        record["attempts"].append(
+            {
+                "root": str(root),
+                "selected": root == selected,
+                "complete": complete,
+                "mtime": root.stat().st_mtime,
+                "parts": parts,
+                "errors": errs,
+            }
+        )
+        if snap_time is None or root.stat().st_mtime < snap_time:
+            errors.append(f"{root}: not newer than the snapshot")
+        if root == selected or complete:
+            errors += errs
+    record["engine_identity"] = engine_identity(args.install, errors)
+    if args.export:
+        record["exported"] = export_t03(args.export, nb_ok, selected, errors)
+
+
 COMMANDS = {
     "fetch": fetch,
     "install-usgt": install_usgt,
     "snapshot": snapshot,
     "report": report,
+    "snapshot-t03": snapshot_t03,
+    "report-t03": report_t03,
 }
 
 
@@ -403,6 +870,13 @@ def main(argv=None):
         p.add_argument("--runs", required=True)
         if name == "report":
             p.add_argument("--snapshot", required=True)
+    p = sub.add_parser("snapshot-t03")
+    p.add_argument("--runs", required=True)
+    p = sub.add_parser("report-t03")
+    p.add_argument("--runs", required=True)
+    p.add_argument("--snapshot", required=True)
+    p.add_argument("--install", required=True)
+    p.add_argument("--export")
     for p in sub.choices.values():
         p.add_argument("--out", required=True)
     args = parser.parse_args(argv)
