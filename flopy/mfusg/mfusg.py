@@ -10,6 +10,8 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Union
 from warnings import warn
 
+import numpy as np
+
 import flopy
 
 from ..mbase import PackageLoadException
@@ -104,6 +106,9 @@ class MfUsg(Modflow):
         self.itrnsp = 0  # transport simulation flag
         self.mcomp = 0  # number of chemical components
         self.iheat = 0  # flag for heat transport
+        self.imcomp = 0  # number of immobile components
+        # MfUsgBct that last set the counts (None: no BCT was ever added)
+        self._counts_owner = None
         self.idpf = 0  # flag for dual porosity flow
         self.icln = 0  # flag for CLN package
         # EVS/RTS name-file entries kept from a loaded name file
@@ -188,6 +193,96 @@ class MfUsg(Modflow):
     # SGWF2BAS8OPEN reads each line into CHARACTER*300 and URWORD blanks the
     # last character, so a line can use 299 characters
     _NAM_LINE_MAX = 299
+
+    @property
+    def mcompt(self):
+        """Number of mobile components including temperature (read-only).
+
+        MCOMPT = MCOMP + 1 when IHEAT is 1 (USG-T GWT2BCT1AR), else MCOMP.
+        The counts ``mcomp``, ``iheat`` and ``imcomp`` are 0 when the model
+        is created and are set by MfUsgBct when it is added to the model.
+        Removing the BCT package does not reset them.
+        """
+        return self.mcomp + (1 if self.iheat == 1 else 0)
+
+    @property
+    def ntcomp(self):
+        """Total number of components (read-only): MCOMPT + IMCOMP.
+
+        Component order in USG-T: mobile 1..MCOMP, temperature (IHEAT=1),
+        then immobile components.
+        """
+        return self.mcompt + self.imcomp
+
+    def _transport_context(self):
+        """Classify the transport state used by the BCT-dependent packages.
+
+        Returns ``(state, counts)``. ``state`` is:
+
+        - ``"bct"``: a BCT package is registered and set the model counts;
+        - ``"unsynced"``: the registered BCT did not set the model counts (it
+          was added without its constructor) or its counts changed after
+          construction;
+        - ``"removed"``: a BCT set the counts but is no longer registered;
+        - ``"manual"``: no BCT was ever added and ``itrnsp`` is not 0 (counts
+          assigned by hand, for writing a package file on its own);
+        - ``"none"``: no BCT and no transport (flow only).
+
+        ``counts`` is ``(mcomp, iheat, imcomp)`` for ``"bct"`` and
+        ``"manual"``, else None. USG-T reads the transport items of EVT/ETS
+        only when BCT is in the name file, so ``"bct"`` and ``"unsynced"``
+        (a registered BCT) and ``"manual"`` have the transport header.
+        """
+        bct = self.get_package("BCT")
+        if bct is None:
+            if self._counts_owner is not None:
+                return "removed", None
+            if self.itrnsp:
+                return "manual", (self.mcomp, self.iheat, self.imcomp)
+            return "none", None
+        if bct is not self._counts_owner or bct._counts_mismatch() is not None:
+            return "unsynced", None
+        return "bct", (self.mcomp, self.iheat, self.imcomp)
+
+    def _transport_header(self):
+        """True when USG-T reads the transport items of EVT/ETS (BCT in the
+        name file), or in the manual-count mode."""
+        return self._transport_context()[0] in ("bct", "unsynced", "manual")
+
+    def _transport_mcompt(self, who):
+        """MCOMPT for a package that needs per-component transport data.
+
+        Raises ValueError when the counts cannot be used: no transport, BCT
+        removed, BCT not synchronized with the model counts, or invalid
+        manual counts."""
+        state, counts = self._transport_context()
+        if state == "none":
+            raise ValueError(f"{who}: transport factors need a BCT package")
+        if state == "removed":
+            raise ValueError(
+                f"{who}: the BCT package was removed; its component counts are "
+                "stale. Add a BCT package again or disable the transport factor."
+            )
+        if state == "unsynced":
+            bct = self.get_package("BCT")
+            reason = bct._counts_mismatch() or (
+                "it was added without setting the model counts"
+            )
+            raise ValueError(
+                f"{who}: the registered BCT package does not match the model "
+                f"component counts ({reason}); build or load the BCT package "
+                "with its constructor"
+            )
+        mcomp, iheat, imcomp = counts
+        for name, value in (("mcomp", mcomp), ("iheat", iheat), ("imcomp", imcomp)):
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+                raise ValueError(f"{who}: model {name}={value!r} is not an integer")
+            if value < 0:
+                raise ValueError(f"{who}: model {name}={value} is negative")
+        mcompt = self.mcompt
+        if mcompt < 1:
+            raise ValueError(f"{who}: transport factors need MCOMPT >= 1")
+        return mcompt
 
     @property
     def preserved_nam_entries(self):
@@ -906,3 +1001,148 @@ def fmt_string(array, free=False):
         else:
             raise TypeError(f"mfusg.fmt_string error: unknown vtype in field: {field}")
     return "".join(fmts)
+
+
+# Per-component transport factors of EVT (ETFACTOR) and ETS (ESFACTOR):
+# USG-T reads MCOMPT values, READ(IN,*) in free format and FORMAT(20F10.3)
+# in fixed format (gwf2evt8u1.f, gwf2ets8u1.f).
+
+
+def _transport_factors(who, value, mcompt):
+    """Return MCOMPT float factors: a scalar is used for every component; a
+    list or array must have exactly MCOMPT values."""
+    if value is None:
+        raise ValueError(f"{who}: {mcompt} value(s) (MCOMPT) are required")
+    arr = np.asarray(value, dtype=float)
+    if arr.ndim == 0:
+        arr = np.full(mcompt, float(arr))
+    elif arr.ndim != 1 or arr.size != mcompt:
+        raise ValueError(
+            f"{who}: must have MCOMPT={mcompt} value(s) (mobile components "
+            f"and temperature); got {arr.size}"
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{who}: values must be finite")
+    return arr
+
+
+def _factor_text(values, free, fmt, who):
+    """Text of the factor records: one line in free format (fields always
+    separated by a blank), records of 20 fields of 10 columns in fixed
+    format (FORMAT(20F10.3)); a value that does not fit 10 columns falls
+    back to 10.3e, and raises ValueError if it still does not fit. Callers
+    build it before opening the file."""
+    fields = []
+    for v in values:
+        s = format(float(v), fmt)
+        if free:
+            if not s.startswith(" "):
+                s = " " + s
+        elif len(s) > 10:
+            s = format(float(v), "10.3e")
+            if len(s) > 10:
+                raise ValueError(
+                    f"{who}: factor {float(v)!r} does not fit a 10-column field "
+                    "(FORMAT(20F10.3))"
+                )
+        fields.append(s)
+    if free:
+        return "".join(fields) + "\n"
+    return "".join(
+        "".join(fields[i : i + 20]) + "\n" for i in range(0, len(fields), 20)
+    )
+
+
+def _read_free_values(f, n, who):
+    """Read n reals as list-directed READ(IN,*): records are read until n
+    values are found; the rest of the last record is skipped. Values are
+    separated by blanks or by one comma with optional blanks (an end of record
+    counts as a blank), and r*c repeats are supported. EOF, a slash, a null
+    value (a comma before the first value, two commas with only blanks or ends
+    of record between them, or r* without a constant) or an invalid token
+    raise ValueError. A short record followed by a record of numbers cannot
+    be told apart from a continued record (as in Fortran)."""
+    import re
+
+    vals = []
+    comma = True  # a comma here would give a null value (start of the read)
+    while len(vals) < n:
+        line = f.readline()
+        if line == "":
+            raise ValueError(f"{who}: end of file after {len(vals)} of {n} values")
+        for tok in re.findall(r",|[^\s,]+", line):
+            if len(vals) >= n:
+                break
+            if tok == ",":
+                if comma:
+                    raise ValueError(
+                        f"{who}: null value (empty field) in the factor record "
+                        "is not supported"
+                    )
+                comma = True
+                continue
+            if "/" in tok:
+                raise ValueError(f"{who}: slash in the factor record is not supported")
+            rep = 1
+            if "*" in tok:
+                r, _, tok = tok.partition("*")
+                try:
+                    rep = int(r)
+                except ValueError:
+                    raise ValueError(f"{who}: invalid repeat {r!r}*") from None
+                if rep < 1:
+                    raise ValueError(f"{who}: invalid repeat token {r}*{tok}")
+                if tok == "":
+                    raise ValueError(
+                        f"{who}: null value ({r}*) in the factor record is not "
+                        "supported"
+                    )
+            try:
+                v = float(tok.replace("d", "e").replace("D", "E"))
+            except ValueError:
+                raise ValueError(f"{who}: invalid factor value {tok!r}") from None
+            vals.extend([v] * min(rep, n - len(vals)))
+            comma = False
+    return np.array(vals)
+
+
+def _fixed_field(field, decimals, who):
+    """Value of a FORMAT Fw.d (decimals) or Iw (decimals None) field: blanks
+    are ignored (BN), an empty field is 0, and a real without a decimal point
+    has ``decimals`` implied decimals."""
+    import re
+
+    s = field.replace(" ", "")
+    if s == "":
+        return 0 if decimals is None else 0.0
+    try:
+        if decimals is None:
+            return int(s)
+        m = re.fullmatch(r"([+-]?[0-9.]*)(?:[eEdD]?([+-]?[0-9]+))?", s)
+        if m is None or m.group(1) in ("", "+", "-", "."):
+            raise ValueError
+        mant, exp = m.group(1), m.group(2)
+        val = float(mant) if "." in mant else int(mant) / 10.0**decimals
+        return val * 10.0 ** int(exp) if exp else val
+    except ValueError:
+        raise ValueError(f"{who}: invalid fixed-format field {field!r}") from None
+
+
+def _read_fixed_values(f, n, who):
+    """Read n reals with FORMAT(20F10.3): ceil(n/20) records of 10-column
+    fields; missing columns are blank (0.0)."""
+    vals = []
+    while len(vals) < n:
+        line = f.readline()
+        if line == "":
+            raise ValueError(f"{who}: end of file after {len(vals)} of {n} values")
+        line = line.rstrip("\n").rstrip("\r")
+        for i in range(min(20, n - len(vals))):
+            vals.append(_fixed_field(line[10 * i : 10 * i + 10], 3, who))
+    return np.array(vals)
+
+
+def _fixed_ints(line, n, who):
+    """First n integer fields of a FORMAT(nI10) record."""
+    line = line.rstrip("\n").rstrip("\r")
+    return [_fixed_field(line[10 * i : 10 * i + 10], None, who) for i in range(n)]

@@ -2998,3 +2998,156 @@ def test_usgt_exe_voronoi_disu5_two_layers_reference(tmp_path):
     assert (
         np.ptp(heads[:ncpl]) > 1.0 and np.max(np.abs(heads[:ncpl] - heads[ncpl:])) > 0.1
     )
+
+
+# ---------------------------------------------------------------------------
+# NTCOMP-B2: EVT ETFACTOR / ETS ESFACTOR by MCOMPT with heat (IHEAT=1).
+# 5-node DISU line, no boundaries, water table above the extinction depth so
+# ET is active. IDISP=1 with DL=DT=0 (USG-T 2.8.1 stopped with SIGSEGV for
+# IHEAT=1, MCOMP>=1 and IDISP=0 in a small test, so that is not used). No
+# DDF/TVM: temperature does not change flow or solute transport, so the
+# heads and the solute stay the same when only the temperature factor
+# changes. Records are compared in file order (mobile, then temperature).
+# ---------------------------------------------------------------------------
+
+_B2X_HEAT = {
+    "iheat": 1,
+    "htcondw": 0.58,
+    "rhow": 1000.0,
+    "htcapw": 4186.0,
+    "htcaps": 800.0,
+    "htconds": 2.0,
+    "heat": 20.0,
+    "bulkd": 1600.0,
+}
+_B2X_HAND = {
+    "evt": "# hand EVT\n1 0 1\n{f}\n1 1 1 -1\nCONSTANT 10.0\nCONSTANT 1.0e-3\n"
+    "CONSTANT 5.0\n",
+    "ets": "# hand ETS\n1 0 0 1 1\n{f}\n1 1 1\nCONSTANT 10.0\nCONSTANT 1.0e-3\n"
+    "CONSTANT 5.0\n",
+}
+
+
+def _b2x_con(path):
+    """Records of an unstructured binary concentration file (own reader)."""
+    b = Path(path).read_bytes()
+    recs, i = [], 0
+    while i < len(b):
+        n0, n1 = np.frombuffer(b, "<i4", 2, i + 32)
+        n = int(n1 - n0 + 1)
+        recs.append(np.frombuffer(b, "<f4", n, i + 44).copy())
+        i += 44 + 4 * n
+    return recs
+
+
+def _b2x_run(ws, kind, factors, heat=True, hand=None):
+    from flopy.mfusg import MfUsgDisU, MfUsgEts
+
+    ml = MfUsg(modelname="h", model_ws=str(ws), structured=False, exe_name=USGT_EXE)
+    MfUsgDisU(
+        ml,
+        nodes=5,
+        nlay=1,
+        njag=13,
+        iac=np.array([2, 3, 3, 3, 2]),
+        ja=np.array([0, 1, 1, 0, 2, 2, 1, 3, 3, 2, 4, 4, 3]),
+        ivsd=0,
+        cl12=5.0,
+        fahl=100.0,
+        top=10.0,
+        bot=0.0,
+        area=100.0,
+        nper=1,
+        perlen=10.0,
+        nstp=2,
+        steady=False,
+    )
+    MfUsgBas(ml, ibound=1, strt=9.5)
+    MfUsgLpf(ml, laytyp=0, hk=1.0, ss=1.0e-3)
+    MfUsgSms(ml, linmeth=1)
+    kw = dict(_B2X_HEAT) if heat else {"imcomp": 1, "imconc": 40.0}
+    MfUsgBct(
+        ml,
+        itrnsp=1,
+        mcomp=1,
+        idisp=1,
+        dl=0.0,
+        dt=0.0,
+        diffnc=0.0,
+        prsity=0.2,
+        conc=10.0,
+        **kw,
+    )
+    et = {"surf": 10.0, "evtr": 1.0e-3, "exdp": 5.0}
+    if kind == "evt":
+        MfUsgEvt(ml, nevtop=1, ietfactor=1, etfactor=factors, **et)
+    else:
+        MfUsgEts(ml, netsop=1, netseg=1, iesfactor=1, esfactor=factors, **et)
+    MfUsgOc(ml, stress_period_data={(0, 1): ["save head", "save concentration"]})
+    ml.write_input()
+    if hand is not None:
+        Path(ws, f"h.{kind}").write_text(_B2X_HAND[kind].format(f=hand))
+    success, buff = ml.run_model(silent=True, report=True)
+    normal = any("Normal termination" in str(b) for b in buff)
+    lst = Path(ws, "h.list").read_text(errors="replace")
+    print(f"[{kind}] {ws.name}: success={success} normal={normal}")
+    return success, normal, lst
+
+
+def _b2x_echo(lst):
+    """ESFRACTION values echoed by ETS (FORMAT 542)."""
+    lines = lst.splitlines()
+    i = next(k for k, s in enumerate(lines) if "COMPONENTS 1 TO MCOMPT" in s)
+    return [float(v) for v in lines[i + 2].split()]
+
+
+@requires_usgt
+@pytest.mark.parametrize("kind", ["evt", "ets"])
+def test_usgt_exe_transport_factor_heat(function_tmpdir, kind):
+    """FloPy-written = hand-written factors; temperature factor sensitivity."""
+    runs = {
+        "base": [0.5, 0.25],
+        "hand": [0.5, 0.25],
+        "temp": [0.5, 0.9],
+        "solute": [0.9, 0.25],
+    }
+    out = {}
+    for name, factors in runs.items():
+        ws = function_tmpdir / name
+        hand = "0.5 0.25" if name == "hand" else None
+        success, normal, lst = _b2x_run(ws, kind, factors, hand=hand)
+        assert success and normal, name
+        out[name] = (_b2x_con(ws / "h.con"), (ws / "h.hds").read_bytes(), lst)
+        if kind == "ets":
+            assert _b2x_echo(lst) == factors
+    (c, hds, _), (ch, hdsh, _) = out["base"], out["hand"]
+    assert hds == hdsh and all(np.array_equal(a, b) for a, b in zip(c, ch))
+    assert len(c) == 2  # mobile component, temperature
+    ct, hdst, _ = out["temp"]
+    assert hdst == hds and np.array_equal(ct[0], c[0])
+    assert np.all(ct[1] < c[1])  # more heat leaves with a larger factor
+    cs, hdss, _ = out["solute"]
+    assert hdss == hds and np.array_equal(cs[1], c[1])
+    assert np.all(cs[0] < c[0])
+
+
+@requires_usgt
+@pytest.mark.parametrize("kind", ["evt", "ets"])
+def test_usgt_exe_transport_factor_mcomp_only_record(function_tmpdir, kind):
+    """Negative control: a record with only MCOMP factors does not run
+    (ETS echoes the next record's first value as the temperature factor)."""
+    success, normal, lst = _b2x_run(function_tmpdir, kind, [0.5, 0.25], hand="0.5")
+    assert not normal
+    if kind == "ets":
+        assert _b2x_echo(lst) == [0.5, 1.0]
+
+
+@requires_usgt
+@pytest.mark.parametrize("kind", ["evt", "ets"])
+def test_usgt_exe_transport_factor_immobile_excluded(function_tmpdir, kind):
+    """IMCOMP=1 without heat: one factor (MCOMPT=1), two concentration records."""
+    success, normal, lst = _b2x_run(function_tmpdir, kind, [0.5], heat=False)
+    assert success and normal
+    assert len(_b2x_con(function_tmpdir / "h.con")) == 2
+    if kind == "ets":
+        assert _b2x_echo(lst) == [0.5]

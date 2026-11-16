@@ -62,7 +62,9 @@ class MfUsgBct(Package):
     iheat : int (default is 0)
         flag of energy balance equation (0: not considered, 1: computed)
     imcomp : int (default is 0)
-        number of immobile component species simulated
+        number of immobile component species simulated. With imcomp > 0 only
+        the initial concentration of each immobile component (imconc) is
+        written; see Notes for the combinations that are rejected.
     idispcln : int (default is 0)
         index connection between GWF and CLN cells (0: finite difference approximation
         1: Thiem solution, 2: Thiem solution with local borehole thermal resistance)
@@ -113,6 +115,9 @@ class MfUsgBct(Package):
         first-order decay coefficient on air-water interface
     conc : float or array of floats (nlay, nrow, ncol), default is 0.0
         initial concentration of each contaminant species
+    imconc : float or list of imcomp values, required when imcomp > 0
+        initial concentration of each immobile component (keyword argument);
+        a scalar is used for every immobile component
     extension : string
         mbegwunf  : flow imbalance information
         mbegwunt  : transport mass imbalance information
@@ -135,6 +140,31 @@ class MfUsgBct(Package):
 
     Notes
     -----
+    When the package is added to the model, it sets the model counts
+    ``mcomp``, ``iheat`` and ``imcomp`` (and the derived ``mcompt`` and
+    ``ntcomp``); with ``add_package=False`` the model counts are not changed.
+    Removing the package from the model does not reset the model counts.
+
+    The counts cannot be changed after construction: ``write_file`` raises
+    ValueError, before the file is opened or anything is written, if
+    ``mcomp``, ``iheat`` or ``imcomp`` of the package differ from the values
+    its arrays were built with (for example ``iheat`` changed from 0 to 1 or
+    from 1 to 0), or if the package and the model counts differ. Build or
+    load a new BCT package instead. Array values (for example ``conc``) can
+    still be changed.
+
+    Immobile components (imcomp > 0) are protected, not fully supported:
+
+    - USG-T 2.8.1 reads the per-species data of CHAINDECAY, A-W_ADSORB,
+      IADSORB, IZOD and IFOD also for each immobile component, which this
+      class does not write or read: those combinations raise
+      NotImplementedError (on construction, load and write).
+    - In fixed format (no FREE in BAS6) USG-T only adds IMCOMP to the
+      number of components in the free-format branch, so the immobile
+      arrays would not be read: imcomp > 0 with fixed format raises
+      NotImplementedError. On load this uses the model's current
+      ``free_format_input``; MfUsg.load reads BCT before BAS6, so for a
+      fixed-format model the check fails when the BCT file is written.
 
     Examples
     --------
@@ -193,6 +223,27 @@ class MfUsgBct(Package):
         )
         assert isinstance(model, MfUsg), msg
 
+        # checked before the model or any array is changed
+        MfUsgBct._check_counts(
+            mcomp,
+            imcomp,
+            model.free_format_input,
+            iadsorb,
+            izod,
+            ifod,
+            kwargs.get("chaindecay"),
+            kwargs.get("aw_adsorb"),
+            kwargs.get("ikawi_fn"),
+        )
+        if imcomp > 0:
+            if "imconc" not in kwargs:
+                raise ValueError(f"BCT imcomp={imcomp} requires imconc")
+            imconc = kwargs["imconc"]
+            if isinstance(imconc, (list, tuple)) and len(imconc) != imcomp:
+                raise ValueError(
+                    f"BCT imconc has {len(imconc)} values for imcomp={imcomp}"
+                )
+
         if unitnumber is None:
             unitnumber = MfUsgBct._defaultunit()
         elif isinstance(unitnumber, list):
@@ -234,10 +285,6 @@ class MfUsgBct(Package):
         self.imcomp = imcomp
         self.idispcln = idispcln
         self.nseqitr = nseqitr
-
-        model.itrnsp = itrnsp
-        model.mcomp = mcomp
-        model.iheat = self.iheat
 
         structured = self.parent.structured
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
@@ -414,11 +461,124 @@ class MfUsgBct(Package):
         if self.imcomp > 0:
             imconc = kwargs["imconc"]
             self.imconc = self.mcomp_arrays(
-                model, nlay, np.float32, imconc, "imconc", mcomp
+                model, nlay, np.float32, imconc, "imconc", imcomp
             )
 
+        # counts the arrays above were built for; checked again by write_file
+        self._built_counts = (mcomp, self.iheat, imcomp)
+
+        # the model counts describe the BCT package registered in the model
         if add_package:
+            model.itrnsp = itrnsp
+            model.mcomp = mcomp
+            model.iheat = self.iheat
+            model.imcomp = imcomp
+            model._counts_owner = self
             self.parent.add_package(self)
+
+    @staticmethod
+    def _immobile_species_options(iadsorb, izod, ifod, chaindecay, aw_adsorb, ikawi_fn):
+        """Options whose per-species data USG-T 2.8.1 also reads for immobile
+        components (glo2btnu1.f, species loop DO ICOMP=1,NTCOMP; only the
+        temperature component skips it)."""
+        opts = []
+        if chaindecay:
+            opts.append("CHAINDECAY")  # NPARENT read per component
+        if aw_adsorb and ikawi_fn != 4:
+            opts.append("A-W_ADSORB")  # AW_ADSORB1RP2: ALANGAW/BLANGAW
+        if iadsorb:
+            opts.append("IADSORB")  # ADSORB (and FLICH)
+        if izod == 1 or (iadsorb and izod in (2, 3)) or (aw_adsorb and izod == 4):
+            opts.append("IZOD")
+        if ifod == 1 or (iadsorb and ifod in (2, 3)) or (aw_adsorb and ifod == 4):
+            opts.append("IFOD")
+        return opts
+
+    @classmethod
+    def _check_counts(
+        cls,
+        mcomp,
+        imcomp,
+        free_format,
+        iadsorb,
+        izod,
+        ifod,
+        chaindecay,
+        aw_adsorb,
+        ikawi_fn,
+    ):
+        """Reject invalid component counts (ValueError) and the immobile
+        component combinations that are not supported (NotImplementedError)."""
+        for name, value in (("mcomp", mcomp), ("imcomp", imcomp)):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, np.integer))
+                or value < 0
+            ):
+                raise ValueError(f"BCT {name} must be an integer >= 0, got {value!r}")
+        if imcomp == 0:
+            return
+        if not free_format:
+            raise NotImplementedError(
+                f"BCT imcomp={imcomp} with fixed format is not supported: USG-T "
+                "adds IMCOMP to the number of components only for free-format "
+                "input (FREE in BAS6)"
+            )
+        opts = cls._immobile_species_options(
+            iadsorb, izod, ifod, chaindecay, aw_adsorb, ikawi_fn
+        )
+        if opts:
+            raise NotImplementedError(
+                f"BCT imcomp={imcomp} with {', '.join(opts)} is not supported: "
+                "USG-T 2.8.1 also reads these per-species data for immobile "
+                "components, which MfUsgBct does not write or read"
+            )
+
+    def _check_write(self):
+        """Check counts and per-component arrays before the file is opened."""
+        self._check_counts(
+            self.mcomp,
+            self.imcomp,
+            self.parent.free_format_input,
+            self.iadsorb,
+            self.izod,
+            self.ifod,
+            self.chaindecay,
+            self.aw_adsorb,
+            getattr(self, "ikawi_fn", None),
+        )
+        if len(self.conc) != self.mcomp:
+            raise ValueError(
+                f"BCT conc has {len(self.conc)} components for mcomp={self.mcomp}"
+            )
+        nim = len(getattr(self, "imconc", None) or [])
+        if self.imcomp > 0 and nim != self.imcomp:
+            raise ValueError(
+                f"BCT imconc has {nim} components for imcomp={self.imcomp}"
+            )
+        msg = self._counts_mismatch()
+        if msg is not None:
+            raise ValueError(
+                f"{msg}; rebuild or reload the BCT package instead of "
+                "changing the counts afterwards"
+            )
+
+    def _counts_mismatch(self):
+        """Describe a difference between the counts the arrays were built
+        with, the package counts and the model counts, or return None."""
+        pkg = (self.mcomp, self.iheat, self.imcomp)
+        if pkg != self._built_counts:
+            return (
+                f"BCT counts (mcomp, iheat, imcomp)={pkg} differ from the counts "
+                f"{self._built_counts} its arrays were built with"
+            )
+        mdl = (self.parent.mcomp, self.parent.iheat, self.parent.imcomp)
+        if pkg != mdl:
+            return (
+                f"BCT counts (mcomp, iheat, imcomp)={pkg} differ from the model "
+                f"counts {mdl}"
+            )
+        return None
 
     @staticmethod
     def _build_prop_arrays(model, nlay, dtype, value, name):
@@ -487,6 +647,9 @@ class MfUsgBct(Package):
             opened for writing.
 
         """
+        # checked before the file is opened (opening truncates it)
+        self._check_write()
+
         # Open file for writing
         close_on_exit = f is None
         f_obj = open(self.fn_path, "w") if f is None else f
@@ -796,6 +959,24 @@ class MfUsgBct(Package):
         if "MULTIFILE" in t:
             idx = t.index("MULTIFILE")
             kwargs["crootname"] = str(t[idx + 1])
+
+        # immobile-component guards before any array is read: the arrays
+        # that follow would otherwise be assigned to the wrong items
+        try:
+            cls._check_counts(
+                kwargs["mcomp"],
+                kwargs["imcomp"],
+                model.free_format_input,
+                kwargs["iadsorb"],
+                kwargs["izod"],
+                kwargs["ifod"],
+                kwargs["chaindecay"],
+                kwargs["aw_adsorb"],
+                kwargs.get("ikawi_fn"),
+            )
+        except (ValueError, NotImplementedError):
+            f_obj.close()
+            raise
 
         # item 1b ifmbc == 1
         mbegwunf, mbegwunt, mbeclnunf, mbeclnunt = 0, 0, 0, 0

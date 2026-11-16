@@ -275,7 +275,14 @@ class MfUsgRiv(ModflowRiv):
 
         # Parse header: MXACTR IRIVCB [options] (GWF2RIV7U1AR)
         tokens = line.split()
-        ipakcb = int(tokens[1])
+        if len(tokens) == 1:
+            # The record ends after MXACTR: URWORD returns a blank word for
+            # IRIVCB, which USG-T reads as 0. MXACTR must still be one integer
+            # word (a record such as "1,50" is not taken as IRIVCB = 0).
+            int(tokens[0])
+            ipakcb = 0
+        else:
+            ipakcb = int(tokens[1])
         options = []
         aux_names = []
         i = 2

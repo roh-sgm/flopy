@@ -1833,6 +1833,133 @@ def test_mfusgriv_structured_header_unchanged(function_tmpdir):
     assert _riv_header(function_tmpdir / "s.riv")[:2] == ["1", "55"]
 
 
+_RIV_PERIODS = (
+    " 1 0    Stress Period 1\n"
+    " 3  12.000000  5.000000e+00  8.000000\n"
+    " -1 0    Stress Period 2\n"
+)
+
+
+def _riv_disu_model_2sp(ws):
+    """The 3-node DISU line of _riv_disu_model with two stress periods."""
+    ml = _riv_disu_model(ws)
+    ml.disu.nper = 2
+    return ml
+
+
+@pytest.mark.parametrize(
+    "header",
+    [" 1", "1", " 1   ", "         1", "\t1\t"],
+    ids=["lead_blank", "bare", "trailing_blanks", "width10", "tabs"],
+)
+def test_mfusgriv_header_without_irivcb(function_tmpdir, header):
+    """A DISU header that ends after MXACTR is valid: USG-T (GWF2RIV7U1AR,
+    URWORD) reads the blank IRIVCB word as 0. Load keeps IRIVCB = 0, no CBC
+    output, no options, and continues with the stress periods; the rewrite
+    writes IRIVCB explicitly. (Formerly an IndexError.)"""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "no_irivcb.riv"
+    riv_in.write_text(f"# manual\n# second comment\n{header}\n{_RIV_PERIODS}")
+    ml = _riv_disu_model_2sp(function_tmpdir / "l")
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+
+    assert riv.ipakcb == 0
+    assert riv.options == []
+    assert riv.dtype.names == ("node", "stage", "cond", "rbot")
+    assert 0 not in ml.output_units
+    for kper in (0, 1):
+        sp = riv.stress_period_data[kper]
+        assert sp["node"].tolist() == [2]
+        assert np.allclose(
+            [sp["stage"][0], sp["cond"][0], sp["rbot"][0]], [12.0, 5.0, 8.0]
+        )
+    riv.fn_path = str(function_tmpdir / "out.riv")
+    riv.write_file()
+    assert _riv_header(riv.fn_path) == ["1", "0"]
+    again = MfUsgRiv.load(
+        riv.fn_path,
+        _riv_disu_model_2sp(function_tmpdir / "r"),
+        nper=2,
+        ext_unit_dict={},
+    )
+    assert again.ipakcb == 0
+    assert again.stress_period_data[1]["node"].tolist() == [2]
+
+
+@pytest.mark.parametrize(
+    "header, irivcb",
+    [(" 1 0", 0), (" 1 55", 55), (" 1 -1", -1), (" 1 0 ", 0)],
+    ids=["zero", "positive", "negative", "zero_trailing_blank"],
+)
+def test_mfusgriv_header_explicit_irivcb_load(function_tmpdir, header, irivcb):
+    """Control: an explicit IRIVCB (zero, positive, negative) is loaded as is,
+    and the stress periods that follow are read."""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "irivcb.riv"
+    riv_in.write_text(f"# manual\n{header}\n{_RIV_PERIODS}")
+    ml = _riv_disu_model_2sp(function_tmpdir / "l")
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+    assert riv.ipakcb == irivcb
+    assert riv.options == []
+    assert (irivcb in ml.output_units) == (irivcb > 0)
+    assert riv.stress_period_data[1]["node"].tolist() == [2]
+
+
+@pytest.mark.parametrize(
+    "header",
+    [" 1 abc", " 1 5.5", " 1 AUX C01", " 1 NOPRINT", " 1,55", " 1,", " x"],
+    ids=[
+        "text",
+        "real",
+        "aux_first",
+        "option_first",
+        "comma_pair",
+        "comma_end",
+        "mxactr_text",
+    ],
+)
+def test_mfusgriv_header_invalid_irivcb_rejected(function_tmpdir, header):
+    """A second word that is present but not an integer is a conversion error
+    in USG-T (URWORD stops); load raises instead of taking IRIVCB = 0. A record
+    with one word that is not an integer (e.g. "1,55": URWORD splits on the
+    comma) is not taken as a header without IRIVCB either."""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "bad.riv"
+    riv_in.write_text(f"# manual\n{header}\n{_RIV_PERIODS}")
+    ml = _riv_disu_model_2sp(function_tmpdir / "l")
+    with pytest.raises(ValueError):
+        MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+
+
+@pytest.mark.parametrize("decl", ["AUX IRCH", "auxiliary irch"])
+def test_mfusgriv_header_irivcb_zero_with_aux_irch(function_tmpdir, decl):
+    """Regression: with IRIVCB 0 written explicitly, AUX IRCH stays an ordinary
+    declared AUX variable (load, write, reload) and options keep their text."""
+    from flopy.mfusg import MfUsgRiv
+
+    riv_in = function_tmpdir / "aux0.riv"
+    riv_in.write_text(
+        f"# manual\n 1 0 NOPRINT {decl}\n"
+        " 1 0    Stress Period 1\n"
+        " 3  12.000000  5.000000e+00  8.000000  7.000000e+00\n"
+        " -1 0    Stress Period 2\n"
+    )
+    ml = _riv_disu_model_2sp(function_tmpdir / "l")
+    riv = MfUsgRiv.load(str(riv_in), ml, nper=2, ext_unit_dict={})
+    name = decl.split()[1]
+    assert riv.ipakcb == 0
+    assert riv.options == ["NOPRINT", decl]
+    assert riv.stress_period_data[1][name][0] == 7.0
+    riv.fn_path = str(function_tmpdir / "out.riv")
+    riv.write_file()
+    lines = Path(riv.fn_path).read_text().splitlines()
+    assert lines[1].split() == ["1", "0", "NOPRINT"] + decl.split()
+    assert lines[3].split()[-1] == "7.000000e+00"
+
+
 def test_mfusgets_construction(function_tmpdir):
     """MfUsgEts can be constructed and attached to a structured model."""
     from flopy.mfusg import MfUsgEts
@@ -15953,3 +16080,969 @@ def test_mfusg_voronoi_unstructuredgrid_props(tmp_path):
             np.testing.assert_array_equal(
                 ug.get_cell_vertices(n), verts[vor.iverts[c]].tolist()
             )
+
+
+# ---------------------------------------------------------------------------
+# NTCOMP-B1: component counts (MCOMP, IHEAT, IMCOMP -> MCOMPT, NTCOMP) and
+# immobile components in BCT. USG-T 2.8.1 glo2btnu1.f GWT2BCT1AR: NTCOMP =
+# IMCOMP + MCOMP in the free-format branch, MCOMPT = MCOMP + 1 and NTCOMP + 1
+# with IHEAT=1; species loop DO ICOMP=1,NTCOMP (order: mobile, temperature,
+# immobile). Expected file contents are written here by hand; values are
+# unique per array so that each record can be identified.
+# ---------------------------------------------------------------------------
+
+_NTC_HEAT = {
+    "htcondw": 0.58,
+    "rhow": 1000.0,
+    "htcapw": 4186.0,
+    "htcaps": 51.0,
+    "htconds": 52.0,
+    "heat": 31.0,
+}
+
+
+def _ntc_model(ws, name="ntc", free=True, structured=True):
+    """MfUsg with a 1-layer, 3-cell DIS (or DISU) grid and BAS."""
+    from flopy.modflow import ModflowDis
+
+    ml = MfUsg(modelname=name, model_ws=str(ws), structured=structured)
+    if structured:
+        ModflowDis(ml, nlay=1, nrow=1, ncol=3, nper=1, steady=True)
+    else:
+        MfUsgDisU(
+            ml,
+            nodes=3,
+            nlay=1,
+            njag=3,
+            iac=np.ones(3, dtype=int),
+            ja=np.arange(1, 4),
+            cl12=np.ones(3),
+            fahl=np.ones(3),
+            area=1.0,
+            top=[0.0] * 3,
+            bot=[-1.0] * 3,
+        )
+    MfUsgBas(ml, ibound=1, strt=1.0)
+    ml.free_format_input = free
+    return ml
+
+
+def _ntc_bct(ml, **kw):
+    base = {"mcomp": 1, "icbndflg": 1, "idisp": 0, "prsity": 0.2, "conc": 21.0}
+    base.update(kw)
+    return MfUsgBct(ml, **base)
+
+
+def _ntc_consts(path):
+    """CONSTANT values of a written file, in file order (no FloPy reader)."""
+    import re
+
+    pat = re.compile(r"^\s*CONSTANT\s+([-+0-9.eE]+)", re.I | re.M)
+    return [round(float(v), 6) for v in pat.findall(Path(path).read_text())]
+
+
+def _ntc_state(ml):
+    return (
+        [type(p).__name__ for p in ml.packagelist],
+        list(ml.output_units),
+        (ml.itrnsp, ml.mcomp, ml.iheat, getattr(ml, "imcomp", None)),
+    )
+
+
+def test_mfusg_component_counts_without_bct():
+    ml = MfUsg()
+    assert (ml.mcomp, ml.iheat, ml.imcomp, ml.mcompt, ml.ntcomp) == (0, 0, 0, 0, 0)
+
+
+@pytest.mark.parametrize(
+    "mcomp, iheat, imcomp, mcompt, ntcomp",
+    [
+        (1, 0, 0, 1, 1),
+        (2, 0, 0, 2, 2),
+        (1, 1, 0, 2, 2),
+        (1, 0, 1, 1, 2),
+        (1, 0, 2, 1, 3),
+        (3, 0, 1, 3, 4),
+        (2, 1, 3, 3, 6),
+    ],
+)
+def test_mfusg_component_counts(function_tmpdir, mcomp, iheat, imcomp, mcompt, ntcomp):
+    ml = _ntc_model(function_tmpdir, structured=False)
+    kw = dict(_NTC_HEAT, bulkd=1.6) if iheat else {}
+    if imcomp:
+        kw["imconc"] = [41.0 + i for i in range(imcomp)]
+    _ntc_bct(
+        ml,
+        mcomp=mcomp,
+        iheat=iheat,
+        imcomp=imcomp,
+        conc=[21.0 + i for i in range(mcomp)],
+        **kw,
+    )
+    assert (ml.mcomp, ml.iheat, ml.imcomp) == (mcomp, iheat, imcomp)
+    assert (ml.mcompt, ml.ntcomp) == (mcompt, ntcomp)
+
+
+def test_mfusg_component_counts_read_only(function_tmpdir):
+    ml = _ntc_model(function_tmpdir)
+    _ntc_bct(ml, imcomp=1, imconc=41.0)
+    for name in ("mcompt", "ntcomp"):
+        with pytest.raises(AttributeError):
+            setattr(ml, name, 5)
+    assert (ml.mcompt, ml.ntcomp) == (1, 2)
+
+
+def test_mfusgbct_counts_replaced_with_package(function_tmpdir):
+    """A new BCT replaces the old one and the model counts follow it."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, mcomp=1, imcomp=2, imconc=[41.0, 42.0])
+    assert (ml.mcompt, ml.ntcomp) == (1, 3)
+    with pytest.warns(UserWarning, match="Replacing existing"):
+        bct2 = _ntc_bct(ml, mcomp=2, iheat=1, conc=[21.0, 22.0], bulkd=1.6, **_NTC_HEAT)
+    assert [p for p in ml.packagelist if isinstance(p, MfUsgBct)] == [bct2]
+    assert (ml.mcomp, ml.iheat, ml.imcomp, ml.mcompt, ml.ntcomp) == (2, 1, 0, 3, 3)
+
+
+def test_mfusgbct_add_package_false_keeps_model_counts(function_tmpdir):
+    ml = _ntc_model(function_tmpdir)
+    before = _ntc_state(ml)
+    bct = _ntc_bct(
+        ml, mcomp=2, imcomp=1, conc=[21.0, 22.0], imconc=41.0, add_package=False
+    )
+    assert _ntc_state(ml) == before
+    assert (bct.mcomp, bct.imcomp) == (2, 1)
+
+
+@pytest.mark.parametrize("imcomp", [1, 2, 3])
+def test_mfusgbct_imconc_sized_by_imcomp(function_tmpdir, imcomp):
+    """imcomp smaller, equal and larger than mcomp=2."""
+    ml = _ntc_model(function_tmpdir)
+    imconc = [41.0, 42.0, 43.0][:imcomp]
+    bct = _ntc_bct(ml, mcomp=2, imcomp=imcomp, conc=[21.0, 22.0], imconc=imconc)
+    assert len(bct.imconc) == imcomp
+    bct.fn_path = str(function_tmpdir / "im.bct")
+    bct.write_file()
+    # PRSITY; CONC mobile 1..2; IMCONC immobile 1..imcomp
+    assert _ntc_consts(bct.fn_path) == [0.2, 21.0, 22.0, *imconc]
+
+
+def test_mfusgbct_imconc_scalar_broadcast(function_tmpdir):
+    ml = _ntc_model(function_tmpdir)
+    bct = _ntc_bct(ml, mcomp=1, imcomp=3, imconc=44.0)
+    bct.fn_path = str(function_tmpdir / "sc.bct")
+    bct.write_file()
+    assert _ntc_consts(bct.fn_path) == [0.2, 21.0, 44.0, 44.0, 44.0]
+
+
+def test_mfusgbct_imcomp_heat_order_disu(function_tmpdir):
+    """DISU, IHEAT=1: mobile CONC, temperature, then immobile (control)."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    bct = _ntc_bct(ml, iheat=1, imcomp=2, bulkd=1.6, imconc=[41.0, 42.0], **_NTC_HEAT)
+    bct.fn_path = str(function_tmpdir / "h.bct")
+    bct.write_file()
+    # PRSITY, BULKD (IHEAT, SGWT2BCT1G), HTCAPS, HTCONDS, CONC, TEMP, IMCONC x2
+    assert _ntc_consts(bct.fn_path) == [0.2, 1.6, 51.0, 52.0, 21.0, 31.0, 41.0, 42.0]
+    assert (ml.mcompt, ml.ntcomp) == (2, 4)
+
+
+_NTC_HAND_IMCOMP2 = """# hand-written BCT: MCOMP=1, IMCOMP=2, no per-species options
+ 1 0 1 1 0 0 0 -999.0 1.0e-6 0 0 0.0 0 0 0 0 2 0 0
+CONSTANT 0.25
+CONSTANT 23.0
+CONSTANT 45.0
+CONSTANT 46.0
+"""
+
+
+def test_mfusgbct_load_imcomp_manual_file(function_tmpdir):
+    """Independent hand-written file: every immobile component is loaded."""
+    p = function_tmpdir / "hand.bct"
+    p.write_text(_NTC_HAND_IMCOMP2)
+    ml = _ntc_model(function_tmpdir)
+    bct = MfUsgBct.load(str(p), ml)
+    assert (bct.mcomp, bct.imcomp) == (1, 2)
+    assert (ml.mcomp, ml.iheat, ml.imcomp, ml.ntcomp) == (1, 0, 2, 3)
+    assert len(bct.imconc) == 2
+    assert [float(bct.imconc[i][0].array.mean()) for i in range(2)] == [45.0, 46.0]
+    bct.fn_path = str(function_tmpdir / "rewritten.bct")
+    bct.write_file()
+    assert _ntc_consts(bct.fn_path) == [0.25, 23.0, 45.0, 46.0]
+
+
+@pytest.mark.parametrize(
+    "kw, match",
+    [
+        ({"imcomp": 1}, "requires imconc"),
+        ({"imcomp": 2, "imconc": [41.0]}, "1 values for imcomp=2"),
+        ({"imcomp": 1, "imconc": [41.0, 42.0]}, "2 values for imcomp=1"),
+        ({"imcomp": -1}, "imcomp must be an integer >= 0"),
+        ({"imcomp": 1.5, "imconc": 41.0}, "imcomp must be an integer >= 0"),
+        ({"mcomp": -1}, "mcomp must be an integer >= 0"),
+    ],
+)
+def test_mfusgbct_invalid_counts_rejected(function_tmpdir, kw, match):
+    ml = _ntc_model(function_tmpdir)
+    before = _ntc_state(ml)
+    with pytest.raises(ValueError, match=match):
+        _ntc_bct(ml, ipakcb=55, **kw)
+    assert _ntc_state(ml) == before
+
+
+_NTC_PER_SPECIES = {
+    "iadsorb": ({"iadsorb": 1, "bulkd": 1.6, "adsorb": 11.0}, "IADSORB"),
+    "iadsorb_izod2": (
+        {"iadsorb": 1, "izod": 2, "bulkd": 1.6, "adsorb": 11.0, "zodrs": 12.0},
+        "IZOD",
+    ),
+    "izod1": ({"izod": 1, "zodrw": 13.0}, "IZOD"),
+    "ifod1": ({"ifod": 1, "fodrw": 15.0}, "IFOD"),
+    "chaindecay": (
+        {"chaindecay": True, "nparent": [0], "jparent": [0], "stotio": [0]},
+        "CHAINDECAY",
+    ),
+    "aw_adsorb": (
+        {
+            "aw_adsorb": True,
+            "iarea_fn": 1,
+            "ikawi_fn": 1,
+            "awamax": 1.0,
+            "alangaw": 1.0,
+            "blangaw": 1.0,
+        },
+        "A-W_ADSORB",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_NTC_PER_SPECIES))
+def test_mfusgbct_imcomp_per_species_guard(function_tmpdir, case):
+    """Per-species data that 2.8.1 also reads for immobile components."""
+    kw, opt = _NTC_PER_SPECIES[case]
+    ml = _ntc_model(function_tmpdir)
+    before = _ntc_state(ml)
+    with pytest.raises(NotImplementedError, match=opt):
+        _ntc_bct(ml, ipakcb=55, imcomp=1, imconc=41.0, **kw)
+    assert _ntc_state(ml) == before
+    # the same options without immobile components are not rejected
+    _ntc_bct(ml, **kw)
+
+
+@pytest.mark.parametrize("kw", [{"izod": 2}, {"ifod": 2}])
+def test_mfusgbct_imcomp_no_per_species_read_allowed(function_tmpdir, kw):
+    """IZOD/IFOD=2 without IADSORB: 2.8.1 reads no decay arrays (control)."""
+    ml = _ntc_model(function_tmpdir)
+    bct = _ntc_bct(ml, imcomp=1, imconc=41.0, **kw)
+    bct.fn_path = str(function_tmpdir / "nd.bct")
+    bct.write_file()
+    assert _ntc_consts(bct.fn_path) == [0.2, 21.0, 41.0]
+
+
+def test_mfusgbct_imcomp_fixed_format_guard(function_tmpdir):
+    ml = _ntc_model(function_tmpdir, free=False)
+    before = _ntc_state(ml)
+    with pytest.raises(NotImplementedError, match="fixed format"):
+        _ntc_bct(ml, imcomp=1, imconc=41.0)
+    assert _ntc_state(ml) == before
+    _ntc_bct(ml)  # imcomp=0 in fixed format is unchanged
+
+
+# 2.8.1 order with IADSORB=1, IMCOMP=1: PRSITY, BULKD, ADSORB(1), CONC(1),
+# ADSORB(immobile), IMCONC. Before B1 the 12.0 was loaded as IMCONC.
+_NTC_HAND_ADSORB = """# hand-written BCT: MCOMP=1, IMCOMP=1, IADSORB=1 (2.8.1 order)
+ 1 0 1 1 0 1 0 -999.0 1.0e-6 0 0 0.0 0 0 0 0 1 0 0
+CONSTANT 0.2
+CONSTANT 1.6
+CONSTANT 11.0
+CONSTANT 21.0
+CONSTANT 12.0
+CONSTANT 41.0
+"""
+
+
+def test_mfusgbct_load_imcomp_per_species_guard(function_tmpdir):
+    p = function_tmpdir / "ads.bct"
+    p.write_text(_NTC_HAND_ADSORB)
+    ml = _ntc_model(function_tmpdir)
+    before = _ntc_state(ml)
+    with pytest.raises(NotImplementedError, match="IADSORB"):
+        MfUsgBct.load(str(p), ml)
+    assert _ntc_state(ml) == before
+    assert p.read_text() == _NTC_HAND_ADSORB
+
+
+def test_mfusgbct_load_imcomp_fixed_format_guard(function_tmpdir):
+    p = function_tmpdir / "fx.bct"
+    p.write_text(_NTC_HAND_IMCOMP2)
+    ml = _ntc_model(function_tmpdir, free=False)
+    before = _ntc_state(ml)
+    with pytest.raises(NotImplementedError, match="fixed format"):
+        MfUsgBct.load(str(p), ml)
+    assert _ntc_state(ml) == before
+
+
+def _ntc_change_imcomp(ml, bct):
+    bct.imcomp = 2
+
+
+def _ntc_change_format(ml, bct):
+    ml.free_format_input = False
+
+
+def _ntc_change_iadsorb(ml, bct):
+    bct.iadsorb = 1
+
+
+def _ntc_change_model_imcomp(ml, bct):
+    ml.imcomp = 0
+
+
+def _ntc_change_mcomp(ml, bct):
+    bct.mcomp = 2
+
+
+@pytest.mark.parametrize(
+    "change, exc, match",
+    [
+        (_ntc_change_imcomp, ValueError, "imconc has 1 components for imcomp=2"),
+        (_ntc_change_format, NotImplementedError, "fixed format"),
+        (_ntc_change_iadsorb, NotImplementedError, "IADSORB"),
+        (_ntc_change_model_imcomp, ValueError, "differ from the model counts"),
+        (_ntc_change_mcomp, ValueError, "conc has 1 components for mcomp=2"),
+    ],
+)
+def test_mfusgbct_write_revalidates_before_opening(function_tmpdir, change, exc, match):
+    """Changes after construction are detected before the file is truncated."""
+    ml = _ntc_model(function_tmpdir)
+    bct = _ntc_bct(ml, imcomp=1, imconc=41.0)
+    bct.fn_path = str(function_tmpdir / "keep.bct")
+    Path(bct.fn_path).write_text("existing content\n")
+    change(ml, bct)
+    with pytest.raises(exc, match=match):
+        bct.write_file()
+    assert Path(bct.fn_path).read_text() == "existing content\n"
+
+
+def test_mfusgbct_rejected_replacement_keeps_model(function_tmpdir):
+    ml = _ntc_model(function_tmpdir)
+    bct = _ntc_bct(ml, mcomp=1)
+    before = _ntc_state(ml)
+    with pytest.raises(NotImplementedError, match="IADSORB"):
+        _ntc_bct(
+            ml, ipakcb=55, imcomp=1, imconc=41.0, iadsorb=1, bulkd=1.6, adsorb=11.0
+        )
+    assert _ntc_state(ml) == before
+    assert ml.get_package("BCT") is bct
+
+
+# NTCOMP-B1 v2: the counts cannot change after construction. write_file
+# rejects them before the file (or the caller's handle) receives anything.
+
+
+def _ntc_heat_on(ml, bct):
+    bct.iheat = 1
+    ml.iheat = 1
+
+
+def _ntc_heat_off(ml, bct):
+    bct.iheat = 0
+    ml.iheat = 0
+
+
+def _ntc_imcomp_off(ml, bct):
+    bct.imcomp = 0
+    ml.imcomp = 0
+
+
+_NTC_COORDINATED = {
+    "heat_0_to_1": ({}, _ntc_heat_on),
+    "heat_1_to_0": (dict(iheat=1, bulkd=1.6, **_NTC_HEAT), _ntc_heat_off),
+    "imcomp_1_to_0": ({"imcomp": 1, "imconc": 41.0}, _ntc_imcomp_off),
+}
+
+
+@pytest.mark.parametrize("target", ["file", "handle"])
+@pytest.mark.parametrize("case", list(_NTC_COORDINATED))
+def test_mfusgbct_write_rejects_coordinated_count_change(function_tmpdir, case, target):
+    """Package and model counts changed together: still rejected, nothing written."""
+    kw, change = _NTC_COORDINATED[case]
+    ml = _ntc_model(function_tmpdir, structured=False)
+    bct = _ntc_bct(ml, **kw)
+    bct.fn_path = str(function_tmpdir / "keep.bct")
+    Path(bct.fn_path).write_text("existing content\n")
+    change(ml, bct)
+    assert (ml.mcomp, ml.iheat, ml.imcomp) == (bct.mcomp, bct.iheat, bct.imcomp)
+    handle = io.StringIO() if target == "handle" else None
+    with pytest.raises(ValueError, match="arrays were built with"):
+        bct.write_file(f=handle)
+    assert Path(bct.fn_path).read_text() == "existing content\n"
+    if handle is not None:
+        assert handle.getvalue() == ""
+
+
+def test_mfusgbct_write_allows_value_changes(function_tmpdir):
+    """Changing array values (not counts) after construction is still written."""
+    from flopy.utils import Util2d
+
+    ml = _ntc_model(function_tmpdir)
+    bct = _ntc_bct(ml, imcomp=1, imconc=41.0)
+    bct.conc[0][0] = Util2d(ml, (3,), np.float32, 77.0, "conc")
+    bct.fn_path = str(function_tmpdir / "val.bct")
+    bct.write_file()
+    assert _ntc_consts(bct.fn_path) == [0.2, 77.0, 41.0]
+
+
+def test_mfusgbct_replacement_with_heat_writes(function_tmpdir):
+    """Heat is added by building a new BCT (0 -> 1 through replacement)."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    with pytest.warns(UserWarning, match="Replacing existing"):
+        bct = _ntc_bct(ml, iheat=1, bulkd=1.6, **_NTC_HEAT)
+    bct.fn_path = str(function_tmpdir / "heat.bct")
+    bct.write_file()
+    assert _ntc_consts(bct.fn_path) == [0.2, 1.6, 51.0, 52.0, 21.0, 31.0]
+
+
+def test_mfusgbct_remove_package_keeps_model_counts(function_tmpdir):
+    """Documented limit: removing BCT does not reset the model counts."""
+    ml = _ntc_model(function_tmpdir)
+    _ntc_bct(ml, mcomp=2, imcomp=1, conc=[21.0, 22.0], imconc=41.0)
+    ml.remove_package("BCT")
+    assert ml.get_package("BCT") is None
+    assert (ml.mcomp, ml.imcomp, ml.ntcomp) == (2, 1, 3)
+
+
+# ---------------------------------------------------------------------------
+# NTCOMP-B2: EVT ETFACTOR and ETS ESFACTOR by MCOMPT. USG-T 2.8.1 and 2.7.0
+# (gwf2evt8u1.f, gwf2ets8u1.f, identical): the transport items are read only
+# with BCT in the name file; MCOMPT values (mobile components + temperature,
+# no immobile components); READ(IN,*) in free format, FORMAT(20F10.3) fixed.
+# EVT: IETFACTOR 0 -> 0.0, < 0 -> 1.0, > 0 read. ETS: IESFACTOR 0 -> 0.0,
+# /= 0 read. Expected contents are written here by hand.
+# ---------------------------------------------------------------------------
+
+
+def _b2_ets(ml, **kw):
+    from flopy.mfusg import MfUsgEts
+
+    return MfUsgEts(ml, netsop=1, evtr=1.2e-4, netseg=1, **kw)
+
+
+def _b2_evt(ml, **kw):
+    return MfUsgEvt(ml, nevtop=1, evtr=1.0e-4, **kw)
+
+
+def _b2_heat(ml, **kw):
+    return _ntc_bct(ml, iheat=1, bulkd=1.6, **_NTC_HEAT, **kw)
+
+
+def _b2_lines(path):
+    return Path(path).read_text().splitlines()
+
+
+def _b2_floats(line):
+    return [float(v) for v in line.split()]
+
+
+_B2_PKG = {
+    "ets": (_b2_ets, "iesfactor", "esfactor"),
+    "evt": (_b2_evt, "ietfactor", "etfactor"),
+}
+
+
+def _b2_pkg(kind, ml, value, flag=1, **kw):
+    build, flag_name, value_name = _B2_PKG[kind]
+    return build(ml, **{flag_name: flag, value_name: value}, **kw)
+
+
+@pytest.mark.parametrize("kind, nhead", [("ets", 5), ("evt", 3)])
+def test_mfusg_transport_factor_mcompt_heat(function_tmpdir, kind, nhead):
+    """IHEAT=1: MCOMPT = 2 factors, mobile component then temperature."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    pkg = _b2_pkg(kind, ml, [0.5, 0.75])
+    pkg.fn_path = str(function_tmpdir / f"h.{kind}")
+    pkg.write_file()
+    lines = _b2_lines(pkg.fn_path)
+    assert len(lines[1].split()) == nhead and lines[1].split()[-1] == "1"
+    assert _b2_floats(lines[2]) == [0.5, 0.75]
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_mcomp_length_rejected(function_tmpdir, kind):
+    """A list of MCOMP values with heat is rejected when built with BCT."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    with pytest.raises(ValueError, match="MCOMPT=2"):
+        _b2_pkg(kind, ml, [0.5])
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_scalar_broadcast(function_tmpdir, kind):
+    """A scalar is used for every component; a one-value list is not."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    pkg = _b2_pkg(kind, ml, 0.5)
+    pkg.fn_path = str(function_tmpdir / f"s.{kind}")
+    pkg.write_file()
+    assert _b2_floats(_b2_lines(pkg.fn_path)[2]) == [0.5, 0.5]
+    with pytest.raises(ValueError, match="MCOMPT=2"):
+        _b2_pkg(kind, ml, [0.5])
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_immobile_excluded(function_tmpdir, kind):
+    """IMCOMP=2 without heat: MCOMPT = MCOMP = 1 factor."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, imcomp=2, imconc=[41.0, 42.0])
+    assert (ml.mcompt, ml.ntcomp) == (1, 3)
+    pkg = _b2_pkg(kind, ml, [0.5])
+    pkg.fn_path = str(function_tmpdir / f"i.{kind}")
+    pkg.write_file()
+    assert _b2_floats(_b2_lines(pkg.fn_path)[2]) == [0.5]
+
+
+def test_mfusg_transport_factor_flow_only_headers(function_tmpdir):
+    """No BCT: EVT dataset 2 has 2 integers and ETS item 2a 4 (no transport)."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    evt = _b2_evt(ml)
+    ets = _b2_ets(ml)
+    for pkg, n in ((evt, 2), (ets, 4)):
+        pkg.fn_path = str(function_tmpdir / f"f.{pkg._ftype().lower()}")
+        pkg.write_file()
+        lines = _b2_lines(pkg.fn_path)
+        assert len(lines[1].split()) == n
+        assert "CONSTANT" not in lines[2] and len(lines[2].split()) >= 3
+
+
+def test_mfusg_transport_header_with_bct_itrnsp0(function_tmpdir):
+    """A registered BCT sets the transport header even with ITRNSP=0."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, itrnsp=0)
+    evt = _b2_evt(ml, ietfactor=1, etfactor=[0.5])
+    evt.fn_path = str(function_tmpdir / "t0.evt")
+    evt.write_file()
+    lines = _b2_lines(evt.fn_path)
+    assert lines[1].split() == ["1", "0", "1"] and _b2_floats(lines[2]) == [0.5]
+
+
+def test_mfusg_transport_factor_manual_counts(function_tmpdir):
+    """Manual-count mode (no BCT ever added, itrnsp set): counts are used."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    ml.itrnsp, ml.mcomp, ml.iheat = 1, 1, 1
+    evt = _b2_evt(ml, ietfactor=1, etfactor=[0.5, 0.75])
+    evt.fn_path = str(function_tmpdir / "m.evt")
+    evt.write_file()
+    assert _b2_floats(_b2_lines(evt.fn_path)[2]) == [0.5, 0.75]
+    ml2 = _ntc_model(function_tmpdir, name="m2", structured=False)
+    ml2.itrnsp, ml2.mcomp = 1, 0
+    with pytest.raises(ValueError, match="MCOMPT >= 1"):
+        _b2_evt(ml2, ietfactor=1, etfactor=0.5)
+
+
+_B2_ETS_TAIL = (
+    "         1         1         1\nCONSTANT 0.0\nCONSTANT 3.3e-4\nCONSTANT 1.0\n"
+)
+_B2_EVT_TAIL = (
+    "         1         1         1        -1\n"
+    "CONSTANT 0.0\nCONSTANT 3.3e-4\nCONSTANT 1.0\n"
+)
+
+
+def _b2_load(kind, ml, ws, text):
+    from flopy.mfusg import MfUsgEts
+
+    p = Path(ws) / f"hand.{kind}"
+    p.write_text(text)
+    cls = MfUsgEts if kind == "ets" else MfUsgEvt
+    return cls.load(str(p), ml), p
+
+
+def _b2_hand(kind, factors_text, flag=1):
+    if kind == "ets":
+        return (
+            f"# hand ETS\n         1         0         0         1{flag:10d}\n"
+            + factors_text
+            + _B2_ETS_TAIL
+        )
+    return f"# hand EVT\n         1         0{flag:10d}\n" + factors_text + _B2_EVT_TAIL
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+@pytest.mark.parametrize(
+    "factors_text, expected",
+    [
+        ("0.5 0.75\n", [0.5, 0.75]),
+        ("0.5\n0.75\n", [0.5, 0.75]),
+        ("0.5, 0.75\n", [0.5, 0.75]),
+        ("2*0.5\n", [0.5, 0.5]),
+        ("0.5 0.75 9.9\n", [0.5, 0.75]),  # rest of the last record skipped
+    ],
+)
+def test_mfusg_transport_factor_load_free(
+    function_tmpdir, kind, factors_text, expected
+):
+    """Hand file, free format, heat: MCOMPT values and cursor afterwards."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    text = _b2_hand(kind, factors_text)
+    pkg, p = _b2_load(kind, ml, function_tmpdir, text)
+    values = pkg.esfactor if kind == "ets" else pkg.etfactor
+    assert list(np.asarray(values, dtype=float)) == expected
+    assert float(pkg.evtr[0].array.mean()) == pytest.approx(3.3e-4)  # cursor
+    assert p.read_text() == text
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+@pytest.mark.parametrize(
+    "factors_text, match",
+    [("0.5 abc\n", "invalid factor value"), ("", "end of file"), ("0.5 /\n", "slash")],
+)
+def test_mfusg_transport_factor_load_free_errors(
+    function_tmpdir, kind, factors_text, match
+):
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    text = _b2_hand(kind, factors_text)
+    if factors_text == "":
+        text = text.split("\n")[0] + "\n" + text.split("\n")[1] + "\n"
+    with pytest.raises(ValueError, match=match):
+        _b2_load(kind, ml, function_tmpdir, text)
+
+
+def test_mfusg_transport_factor_load_free_ambiguous(function_tmpdir):
+    """Documented limit: a short record followed by numbers is continued, as
+    in READ(IN,*); here the period record '1 1 1' gives the second factor."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    text = "# hand ETS\n         1         0         0         1         1\n0.5\n"
+    text += _B2_ETS_TAIL
+    # the factor reader takes 1 from the period record; the error appears
+    # later, when 'CONSTANT 0.0' is read as the period record
+    with pytest.raises(ValueError, match="invalid literal"):
+        _b2_load("ets", ml, function_tmpdir, text)
+
+
+def test_mfusgevt_load_ietfactor_implicit(function_tmpdir):
+    """IETFACTOR < 0 and 0: no record is read (cursor), 1.0 and 0.0."""
+    for flag, value in ((-1, 1.0), (0, 0.0)):
+        ml = _ntc_model(function_tmpdir, name=f"i{flag + 1}", structured=False)
+        _b2_heat(ml)
+        evt, _ = _b2_load("evt", ml, function_tmpdir, _b2_hand("evt", "", flag=flag))
+        assert evt.ietfactor == flag and evt.etfactor == value
+        assert float(evt.evtr[0].array.mean()) == pytest.approx(3.3e-4)
+
+
+def test_mfusgevt_load_flow_only_third_integer_ignored(function_tmpdir):
+    """Without BCT USG-T reads 2 integers; the factor flag is not read."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    evt, _ = _b2_load("evt", ml, function_tmpdir, _b2_hand("evt", "", flag=1))
+    assert evt.ietfactor == 0
+    assert float(evt.evtr[0].array.mean()) == pytest.approx(3.3e-4)
+
+
+def _b2_fixed_fields(values):
+    return "".join(f"{v:10.3f}" for v in values)
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+@pytest.mark.parametrize("n", [2, 20, 21])
+def test_mfusg_transport_factor_fixed_format(function_tmpdir, kind, n):
+    """FORMAT(20F10.3): hand records of 20 fields, cursor, and the writer."""
+    ml = _ntc_model(function_tmpdir, free=False, structured=False)
+    if n == 2:
+        _b2_heat(ml)
+    else:
+        _ntc_bct(ml, mcomp=n, conc=[21.0 + i for i in range(n)])
+    values = [0.25 + 0.001 * i for i in range(n)]
+    rec = [_b2_fixed_fields(values[i : i + 20]) for i in range(0, n, 20)]
+    text = _b2_hand(kind, "\n".join(rec) + "\n")
+    pkg, _ = _b2_load(kind, ml, function_tmpdir, text)
+    loaded = pkg.esfactor if kind == "ets" else pkg.etfactor
+    assert np.allclose(loaded, values, atol=1e-6)
+    assert float(pkg.evtr[0].array.mean()) == pytest.approx(3.3e-4)
+    pkg.fn_path = str(function_tmpdir / f"fx.{kind}")
+    pkg.write_file()
+    lines = _b2_lines(pkg.fn_path)
+    nrec = (n + 19) // 20
+    out = []
+    for line in lines[2 : 2 + nrec]:
+        assert len(line) <= 200
+        out += [float(line[i : i + 10]) for i in range(0, len(line), 10)]
+    assert np.allclose(out, values, atol=1e-6)
+
+
+def test_mfusg_transport_factor_fixed_implied_decimals(function_tmpdir):
+    """F10.3 without a decimal point has 3 implied decimals; a blank field is 0."""
+    ml = _ntc_model(function_tmpdir, free=False, structured=False)
+    _b2_heat(ml)
+    pkg, _ = _b2_load("ets", ml, function_tmpdir, _b2_hand("ets", "       500\n"))
+    assert list(pkg.esfactor) == [0.5, 0.0]
+
+
+def test_mfusg_transport_factor_fixed_header_columns(function_tmpdir):
+    """Fixed format reads item 2a by columns (5I10), as USG-T does."""
+    ml = _ntc_model(function_tmpdir, free=False, structured=False)
+    _b2_heat(ml)
+    text = "# hand ETS\n         1         0         0         1         2\n"
+    text += _b2_fixed_fields([0.5, 0.75]) + "\n" + _B2_ETS_TAIL
+    pkg, _ = _b2_load("ets", ml, function_tmpdir, text)
+    assert (pkg.netsop, pkg.netseg, pkg.iesfactor) == (1, 1, 2)
+    assert list(pkg.esfactor) == [0.5, 0.75]
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_load_short(function_tmpdir, kind):
+    """Fewer values than MCOMPT before the end of the file: ValueError."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, mcomp=3, conc=[21.0, 22.0, 23.0])
+    text = _b2_hand(kind, "0.5 0.75\n").split("         1         1         1")[0]
+    with pytest.raises(ValueError, match="end of file"):
+        _b2_load(kind, ml, function_tmpdir, text)
+
+
+@pytest.mark.parametrize("flag", [2, -1])
+def test_mfusgets_iesfactor_nonzero_reads_values(function_tmpdir, flag):
+    """IESFACTOR /= 0 (not only 1) writes and reads ESFACTOR."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    ets = _b2_ets(ml, iesfactor=flag, esfactor=[0.5])
+    ets.fn_path = str(function_tmpdir / "nz.ets")
+    ets.write_file()
+    lines = _b2_lines(ets.fn_path)
+    assert int(lines[1].split()[4]) == flag and _b2_floats(lines[2]) == [0.5]
+    ml2 = _ntc_model(function_tmpdir, name="r", structured=False)
+    _ntc_bct(ml2)
+    from flopy.mfusg import MfUsgEts
+
+    ets2 = MfUsgEts.load(ets.fn_path, ml2)
+    assert ets2.iesfactor == flag and list(ets2.esfactor) == [0.5]
+
+
+def test_mfusgets_iesfactor_requires_values(function_tmpdir):
+    """IESFACTOR /= 0 needs ESFACTOR (no silent ones); flow only is unchanged."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    with pytest.raises(ValueError, match="required"):
+        _b2_ets(ml, iesfactor=1)
+    flow = _ntc_model(function_tmpdir, name="flow", structured=False)
+    ets = _b2_ets(flow, iesfactor=1)
+    ets.fn_path = str(function_tmpdir / "flow.ets")
+    ets.write_file()
+    assert len(_b2_lines(ets.fn_path)[1].split()) == 4
+
+
+def _b2_write_rejected(pkg, ws, match):
+    pkg.fn_path = str(Path(ws) / f"keep.{pkg._ftype().lower()}")
+    Path(pkg.fn_path).write_text("existing content\n")
+    handle = io.StringIO()
+    for target in (None, handle):
+        with pytest.raises(ValueError, match=match):
+            pkg.write_file(f=target)
+    assert Path(pkg.fn_path).read_text() == "existing content\n"
+    assert handle.getvalue() == ""
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_built_before_bct(function_tmpdir, kind):
+    """Built before BCT: checked against the counts when written."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    ok = _b2_pkg(kind, ml, [0.5, 0.75])
+    bad = _b2_pkg(kind, ml, [0.5])
+    _ntc_bct(ml, mcomp=2, conc=[21.0, 22.0])
+    ok.fn_path = str(function_tmpdir / f"ok.{kind}")
+    ok.write_file()
+    assert _b2_floats(_b2_lines(ok.fn_path)[2]) == [0.5, 0.75]
+    _b2_write_rejected(bad, function_tmpdir, "MCOMPT=2")
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_bct_removed(function_tmpdir, kind):
+    """BCT removed: active factor rejected; inactive factor writes flow only."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    active = _b2_pkg(kind, ml, [0.5])
+    ml.remove_package("BCT")
+    _b2_write_rejected(active, function_tmpdir, "was removed")
+    for flag in [0, -1] if kind == "evt" else [0]:
+        ml2 = _ntc_model(function_tmpdir, name=f"r{flag + 1}", structured=False)
+        _ntc_bct(ml2)
+        inactive = _b2_pkg(kind, ml2, 0.5, flag=flag)
+        ml2.remove_package("BCT")
+        inactive.fn_path = str(function_tmpdir / f"in{flag + 1}.{kind}")
+        inactive.write_file()
+        assert len(_b2_lines(inactive.fn_path)[1].split()) == (
+            2 if kind == "evt" else 4
+        )
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_bct_added_directly(function_tmpdir, kind):
+    """A BCT added with add_package (counts not set by it) is rejected."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    pkg = _b2_pkg(kind, ml, [0.5])
+    bct2 = _ntc_bct(ml, mcomp=2, conc=[21.0, 22.0], add_package=False)
+    with pytest.warns(UserWarning):
+        ml.add_package(bct2)
+    _b2_write_rejected(pkg, function_tmpdir, "does not match the model")
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_bct_counts_mutated(function_tmpdir, kind):
+    ml = _ntc_model(function_tmpdir, structured=False)
+    bct = _ntc_bct(ml)
+    pkg = _b2_pkg(kind, ml, [0.5])
+    bct.mcomp, ml.mcomp = 2, 2
+    _b2_write_rejected(pkg, function_tmpdir, "arrays were built with")
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_bct_replaced(function_tmpdir, kind):
+    """Normal replacement (no heat -> heat): the new MCOMPT is used."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml)
+    pkg = _b2_pkg(kind, ml, 0.5)
+    with pytest.warns(UserWarning, match="Replacing existing"):
+        _b2_heat(ml)
+    pkg.fn_path = str(function_tmpdir / f"rp.{kind}")
+    pkg.write_file()
+    assert _b2_floats(_b2_lines(pkg.fn_path)[2]) == [0.5, 0.5]
+
+
+def test_mfusg_transport_factor_load_unsynced_bct(function_tmpdir):
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml).mcomp = 2
+    ml.mcomp = 2
+    with pytest.raises(ValueError, match="does not match the model"):
+        _b2_load("evt", ml, function_tmpdir, _b2_hand("evt", "0.5 0.5\n"))
+
+
+def test_mfusgets_esfactor_large_values_separated(function_tmpdir):
+    """Free format: values of 10 or more characters keep a separator."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, mcomp=2, conc=[21.0, 22.0])
+    ets = _b2_ets(ml, iesfactor=1, esfactor=[1234.5, 100.0])
+    ets.fn_path = str(function_tmpdir / "big.ets")
+    ets.write_file()
+    assert _b2_floats(_b2_lines(ets.fn_path)[2]) == [1234.5, 100.0]
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_free_more_than_20(function_tmpdir, kind):
+    """Free format: 21 factors on one record (READ(IN,*))."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _ntc_bct(ml, mcomp=21, conc=[21.0 + i for i in range(21)])
+    pkg = _b2_pkg(kind, ml, 0.5)
+    pkg.fn_path = str(function_tmpdir / f"m21.{kind}")
+    pkg.write_file()
+    assert _b2_floats(_b2_lines(pkg.fn_path)[2]) == [0.5] * 21
+
+
+# NTCOMP-B2 v2: null values of READ(IN,*) are rejected (not supported); valid
+# comma, blank, continuation and r*c forms; the factor text is built before
+# the file is opened.
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+@pytest.mark.parametrize(
+    "factors_text, expected",
+    [
+        ("0.5,0.75\n", [0.5, 0.75]),
+        ("0.5 ,  0.75\n", [0.5, 0.75]),
+        ("0.5,\n0.75\n", [0.5, 0.75]),  # final comma, record continued
+        ("0.5\n, 0.75\n", [0.5, 0.75]),  # blanks + comma: one separator
+        ("0.5\n\n0.75\n", [0.5, 0.75]),  # blank record
+        ("1*0.5, 1*0.75\n", [0.5, 0.75]),
+        ("0.5,0.75,\n", [0.5, 0.75]),
+        ("0.5,0.75,,\n", [0.5, 0.75]),  # rest of the last record skipped
+        ("2*0.5,, 9\n", [0.5, 0.5]),
+    ],
+    ids=[
+        "comma",
+        "comma-blanks",
+        "final-comma-continued",
+        "comma-next-record",
+        "blank-record",
+        "repeat-comma",
+        "final-comma",
+        "commas-after-last",
+        "repeat-commas-after",
+    ],
+)
+def test_mfusg_transport_factor_load_free_commas(
+    function_tmpdir, kind, factors_text, expected
+):
+    """Hand file, free format, heat: valid separators and cursor afterwards."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    text = _b2_hand(kind, factors_text)
+    pkg, p = _b2_load(kind, ml, function_tmpdir, text)
+    values = pkg.esfactor if kind == "ets" else pkg.etfactor
+    assert list(np.asarray(values, dtype=float)) == expected
+    assert float(pkg.evtr[0].array.mean()) == pytest.approx(3.3e-4)  # cursor
+    assert p.read_text() == text
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+@pytest.mark.parametrize(
+    "factors_text",
+    [
+        ",0.5 0.75\n",
+        ",\n0.5 0.75\n",
+        "0.5,,0.75\n",
+        "0.5, ,0.75\n",
+        "0.5 , , 0.75\n",
+        "0.5,\n,0.75\n",
+        "0.5,  \n  ,0.75\n",
+        "2*\n",
+        "0.5 1*\n",
+    ],
+    ids=[
+        "leading-comma",
+        "leading-comma-record",
+        "double-comma",
+        "comma-blank-comma",
+        "blanks-comma-blank-comma",
+        "commas-across-records",
+        "commas-blanks-across-records",
+        "null-repeat",
+        "null-repeat-last",
+    ],
+)
+def test_mfusg_transport_factor_load_free_null(function_tmpdir, kind, factors_text):
+    """A null value (empty field) is not supported: ValueError, no shift."""
+    ml = _ntc_model(function_tmpdir, structured=False)
+    _b2_heat(ml)
+    text = _b2_hand(kind, factors_text)
+    with pytest.raises(ValueError, match="null value"):
+        _b2_load(kind, ml, function_tmpdir, text)
+
+
+def test_mfusgets_fixed_factor_not_fitting_rejected_before_open(function_tmpdir):
+    """Fixed format: a finite ESFACTOR that does not fit 10 columns even as
+    10.3e is rejected before the file or the caller's handle is touched."""
+    ml = _ntc_model(function_tmpdir, free=False, structured=False)
+    _ntc_bct(ml)
+    ets = _b2_ets(ml, iesfactor=1, esfactor=-1e308)
+    _b2_write_rejected(ets, function_tmpdir, "does not fit a 10-column field")
+
+
+@pytest.mark.parametrize("kind", ["ets", "evt"])
+def test_mfusg_transport_factor_fixed_values_fallback(function_tmpdir, kind):
+    """Fixed format: values that fit 10 columns, the 10.3e fallback (ETS) and
+    -1e308 in EVT (10.2e fits 10 columns); read back by columns."""
+    ml = _ntc_model(function_tmpdir, free=False, structured=False)
+    _ntc_bct(ml, mcomp=3, conc=[21.0, 22.0, 23.0])
+    values = [0.5, 1234.5, -1e99] if kind == "ets" else [0.5, 1234.5, -1e308]
+    pkg = _b2_pkg(kind, ml, values)
+    pkg.fn_path = str(function_tmpdir / f"fb.{kind}")
+    pkg.write_file()
+    line = _b2_lines(pkg.fn_path)[2]
+    fields = [line[i : i + 10] for i in range(0, len(line), 10)]
+    if kind == "ets":
+        assert fields == ["  0.500000", " 1.234e+03", "-1.000e+99"]
+    else:
+        assert fields == ["  5.00e-01", "  1.23e+03", "-1.00e+308"]
+    loaded, _ = _b2_load(kind, ml, function_tmpdir, Path(pkg.fn_path).read_text())
+    got = loaded.esfactor if kind == "ets" else loaded.etfactor
+    assert np.allclose(got, [float(f) for f in fields], rtol=1e-12)

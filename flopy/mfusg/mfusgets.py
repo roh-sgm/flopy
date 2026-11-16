@@ -37,6 +37,13 @@ from ._usgt_parameters import (
     write_active_array_parameters,
     write_array_parameter_defs,
 )
+from .mfusg import (
+    _factor_text,
+    _fixed_ints,
+    _read_fixed_values,
+    _read_free_values,
+    _transport_factors,
+)
 
 
 class MfUsgEts(Package):
@@ -69,11 +76,16 @@ class MfUsgEts(Package):
     npets : int
         Number of named ETS parameters (NPETS). Default 0.
     iesfactor : int
-        Transport solute removal flag (IESFACTOR).
-        1 = read ESFACTOR per component; 0 = solutes left behind. Default 0.
-    esfactor : float or array of shape (mcomp,) or None
-        Solute removal fraction per component (ESFACTOR(MCOMP)). Read only
-        when transport is active (model.itrnsp != 0) and iesfactor == 1.
+        Transport solute removal flag (IESFACTOR). USG-T reads ESFACTOR when
+        it is not 0 (0 = solutes left behind). Written only when a BCT
+        package is registered (USG-T reads IESFACTOR only with BCT in the
+        name file) or in the manual-count mode (see Notes). Default 0.
+    esfactor : float, list or array of MCOMPT values, or None
+        Solute removal fraction per component, ESFACTOR(MCOMPT): mobile
+        components and temperature (IHEAT=1), not immobile components. A
+        scalar is used for every component; a list or array needs exactly
+        MCOMPT values. Required when iesfactor is not 0 and transport is
+        active (None raises ValueError when the file is written).
     pxdp : list of (float or array or dict keyed on kper) or None
         Proportional extinction depth at each of the (netseg-1) segment
         intersections. Length must equal netseg-1. Default 0.5 for each.
@@ -126,6 +138,20 @@ class MfUsgEts(Package):
     Loading with ``expand_parameters=True`` keeps the older "Expanded valid
     write" behavior (parameters expanded to arrays, ``NPETS=0`` on output).
 
+    Transport items: IESFACTOR and ESFACTOR are written when a BCT package is
+    registered in the model (USG-T reads them only with BCT in the name file,
+    even with ITRNSP=0), with MCOMPT values. Without BCT the header has four
+    integers. If no BCT was ever added and ``model.itrnsp`` is not 0, the
+    model counts assigned by hand are used (manual-count mode, for writing
+    the package file on its own; such a model is not runnable without BCT).
+    The package can be built before BCT: a list of factors is checked when
+    the counts are known, and always before the file is opened. Writing
+    raises ValueError, before anything is written, if iesfactor is not 0 and
+    the BCT package was removed or does not match the model counts, or if a
+    value does not fit the 10 columns of the fixed format. On load, null
+    values (empty fields between commas, ``r*``) and ``/`` in a free-format
+    factor record are not supported and raise ValueError.
+
     Examples
     --------
     >>> import flopy
@@ -155,6 +181,13 @@ class MfUsgEts(Package):
         unitnumber=None,
         filenames=None,
     ):
+        # factors are checked now when the component counts are known; else
+        # (no BCT yet, removed or unsynchronized BCT) when the file is written
+        if iesfactor != 0 and model._transport_context()[0] in ("bct", "manual"):
+            _transport_factors(
+                "MfUsgEts esfactor", esfactor, model._transport_mcompt("MfUsgEts")
+            )
+
         if unitnumber is None:
             unitnumber = MfUsgEts._defaultunit()
 
@@ -348,6 +381,23 @@ class MfUsgEts(Package):
         # is auto-computed from the definitions when omitted.
         params, npets = self._resolve_parameters()
         preserve = params is not None
+        # transport items, checked before the file is opened
+        header = self.parent._transport_header()
+        factors = None
+        if self.iesfactor != 0:
+            if header:
+                factors = _factor_text(
+                    _transport_factors(
+                        "MfUsgEts esfactor",
+                        self.esfactor,
+                        self.parent._transport_mcompt("MfUsgEts"),
+                    ),
+                    self.parent.free_format_input,
+                    "10.6f",
+                    "MfUsgEts esfactor",
+                )
+            elif self.parent._transport_context()[0] == "removed":
+                self.parent._transport_mcompt("MfUsgEts")  # raises ValueError
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         close_on_exit = f is None
         if f is None:
@@ -356,29 +406,20 @@ class MfUsgEts(Package):
         # Item 1 – heading
         f.write(f"{self.heading}\n")
 
-        # Item 2a – NETSOP IETSCB NPETS NETSEG IESFACTOR
-        f.write(
-            f"{self.netsop:10d}{self.ipakcb:10d}"
-            f"{npets:10d}{self.netseg:10d}{self.iesfactor:10d}\n"
-        )
+        # Item 2a - NETSOP IETSCB NPETS NETSEG [IESFACTOR with BCT]
+        f.write(f"{self.netsop:10d}{self.ipakcb:10d}{npets:10d}{self.netseg:10d}")
+        if header:
+            f.write(f"{self.iesfactor:10d}")
+        f.write("\n")
 
         # Item 2b – MXNDETS (unstructured + NETSOP==2 only)
         if not self.parent.structured and self.netsop == 2:
             mxndets = max(u2d.array.size for _, u2d in self.ievt.transient_2ds.items())
             f.write(f"{mxndets:10d}\n")
 
-        # Item 2c – ESFACTOR(MCOMP) (transport active and IESFACTOR==1)
-        if self.parent.itrnsp and self.iesfactor == 1:
-            mcomp = self.parent.mcomp
-            factors = (
-                np.atleast_1d(self.esfactor)
-                if self.esfactor is not None
-                else np.ones(mcomp)
-            )
-            for icomp in range(mcomp):
-                val = float(factors[icomp]) if icomp < len(factors) else 1.0
-                f.write(f"{val:10.6f}")
-            f.write("\n")
+        # Item 2c - ESFACTOR(MCOMPT) (BCT and IESFACTOR /= 0)
+        if factors is not None:
+            f.write(factors)
 
         # Items 3-4: ETS parameter definitions (preserved from load or authored)
         if preserve:
@@ -515,26 +556,36 @@ class MfUsgEts(Package):
                 print(f"  Parameters detected. NPETS = {npets}")
             line = f.readline()
 
-        # --- Item 2a: NETSOP IETSCB NPETS NETSEG IESFACTOR ---
-        t = line.strip().split()
+        # --- Item 2a: NETSOP IETSCB NPETS NETSEG [IESFACTOR with BCT] ---
+        header = model._transport_header()
+        if model.free_format_input:
+            t = line.strip().split()
+        else:  # FORMAT(5I10) with BCT, (4I10) without
+            t = [str(v) for v in _fixed_ints(line, 5 if header else 4, "MfUsgEts")]
         netsop = int(t[0])
         ipakcb = int(t[1])
         if npets == 0 and len(t) >= 3:
             npets = int(t[2])
         netseg = int(t[3]) if len(t) >= 4 else 1
-        iesfactor = int(t[4]) if len(t) >= 5 else 0
+        iesfactor = int(t[4]) if header and len(t) >= 5 else 0
 
         # --- Item 2b: MXNDETS (unstructured + NETSOP==2 only) ---
         if not model.structured and netsop == 2:
             f.readline()  # read and discard; value not needed after load
 
-        # --- Item 2c: ESFACTOR(MCOMP) ---
+        # --- Item 2c: ESFACTOR(MCOMPT) (BCT and IESFACTOR /= 0) ---
         esfactor = None
-        if model.itrnsp and iesfactor == 1:
-            line = f.readline()
-            vals = line.strip().split()
-            mcomp = model.mcomp if model.mcomp > 0 else 1
-            esfactor = np.array([float(vals[i]) for i in range(min(mcomp, len(vals)))])
+        if header and iesfactor != 0:
+            try:
+                mcompt = model._transport_mcompt("MfUsgEts.load")
+                read = (
+                    _read_free_values if model.free_format_input else _read_fixed_values
+                )
+                esfactor = read(f, mcompt, "MfUsgEts.load ESFACTOR")
+            except ValueError:
+                if openfile:
+                    f.close()
+                raise
 
         # --- Items 3 & 4: parameter definitions ---
         pak_parms = None

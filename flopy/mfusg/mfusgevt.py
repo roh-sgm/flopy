@@ -19,6 +19,13 @@ from ._usgt_parameters import (
     write_active_array_parameters,
     write_array_parameter_defs,
 )
+from .mfusg import (
+    _factor_text,
+    _fixed_ints,
+    _read_fixed_values,
+    _read_free_values,
+    _transport_factors,
+)
 
 
 class MfUsgEvt(Package):
@@ -51,11 +58,27 @@ class MfUsgEvt(Package):
     ievt : int or filename or ndarray or dict keyed on kper (zero-based)
         is the layer indicator variable (default is 1, which is used for all
         stress periods).
-    etfactor : float of array (mcomp) (default is 1.0)
+    etfactor : float, list or array of MCOMPT values (default is 0.0)
         fraction of mass of the component that leaves with water
         0 = chemical component left behind in groundwater
         1 = chemical component leaves with water
-        between 0 and 1 = fraction of mass of the component leaves
+        between 0 and 1 = fraction of mass of the component leaves.
+        ETFACTOR(MCOMPT) covers the mobile components and temperature
+        (IHEAT=1), not immobile components. Written only when ietfactor > 0
+        (ietfactor 0 means 0.0 and a negative ietfactor 1.0 for every
+        component). A scalar is used for every component; a list or array
+        needs exactly MCOMPT values. IETFACTOR and ETFACTOR are written when
+        a BCT package is registered (USG-T reads them only with BCT in the
+        name file, even with ITRNSP=0), or when no BCT was ever added and
+        ``model.itrnsp`` is not 0 (manual-count mode, for writing the package
+        file on its own; such a model is not runnable without BCT). The
+        package can be built before BCT; the factors are checked again
+        before the file is opened, and writing raises ValueError, before
+        anything is written, if ietfactor > 0 and the BCT package was removed
+        or does not match the model counts. The values are written with
+        3 significant digits (format 10.2e). On load, null values (empty
+        fields between commas, ``r*``) and ``/`` in a free-format factor
+        record are not supported and raise ValueError.
     iznevt : float of array (mcomp) (default is 1.0)
         array of zonal indices for applying a PET time series to zones.
         This PET input is independent of the stress period input, which
@@ -120,6 +143,13 @@ class MfUsgEvt(Package):
         filenames=None,
         external=True,
     ):
+        # factors are checked now when the component counts are known; else
+        # (no BCT yet, removed or unsynchronized BCT) when the file is written
+        if (ietfactor or 0) > 0 and model._transport_context()[0] in ("bct", "manual"):
+            _transport_factors(
+                "MfUsgEvt etfactor", etfactor, model._transport_mcompt("MfUsgEvt")
+            )
+
         # set default unit number of one is not specified
         if unitnumber is None:
             unitnumber = MfUsgEvt._defaultunit()
@@ -167,19 +197,10 @@ class MfUsgEvt(Package):
             )
 
         self.ietfactor = int(ietfactor or 0)
-        # Normalize ETFACTOR to an indexable 1-D array so a scalar (e.g.
-        # etfactor=2.5 with MCOMP=1) does not crash write_file's per-component
-        # indexing. ETFACTOR is only written when ietfactor>0.
-        self.etfactor = np.atleast_1d(etfactor) if etfactor is not None else None
-        # Transport ET factor: USG-T reads MCOMP ETFACTOR values when
-        # ietfactor>0 (ietfactor==0 -> implicit 0.0, ietfactor<0 -> implicit 1.0).
-        if getattr(model, "itrnsp", 0) and self.ietfactor > 0:
-            netf = 0 if self.etfactor is None else self.etfactor.size
-            if netf != model.mcomp:
-                raise ValueError(
-                    f"EVT etfactor must have MCOMP={model.mcomp} value(s) when "
-                    f"ietfactor>0; got {netf}."
-                )
+        # kept as given (scalar or sequence); expanded to MCOMPT values when
+        # the file is written (USG-T reads MCOMPT values when ietfactor > 0;
+        # ietfactor 0 -> implicit 0.0, ietfactor < 0 -> implicit 1.0)
+        self.etfactor = etfactor
 
         self.external = external
         if self.external is False:
@@ -394,6 +415,23 @@ class MfUsgEvt(Package):
         # preserved); ``npevt`` is auto-computed when omitted.
         params, npevt = self._resolve_parameters()
         preserve = params is not None
+        # transport items, checked before the file is opened
+        header = self.parent._transport_header()
+        factors = None
+        if self.ietfactor > 0:
+            if header:
+                factors = _factor_text(
+                    _transport_factors(
+                        "MfUsgEvt etfactor",
+                        self.etfactor,
+                        self.parent._transport_mcompt("MfUsgEvt"),
+                    ),
+                    self.parent.free_format_input,
+                    "10.2e",
+                    "MfUsgEvt etfactor",
+                )
+            elif self.parent._transport_context()[0] == "removed":
+                self.parent._transport_mcompt("MfUsgEvt")  # raises ValueError
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
         if f is not None:
             f_evt = f
@@ -406,8 +444,8 @@ class MfUsgEvt(Package):
         f_evt.write(f"{self.nevtop:10d}{self.ipakcb:10d}")
 
         # USG-T's reader takes 3 integers (NEVTOP IEVTCB IETFACTOR) whenever
-        # transport (BCT) is active, so IETFACTOR must always be present then.
-        if self.parent.itrnsp:
+        # BCT is in the name file, so IETFACTOR must always be present then.
+        if header:
             f_evt.write(f"{self.ietfactor:10d}")
         f_evt.write("\n")
 
@@ -443,12 +481,9 @@ class MfUsgEvt(Package):
                 )
                 f_evt.write(f"{mxndevt:10d}\n")
 
-        # USG-T reads the MCOMP ETFACTOR array only when ietfactor>0.
-        if self.parent.itrnsp and self.ietfactor > 0:
-            mcomp = self.parent.mcomp
-            for icomp in range(mcomp):
-                f_evt.write(f"{self.etfactor[icomp]:10.2e}")
-            f_evt.write("\n")
+        # USG-T reads the MCOMPT ETFACTOR values only when ietfactor>0.
+        if factors is not None:
+            f_evt.write(factors)
 
         # EVT parameter definitions (preserved from load or authored from scratch)
         if preserve:
@@ -562,11 +597,17 @@ class MfUsgEvt(Package):
                 if model.verbose:
                     print("  Parameters detected. Number of parameters = ", npar)
             line = f.readline()
-        # Dataset 2
+        # Dataset 2: NEVTOP IEVTCB [IETFACTOR with BCT in the name file]
         t = line.strip().split()
-        nevtop = int(t[0])
-        ipakcb = int(t[1])
-        ietfactor = type_from_iterable(t, 2)
+        header = model._transport_header()
+        if model.free_format_input:
+            nevtop = int(t[0])
+            ipakcb = int(t[1])
+            ietfactor = type_from_iterable(t, 2) if header else 0
+        else:  # FORMAT(3I10) with BCT, (2I10) without
+            ints = _fixed_ints(line, 3 if header else 2, "MfUsgEvt.load")
+            nevtop, ipakcb = ints[0], ints[1]
+            ietfactor = ints[2] if header else 0
 
         # Options. ETS zonal time-series is a dynamic ATS-coupled execution mode
         # (external IUETS time-series superseding the EVTR array), not static I/O;
@@ -590,19 +631,20 @@ class MfUsgEvt(Package):
             t = line.strip().split()
             mxndevt = int(t[0])
 
-        # dataset 2c for mfusg
-        etfactor = None
-        mcomp = model.mcomp
-        if mcomp > 0:
-            etfactor = np.zeros(model.mcomp)
-            if ietfactor < 0:
-                etfactor = np.ones(mcomp)
-            if ietfactor > 0:
-                if mcomp > 0:
-                    line = f.readline()
-                    t = line.strip().split()
-                    for icomp in range(mcomp):
-                        etfactor[icomp] = float(t[icomp])
+        # dataset 2c for mfusg: ETFACTOR(MCOMPT) when ietfactor > 0 (0 -> 0.0,
+        # < 0 -> 1.0 for every component, no record)
+        etfactor = 1.0 if ietfactor < 0 else 0.0
+        if header and ietfactor > 0:
+            try:
+                mcompt = model._transport_mcompt("MfUsgEvt.load")
+                read = (
+                    _read_free_values if model.free_format_input else _read_fixed_values
+                )
+                etfactor = read(f, mcompt, "MfUsgEvt.load ETFACTOR")
+            except ValueError:
+                if openfile:
+                    f.close()
+                raise
 
         # Dataset 3 and 4 - parameters data
         pak_parms = None

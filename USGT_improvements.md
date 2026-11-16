@@ -20,6 +20,104 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.NTCOMP-B2 — EVT ETFACTOR and ETS ESFACTOR by MCOMPT
+
+- USG-T 2.8.1 and 2.7.0 (same `gwf2evt8u1.f`/`gwf2ets8u1.f`) read the
+  transport items of EVT and ETS only when BCT is in the name file, and
+  then MCOMPT factors: the mobile components and temperature (IHEAT=1), not
+  the immobile components. FloPy wrote and read MCOMP factors, wrote short
+  records with heat and truncated them on load.
+- The transport header (IETFACTOR, IESFACTOR) is written when a BCT package
+  is registered, also with ITRNSP=0; without BCT, EVT dataset 2 has two
+  integers and ETS item 2a four (the fifth ETS integer that FloPy wrote
+  without BCT is not read by USG-T; this changes the bytes of such files).
+- A scalar factor is used for every component; a list or array needs
+  exactly MCOMPT values. EVT: IETFACTOR 0 means 0.0, a negative value 1.0,
+  a positive value reads ETFACTOR. ETS: any IESFACTOR other than 0 reads
+  ESFACTOR, so `esfactor=None` with IESFACTOR≠0 and transport raises
+  `ValueError` (FloPy wrote ones before). Loading a negative IETFACTOR keeps
+  1.0 (not an array).
+- Consumer packages can be built before BCT. The factors are checked when the
+  counts are known and again before the file is opened or a handle is
+  written. With an active factor, `ValueError` is raised when the BCT package
+  was removed, was added without its constructor (counts not set by it) or
+  its counts changed after construction. An inactive factor writes the
+  flow-only header after BCT is removed. If no BCT was ever added and
+  `model.itrnsp` is not 0, the counts assigned by hand are used
+  (manual-count mode, to write a package file on its own; such a model is
+  not runnable without BCT).
+- Load: free-format factors are read as a subset of READ(IN,*) (several
+  records; blanks or one comma with optional blanks as separator, an end of
+  record counting as a blank, so a final comma continues on the next record;
+  `r*c` repeats; the rest of the last record is skipped once MCOMPT values
+  are read). Not supported, with `ValueError`: null values (a comma before
+  the first value, two commas with only blanks or ends of record between
+  them, `r*` without a constant), which Fortran accepts and which would
+  leave a factor undefined or shift the components, and the slash
+  terminator; end of file or an invalid token also raise `ValueError`. A
+  short record followed by a record of numbers is read as a continuation,
+  as in Fortran, and cannot be detected. Fixed format reads 20F10.3 records
+  (implied decimals, blank fields 0) and the item 2a/dataset 2 integers by
+  columns. Written free-format values are always separated by a blank (an
+  ESFACTOR of 100 or more was joined to the previous value); EVT keeps
+  3 significant digits (10.2e) and ETS 6 decimals. In fixed format a value
+  that does not fit 10 columns is written as 10.3e; a finite ESFACTOR that
+  still does not fit (e.g. -1e308) raises `ValueError`. The factor text is
+  built before the file is opened; this is not a general guarantee that the
+  ETS/EVT writers never leave a partial file.
+- Run with USG-T 2.8.1 and 2.7.0 (`test_usgt_exe_transport_factor_*`): DISU
+  model with heat, FloPy-written and hand-written factors give the same
+  results; changing only the temperature factor changes only the
+  temperature (no DDF/TVM coupling); a record with MCOMP factors does not
+  run; IMCOMP without heat reads one factor. USG-T 2.8.1 stopped with
+  SIGSEGV for IHEAT=1, MCOMP>=1 and IDISP=0 in that small model; the tests
+  use IDISP=1 with DL=DT=0.
+- Not changed here: MDT, CLN, DPT, RCH; BCT per-species options; EVT/ETS
+  precision; EVT ETS zonal mode.
+
+### Stage 5.NTCOMP-B1 — component counts and BCT immobile components
+
+- `MfUsg` has `imcomp` (0 without BCT) and the read-only properties
+  `mcompt` = `mcomp` + 1 with `iheat` = 1, and `ntcomp` = `mcompt` +
+  `imcomp`, as in USG-T `GWT2BCT1AR`. `MfUsgBct` sets `itrnsp`, `mcomp`,
+  `iheat` and `imcomp` on the model only when it is added to the model, after
+  its checks (before, a failed construction could leave the counts changed,
+  and `add_package=False` also changed them).
+- `MfUsgBct` builds and loads `imconc` with IMCOMP components (it used MCOMP:
+  IMCOMP > MCOMP failed while writing, and the components after MCOMP were
+  lost). A scalar `imconc` is used for every immobile component; a list of
+  another length, a missing `imconc` or a negative count raise `ValueError`.
+- Protection, not support: IMCOMP > 0 with CHAINDECAY, A-W_ADSORB, IADSORB,
+  IZOD or IFOD, whose per-species data USG-T 2.8.1 also reads for immobile
+  components, raises `NotImplementedError` on construction, load (before
+  any array is read; before, an immobile ADSORB array was loaded as
+  IMCONC) and write. IMCOMP > 0 in fixed format raises `NotImplementedError`
+  too: USG-T adds IMCOMP to NTCOMP only in the free-format branch.
+  `MfUsg.load` reads BCT before BAS6, so this case is detected when the BCT
+  file is written.
+- `write_file` checks the counts and the per-component arrays again before
+  opening the file or writing to a given handle, so a rejected write keeps an
+  existing file. The counts cannot change after construction: `mcomp`,
+  `iheat` or `imcomp` different from the values the arrays were built with
+  (also when the model counts are changed the same way, for example `iheat`
+  0 to 1 or 1 to 0), or package and model counts that differ, raise
+  `ValueError`. Build or load a new BCT instead; array values can still be
+  changed. This covers this count contract only; the writer is not atomic
+  in general.
+- With `add_package=False` the model counts are not changed (intentional
+  change). Removing BCT from the model does not reset the model counts; this
+  has to be handled before the NTCOMP/MCOMPT consumers use them.
+- Source audited: USG-T 2.8.1 (`glo2btnu1.f`). Run with USG-T 2.8.1 and
+  2.7.0: a DISU model with MCOMP=1, IMCOMP=2 and no per-species options
+  gives the initial concentrations of the three components, the same as a
+  hand-written BCT file; a file with one IMCONC record fails.
+- Still open: per-species data of immobile components (2.8.1 reads them,
+  2.7.0 reads only the concentration), structured BULKD with IHEAT=1 and
+  IADSORB=0, CHAINDECAY/SPATIALREACT records, SOLUBILITY items, ZODRW/FODRW
+  written for IZOD/IFOD 3 or 4 without IADSORB/A-W_ADSORB, and the
+  NTCOMP/MCOMPT consumers (MDT, CLN, DPT; ETS/EVT in Stage 5.NTCOMP-B2)
+  and the RCH/BCT construction order.
+
 ### Stage 5.VORONOI — DISU arrays for extruded Voronoi grids
 
 - `flopy.utils.voronoi.get_disu5_gridprops(verts, iverts, xcyc, top, botm)` and
