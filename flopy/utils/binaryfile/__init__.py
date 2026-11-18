@@ -2457,7 +2457,7 @@ class CellBudgetFile:
 
         try:
             self._build_index()
-        except (BudgetIndexError, EOFError) as e:
+        except (BudgetIndexError, EOFError, OSError) as e:
             success = False
             self.__reset()
 
@@ -2924,6 +2924,7 @@ class CellBudgetFile:
         paknam=None,
         paknam2=None,
         full3D=False,
+        variable="q",
     ) -> Union[list, np.ndarray]:
         """
         Get data from the binary budget file.
@@ -2952,6 +2953,10 @@ class CellBudgetFile:
             If true, then return the record as a three dimensional numpy
             array, even for those list-style records written as part of a
             'COMPACT BUDGET' MODFLOW budget file.  (Default is False.)
+        variable : str
+            The variable name to extract when full3D is True and the record
+            contains auxiliary variables (e.g. 'sat' for 'DATA-SAT' records,
+            or 'qx'/'qy'/'qz' for 'DATA-SPDIS' records).  Default is 'q'.
 
         Returns
         -------
@@ -3029,8 +3034,14 @@ class CellBudgetFile:
                 "get_data() missing 1 required argument: 'kstpkper', 'totim', "
                 "'idx', or 'text'"
             )
+        if variable != "q" and not full3D:
+            raise ValueError(
+                "'variable' is only used when full3D=True. "
+                "To access a specific field without full3D, index the "
+                "returned recarray directly, e.g. get_data(...)[0]['sat']."
+            )
         return [
-            self.get_record(idx, full3D=full3D)
+            self.get_record(idx, full3D=full3D, variable=variable)
             for idx, t in enumerate(select_indices)
             if t
         ]
@@ -3328,7 +3339,7 @@ class CellBudgetFile:
         nodes_0based = self.modelgrid.get_node(cellids)
         return (np.array(nodes_0based) + 1).tolist()
 
-    def get_record(self, idx, full3D=False):
+    def get_record(self, idx, full3D=False, variable="q"):
         """
         Get a single data record from the budget file.
 
@@ -3340,6 +3351,10 @@ class CellBudgetFile:
             If true, then return the record as a three dimensional numpy
             array, even for those list-style records written as part of a
             'COMPACT BUDGET' MODFLOW budget file.  (Default is False.)
+        variable : str
+            The variable name to extract when full3D is True and the record
+            contains auxiliary variables (e.g. 'sat' for 'DATA-SAT' records,
+            or 'qx'/'qy'/'qz' for 'DATA-SPDIS' records).  Default is 'q'.
 
         Returns
         -------
@@ -3455,7 +3470,7 @@ class CellBudgetFile:
                 if self.verbose:
                     s += f"a list array of shape ({nlay}, {nrow}, {ncol})"
                     print(s)
-                return self.__create3D(data)
+                return self.__create3D(data, variable=variable)
             else:
                 if self.verbose:
                     s += f"a numpy recarray of size ({nlist}, {2 + naux})"
@@ -3481,7 +3496,7 @@ class CellBudgetFile:
                     s += f"a numpy recarray of size ({nlist}, 2)"
                 print(s)
             if full3D:
-                data = self.__create3D(data)
+                data = self.__create3D(data, variable=variable)
                 if self.modelgrid is not None:
                     return np.reshape(data, self.shape)
                 else:
@@ -3494,28 +3509,39 @@ class CellBudgetFile:
         # should not reach this point
         return
 
-    def __create3D(self, data):
+    def __create3D(self, data, variable="q"):
         """
-        Convert a dictionary of {node: q, ...} into a numpy masked array.
+        Convert list budget data into a numpy masked array.
         Used to create full grid arrays when the full3D keyword is set
         to True in get_data.
 
         Parameters
         ----------
-        data : dictionary
-            Dictionary with node keywords and flows (q) items.
+        data : numpy recarray
+            Record array with at least 'node' and the specified variable field.
+        variable : str
+            The field name to map into the 3D array.  Default is 'q'.
 
         Returns
         -------
         out : numpy masked array
-            List contains unique simulation times (totim) in binary file.
+            Masked array of shape self.shape with values from the specified
+            variable mapped to their grid positions.
 
         """
-        out = np.ma.zeros(self.nnodes, dtype=data["q"].dtype)
+        if variable not in data.dtype.names:
+            raise ValueError(
+                f"variable '{variable}' not found in record. "
+                f"Available variables: {list(data.dtype.names)}"
+            )
+        out = np.ma.zeros(self.nnodes, dtype=data[variable].dtype)
         out.mask = True
-        for [node, q] in zip(data["node"], data["q"]):
+        for node, val in zip(data["node"], data[variable]):
             idx = node - 1
-            out.data[idx] += q
+            if variable == "q":
+                out.data[idx] += val
+            else:
+                out.data[idx] = val
             out.mask[idx] = False
         return np.ma.reshape(out, self.shape)
 
@@ -3653,6 +3679,13 @@ class CellBudgetFile:
             - precision : str, 'single' or 'double' (default is the file's precision)
             - verbose : bool, print progress messages
 
+        Notes
+        -----
+        The output is a subset of the file in its own format, not a
+        conversion. Headers are always compact, and each record keeps its
+        imeth, except imeth 0 (non-compact full array), which is written
+        as the equivalent imeth 1.
+
         Examples
         --------
         >>> cbc = CellBudgetFile('input.cbc')
@@ -3679,8 +3712,13 @@ class CellBudgetFile:
             textlist = [_pad_text_to_16(t) for t in text]
 
         verbose = kwargs.get("verbose", False)
-        precision = kwargs.get("precision", self.precision)
-        realtype = np.float32 if precision == "single" else np.float64
+        # default to the file's precision, as detected if it was "auto"
+        precision = kwargs.get("precision")
+        if precision in (None, "auto"):
+            realtype = self.realtype
+            precision = "single" if realtype == np.float32 else "double"
+        else:
+            realtype = np.float32 if precision == "single" else np.float64
 
         # header dtypes
         h1dt = np.dtype(
@@ -3702,166 +3740,138 @@ class CellBudgetFile:
             ]
         )
 
-        sorted_kstpkper = sorted(kstpkper, key=lambda x: (int(x[0]), int(x[1])))
-
-        text_mapping = {}
+        # budget text names in the file selected for export
+        selected_texts = set()
         for txt in textlist:
             txt_str = txt.decode().strip() if isinstance(txt, bytes) else txt.strip()
             txt_upper = txt_str.upper()
-            matching_records = [
+            selected_texts.update(
                 t for t in self.textlist if txt_upper in t.decode().strip().upper()
-            ]
-            text_mapping[txt] = matching_records
+            )
 
-        nlay = self.nlay if self.nlay > 0 else None
-        nrow = self.nrow if self.nrow > 0 else None
-        ncol = self.ncol if self.ncol > 0 else None
+        # time steps selected for export (1-based)
+        selected_kstpkper = {(int(k), int(p)) for k, p in kstpkper}
 
         if verbose:
             print(f"Writing binary budget file: {filename}")
             print(f"  Precision: {precision}")
-            if nlay is not None and nrow is not None and ncol is not None:
-                print(f"  Grid shape: {nlay} layers x {nrow} rows x {ncol} cols")
-            else:
-                print("  Grid shape not specified")
 
         with open(filename, "wb") as f:
-            for ksp in sorted_kstpkper:
-                kstp = int(ksp[0])
-                kper = int(ksp[1])
+            # iterate over records in file order, so that each record's
+            # header and data come from the same place, and so that all
+            # records with the same text (e.g. multiple packages of the
+            # same type) are exported
+            for idx, header in enumerate(self.recordarray):
+                if header["text"] not in selected_texts:
+                    continue
+                kstp = int(header["kstp"])
+                kper = int(header["kper"])
+                if (kstp, kper) not in selected_kstpkper:
+                    continue
 
-                # get_data() expects 0-based but kstpkper is 1-based
-                ksp_0based = (kstp - 1, kper - 1)
+                # output is always compact, and records keep their
+                # imeth, except imeth 0 (non-compact array), which is
+                # equivalent to imeth 1.
+                imeth = int(header["imeth"])
+                data = self.get_data(idx=idx)[0]
+                if imeth == 0:
+                    imeth = 1
+                elif imeth not in range(1, 7):
+                    raise ValueError(f"Invalid imeth={imeth} in budget file")
+
+                # copy text as-is to preserve its justification
+                text_bytes = _pad_text_to_16(header["text"])
+                text_str = text_bytes.decode().strip()
+                delt = float(header["delt"])
+                pertim = float(header["pertim"])
+                totim = float(header["totim"])
 
                 if verbose:
-                    print(f"\n  Writing kstp={kstp}, kper={kper}")
+                    print(f"    Writing {text_str}: imeth={imeth}")
 
-                for txt in textlist:
-                    for file_txt in text_mapping[txt]:
-                        data_list = self.get_data(kstpkper=ksp_0based, text=file_txt)
-                        if not data_list:
-                            continue
-                        data = data_list[0]
-                        mask = (
-                            (self.recordarray["kstp"] == kstp)
-                            & (self.recordarray["kper"] == kper)
-                            & (self.recordarray["text"] == file_txt)
+                # copy the record's own dimensions, which can differ
+                # from the grid's (e.g. FLOW-JA-FACE, MFUSG CLN flows).
+                # negative nlay -> compact format
+                ndim1 = int(header["ncol"])
+                ndim2 = int(header["nrow"])
+                ndim3 = -abs(int(header["nlay"]))
+
+                header1 = np.array(
+                    [(kstp, kper, text_bytes, ndim1, ndim2, ndim3)],
+                    dtype=h1dt,
+                )
+                header1.tofile(f)
+
+                header2 = np.array([(imeth, delt, pertim, totim)], dtype=h2dt)
+                header2.tofile(f)
+
+                if imeth == 1:
+                    np.asarray(data, dtype=realtype).tofile(f)
+
+                elif imeth in (2, 5):
+                    # imeth 5 has aux names before the list; imeth 2 has
+                    # no aux and no naux
+                    auxtxt = [n for n in data.dtype.names if n not in ("node", "q")]
+                    if imeth == 5:
+                        np.array([len(auxtxt) + 1], dtype=np.int32).tofile(f)
+                        for auxname in auxtxt:
+                            f.write(_pad_text_to_16(auxname))
+                    np.array([len(data)], dtype=np.int32).tofile(f)
+                    dt_list = [("node", np.int32), ("q", realtype)]
+                    dt_list += [(name, realtype) for name in auxtxt]
+                    output_data = np.empty(len(data), dtype=np.dtype(dt_list))
+                    for field in output_data.dtype.names:
+                        output_data[field] = data[field]
+                    output_data.tofile(f)
+
+                elif imeth == 3:
+                    ilayer, arr = data
+                    np.asarray(ilayer, dtype=np.int32).tofile(f)
+                    np.asarray(arr, dtype=realtype).tofile(f)
+
+                elif imeth == 4:
+                    np.asarray(data, dtype=realtype).tofile(f)
+
+                elif imeth == 6:
+                    # write model and package names
+                    for name in ["modelnam", "paknam", "modelnam2", "paknam2"]:
+                        f.write(_pad_text_to_16(header[name]))
+
+                    # write naux and aux var names
+                    standard_fields = {"node", "node2", "q"}
+                    auxtxt = [
+                        name for name in data.dtype.names if name not in standard_fields
+                    ]
+                    naux = len(auxtxt)
+                    np.array([naux + 1], dtype=np.int32).tofile(f)
+                    for auxname in auxtxt:
+                        f.write(_pad_text_to_16(auxname))
+
+                    if not (isinstance(data, np.ndarray) and data.dtype.names):
+                        raise ValueError(
+                            "For imeth=6, data must be a numpy recarray "
+                            "with fields: node, node2, q, and optional "
+                            "auxiliary fields"
                         )
-                        records = self.recordarray[mask]
-                        if len(records) == 0:
-                            continue
 
-                        record = records[0]
+                    # write nlist and list data
+                    nlist = len(data)
+                    np.array([nlist], dtype=np.int32).tofile(f)
+                    dt_list = [
+                        ("node", np.int32),
+                        ("node2", np.int32),
+                        ("q", realtype),
+                    ]
+                    for auxname in auxtxt:
+                        dt_list.append((auxname, realtype))
 
-                        if isinstance(data, np.recarray):
-                            imeth = 6  # list
-                        else:
-                            imeth = 1  # array
+                    output_dt = np.dtype(dt_list)
+                    output_data = np.zeros(nlist, dtype=output_dt)
+                    for field in output_dt.names:
+                        if field in data.dtype.names:
+                            output_data[field] = data[field].astype(output_dt[field])
 
-                        text_str = file_txt.decode().strip()
-                        text_bytes = _pad_text_to_16(text_str)
-                        delt = float(record["delt"])
-                        pertim = float(record["pertim"])
-                        totim = float(record["totim"])
-
-                        if verbose:
-                            print(f"    Writing {text_str}: imeth={imeth}")
-
-                        is_flowja = text_str.upper() == "FLOW-JA-FACE"
-
-                        # Determine dimensions based on data type
-                        if is_flowja and imeth in [0, 1]:
-                            # keep FLOW-JA-FACE flat/size NJA
-                            nja = np.asarray(data).size
-                            ndim1, ndim2, ndim3 = nja, 1, -1
-                        else:
-                            # Regular budget term: use grid dimensions
-                            if nlay is None or nrow is None or ncol is None:
-                                raise ValueError(
-                                    f"Grid dimensions (nlay, nrow, ncol) "
-                                    f"required for non-FLOW-JA-FACE "
-                                    f"budget term '{text_str}'. "
-                                    f"Provided: nlay={nlay}, nrow={nrow}, "
-                                    f"ncol={ncol}"
-                                )
-                            # negative nlay -> compact format
-                            ndim1, ndim2, ndim3 = ncol, nrow, -nlay
-
-                        header1 = np.array(
-                            [(kstp, kper, text_bytes, ndim1, ndim2, ndim3)],
-                            dtype=h1dt,
-                        )
-                        header1.tofile(f)
-
-                        header2 = np.array([(imeth, delt, pertim, totim)], dtype=h2dt)
-                        header2.tofile(f)
-
-                        if imeth in [0, 1]:
-                            arr = np.asarray(data, dtype=realtype)
-                            # keep FLOW-JA-FACE flat/size NJA.
-                            # reshape other variables to grid.
-                            if is_flowja and arr.ndim != 1:
-                                arr = arr.flatten()
-                            elif arr.ndim == 1:
-                                arr = arr.reshape(nlay, nrow, ncol)
-
-                            arr.tofile(f)
-
-                        elif imeth == 6:
-                            # write model and package names
-                            modelnam = record["modelnam"].decode().strip()
-                            paknam = record["paknam"].decode().strip()
-                            modelnam2 = record["modelnam2"].decode().strip()
-                            paknam2 = record["paknam2"].decode().strip()
-
-                            for name in [modelnam, paknam, modelnam2, paknam2]:
-                                name_bytes = _pad_text_to_16(name)
-                                f.write(name_bytes)
-
-                            # write naux and aux var names
-                            standard_fields = {"node", "node2", "q"}
-                            auxtxt = [
-                                name
-                                for name in data.dtype.names
-                                if name not in standard_fields
-                            ]
-                            naux = len(auxtxt)
-                            np.array([naux + 1], dtype=np.int32).tofile(f)
-                            for auxname in auxtxt:
-                                f.write(_pad_text_to_16(auxname))
-
-                            if not (isinstance(data, np.ndarray) and data.dtype.names):
-                                raise ValueError(
-                                    "For imeth=6, data must be a numpy recarray "
-                                    "with fields: node, node2, q, and optional "
-                                    "auxiliary fields"
-                                )
-
-                            # nrite nlist and list data
-                            nlist = len(data)
-                            np.array([nlist], dtype=np.int32).tofile(f)
-                            dt_list = [
-                                ("node", np.int32),
-                                ("node2", np.int32),
-                                ("q", realtype),
-                            ]
-                            for auxname in auxtxt:
-                                dt_list.append((auxname, realtype))
-
-                            output_dt = np.dtype(dt_list)
-                            output_data = np.zeros(nlist, dtype=output_dt)
-                            for field in output_dt.names:
-                                if field in data.dtype.names:
-                                    output_data[field] = data[field].astype(
-                                        output_dt[field]
-                                    )
-
-                            output_data.tofile(f)
-
-                        else:
-                            raise NotImplementedError(
-                                "Expected imeth=1 (array) or imeth=6 (list)"
-                            )
+                    output_data.tofile(f)
 
         if verbose:
             print(f"\nSuccessfully wrote {filename}")

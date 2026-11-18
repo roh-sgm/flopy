@@ -82,6 +82,9 @@ class ModflowGwfuzf(MFPackage):
         water mover (mvr) package.  when the mover option is specified, additional
         memory is allocated within the package to store the available, provided, and
         received water.
+    dev_no_final_check : keyword
+        keyword that deactivates the final convergence check of the change in uzf
+        recharge.  this development option is not supported.
     simulate_et : keyword
         keyword specifying that et in the unsaturated (uzf) and saturated zones (gwf)
         will be simulated. et can be simulated in the uzf cell and not the gwf cell by
@@ -175,12 +178,12 @@ class ModflowGwfuzf(MFPackage):
         * ifno : integer
                 integer value that defines the feature (UZF object) number associated with the
                 specified PERIOD data on the line.
-        * finf : string
+        * finf : double precision
                 real or character value that defines the applied infiltration rate of the UZF
                 cell (:math:`LT^{-1}`). If the Options block includes a TIMESERIESFILE entry
                 (see the 'Time-Variable Input' section), values can be obtained from a time
                 series by entering the time-series name in place of a numeric value.
-        * pet : string
+        * pet : double precision
                 real or character value that defines the potential evapotranspiration rate of
                 the UZF cell and specified GWF cell. Evapotranspiration is first removed from
                 the unsaturated zone and any remaining potential evapotranspiration is applied
@@ -190,7 +193,7 @@ class ModflowGwfuzf(MFPackage):
                 specified in the OPTIONS block. If the Options block includes a TIMESERIESFILE
                 entry (see the 'Time-Variable Input' section), values can be obtained from a
                 time series by entering the time-series name in place of a numeric value.
-        * extdp : string
+        * extdp : double precision
                 real or character value that defines the evapotranspiration extinction depth of
                 the UZF cell. If IVERTCON is greater than zero and EXTDP extends below the GWF
                 cell bottom then remaining potential evapotranspiration is applied to the
@@ -199,7 +202,7 @@ class ModflowGwfuzf(MFPackage):
                 TIMESERIESFILE entry (see the 'Time-Variable Input' section), values can be
                 obtained from a time series by entering the time-series name in place of a
                 numeric value.
-        * extwc : string
+        * extwc : double precision
                 real or character value that defines the evapotranspiration extinction water
                 content of the UZF cell. EXTWC is always specified, but is only used if
                 SIMULATE_ET and UNSAT_ETWC are specified in the OPTIONS block. The
@@ -210,20 +213,20 @@ class ModflowGwfuzf(MFPackage):
                 If the Options block includes a TIMESERIESFILE entry (see the 'Time-Variable
                 Input' section), values can be obtained from a time series by entering the
                 time-series name in place of a numeric value.
-        * ha : string
+        * ha : double precision
                 real or character value that defines the air entry potential (head) of the UZF
                 cell. HA is always specified, but is only used if SIMULATE_ET and UNSAT_ETAE
                 are specified in the OPTIONS block. If the Options block includes a
                 TIMESERIESFILE entry (see the 'Time-Variable Input' section), values can be
                 obtained from a time series by entering the time-series name in place of a
                 numeric value.
-        * hroot : string
+        * hroot : double precision
                 real or character value that defines the root potential (head) of the UZF cell.
                 HROOT is always specified, but is only used if SIMULATE_ET and UNSAT_ETAE are
                 specified in the OPTIONS block. If the Options block includes a TIMESERIESFILE
                 entry (see the 'Time-Variable Input' section), values can be obtained from a
                 time series by entering the time-series name in place of a numeric value.
-        * rootact : string
+        * rootact : double precision
                 real or character value that defines the root activity function of the UZF
                 cell. ROOTACT is the length of roots in a given volume of soil divided by that
                 volume. Values range from 0 to about 3 :math:`cm^{-2}`, depending on the plant
@@ -300,6 +303,7 @@ class ModflowGwfuzf(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -314,6 +318,7 @@ class ModflowGwfuzf(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -353,6 +358,7 @@ class ModflowGwfuzf(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -393,6 +399,7 @@ class ModflowGwfuzf(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -423,6 +430,7 @@ class ModflowGwfuzf(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal pkgconvfilerec",
         ],
         [
             "block options",
@@ -433,6 +441,7 @@ class ModflowGwfuzf(MFPackage):
             "reader urword",
             "tagged true",
             "optional false",
+            "mf6internal pkgconv",
         ],
         [
             "block options",
@@ -443,6 +452,7 @@ class ModflowGwfuzf(MFPackage):
             "reader urword",
             "tagged false",
             "optional false",
+            "mf6internal pkgconvfname",
         ],
         [
             "block options",
@@ -528,6 +538,14 @@ class ModflowGwfuzf(MFPackage):
         ],
         [
             "block options",
+            "name dev_no_final_check",
+            "mf6internal iconvchk",
+            "type keyword",
+            "reader urword",
+            "optional true",
+        ],
+        [
+            "block options",
             "name simulate_et",
             "type keyword",
             "tagged true",
@@ -581,6 +599,7 @@ class ModflowGwfuzf(MFPackage):
             "type integer",
             "reader urword",
             "optional false",
+            "mf6internal maxbound",
         ],
         [
             "block dimensions",
@@ -608,6 +627,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block packagedata",
             "name ifno",
+            "mf6internal packagedata_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -739,7 +759,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name finf",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -749,7 +769,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name pet",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -759,7 +779,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name extdp",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -769,7 +789,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name extwc",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -779,7 +799,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name ha",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -789,7 +809,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name hroot",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -799,7 +819,7 @@ class ModflowGwfuzf(MFPackage):
         [
             "block period",
             "name rootact",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -836,6 +856,7 @@ class ModflowGwfuzf(MFPackage):
         timeseries=None,
         observations=None,
         mover=None,
+        dev_no_final_check=None,
         simulate_et=None,
         linear_gwet=None,
         square_gwet=None,
@@ -886,6 +907,9 @@ class ModflowGwfuzf(MFPackage):
             "obs", observations, "continuous", self._obs_filerecord
         )
         self.mover = self.build_mfdata("mover", mover)
+        self.dev_no_final_check = self.build_mfdata(
+            "dev_no_final_check", dev_no_final_check
+        )
         self.simulate_et = self.build_mfdata("simulate_et", simulate_et)
         self.linear_gwet = self.build_mfdata("linear_gwet", linear_gwet)
         self.square_gwet = self.build_mfdata("square_gwet", square_gwet)

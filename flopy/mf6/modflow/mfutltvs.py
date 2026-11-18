@@ -80,6 +80,7 @@ class ModflowUtltvs(MFPackage):
         [
             "block options",
             "name disable_storage_change_integration",
+            "mf6internal disable_sc_int",
             "type keyword",
             "reader urword",
             "optional true",

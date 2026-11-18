@@ -87,6 +87,11 @@ class ModflowGweuze(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature temperature with a general mixing equation and
+        adds the result to the right-hand side of the gwe equations, instead of adding
+        a row to the solution matrix for each feature.  this development option is not
+        supported.
     packagedata : [(uzfno, strt, aux, boundname)]
         * uzfno : integer
                 integer value that defines the UZF cell number associated with the specified
@@ -119,7 +124,7 @@ class ModflowGweuze(MFPackage):
                 infiltration, uzet, and auxiliary.  these settings are used to assign the
                 temperature associated with the corresponding flow terms.  temperatures cannot
                 be specified for all flow terms.
-                * temperature : string
+                * temperature : double precision
                             real or character value that defines the temperature for the unsaturated zone
                             flow cell. the specified temperature is only applied if the unsaturated zone
                             flow cell is a constant temperature cell. if the options block includes a
@@ -133,13 +138,13 @@ class ModflowGweuze(MFPackage):
                             energy fluxes into or out of the uzf cell and the inactive value will be
                             written for the uzf cell temperature.  if a uzf cell is constant, then the
                             temperature for the uzf cell will be fixed at the user specified value.
-                * infiltration : string
+                * infiltration : double precision
                             real or character value that defines the temperature of the infiltration
                             :math:`(e.g.,:^{circ}c:or:^{circ}f)` for the uzf cell. if the options block
                             includes a timeseriesfile entry (see the 'time-variable input' section), values
                             can be obtained from a time series by entering the time-series name in place of
                             a numeric value.
-                * uzet : string
+                * uzet : double precision
                             real or character value that states what fraction of the simulated unsaturated
                             zone evapotranspiration is associated with evaporation.  the evaporative losses
                             from the unsaturated zone moisture content will have an evaporative cooling
@@ -192,7 +197,7 @@ class ModflowGweuze(MFPackage):
     _package_type = "uze"
     dfn_file_name = "gwe-uze.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -200,6 +205,7 @@ class ModflowGweuze(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -216,6 +222,7 @@ class ModflowGweuze(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -231,6 +238,7 @@ class ModflowGweuze(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -238,6 +246,7 @@ class ModflowGweuze(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -245,6 +254,7 @@ class ModflowGweuze(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -252,6 +262,7 @@ class ModflowGweuze(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -261,6 +272,7 @@ class ModflowGweuze(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal temp_filerec",
         ],
         [
             "block options",
@@ -291,6 +303,7 @@ class ModflowGweuze(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -331,6 +344,7 @@ class ModflowGweuze(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -428,10 +442,18 @@ class ModflowGweuze(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray uzfno strt aux boundname",
-            "shape (maxbound)",
+            "shape (nuzfcells)",
             "reader urword",
         ],
         [
@@ -443,6 +465,7 @@ class ModflowGweuze(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -496,6 +519,7 @@ class ModflowGweuze(MFPackage):
         [
             "block period",
             "name uzfno",
+            "mf6internal ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -524,7 +548,7 @@ class ModflowGweuze(MFPackage):
         [
             "block period",
             "name temperature",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -534,7 +558,7 @@ class ModflowGweuze(MFPackage):
         [
             "block period",
             "name infiltration",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -544,7 +568,7 @@ class ModflowGweuze(MFPackage):
         [
             "block period",
             "name uzet",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -567,6 +591,7 @@ class ModflowGweuze(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -606,6 +631,7 @@ class ModflowGweuze(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         uzeperioddata=None,
         filename=None,
@@ -652,6 +678,9 @@ class ModflowGweuze(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.uzeperioddata = self.build_mfdata("uzeperioddata", uzeperioddata)

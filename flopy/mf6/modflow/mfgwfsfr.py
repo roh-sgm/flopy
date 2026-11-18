@@ -22,6 +22,16 @@ class ModflowGwfsfr(MFPackage):
     storage : keyword
         keyword that activates storage contributions to the stream-flow routing package
         continuity equation.
+    ats_courant : double precision
+        real number value that defines the target courant number submitted by the sfr
+        package to the adaptive time stepping (ats) package.  if ats_courant is
+        specified and the ats package is active, the sfr package will compute the time
+        step that achieves the target courant number for the most constraining reach
+        (the reach with the highest wave celerity-to-length ratio) and submit that time
+        step to the ats package.  the storage option must be active when ats_courant is
+        specified.  ats_courant must be greater than zero.  a recommended baseline
+        value is 1.0, which targets unit courant number; values between 0.5 and 2.0 are
+        generally acceptable for kinematic wave routing.
     auxiliary : [string]
         defines an array of one or more auxiliary variable names.  there is no limit on
         the number of auxiliary variables that can be provided on this line; however,
@@ -127,8 +137,16 @@ class ModflowGwfsfr(MFPackage):
         seconds.
     dev_storage_weight : double precision
         real number value that defines the time weighting factor used to calculate the
-        change in channel storage. storage_weight must have a value between 0.5 and 1.
-        default storage_weight value is 1.
+        change in channel storage. dev_storage_weight must have a value between 0.5 and
+        1. the default dev_storage_weight value is 1, which is fully implicit and is
+        recommended for all practical applications.
+    dev_no_check : keyword
+        keyword that deactivates the checks of reach geometry relative to the model
+        grid and of reach parameters for reasonable values.  this development option is
+        not supported.
+    dev_no_final_check : keyword
+        keyword that deactivates the final convergence check of the change in stream
+        flow routing stages and flows.  this development option is not supported.
     nreaches : integer
         integer value specifying the number of stream reaches.  there must be nreaches
         entries in the packagedata block.
@@ -169,7 +187,7 @@ class ModflowGwfsfr(MFPackage):
                 block includes a TIMESERIESFILE entry (see the 'Time-Variable Input' section),
                 values can be obtained from a time series by entering the time-series name in
                 place of a numeric value.
-        * man : string
+        * man : double precision
                 real or character value that defines the Manning's roughness coefficient for
                 the reach. MAN must be greater than zero.  If the Options block includes a
                 TIMESERIESFILE entry (see the 'Time-Variable Input' section), values can be
@@ -292,7 +310,7 @@ class ModflowGwfsfr(MFPackage):
                 that can be used to start the sfrsetting string include: status, bedk, manning,
                 stage, inflow, rainfall, evaporation, runoff, diversion, upstream_fraction, and
                 auxiliary.
-                * stage : string
+                * stage : double precision
                             real or character value that defines the stage for the reach. the specified
                             stage is only applied if the reach uses the simple routing option. if stage is
                             not specified for reaches that use the simple routing option, the specified
@@ -313,33 +331,33 @@ class ModflowGwfsfr(MFPackage):
                             and inactive downstream reach should be changed to 1.0 and 0.0, respectively,
                             to ensure that the active reach receives all of the downstream outflow from the
                             upstream reach. by default, status is active.
-                * bedk : string
+                * bedk : double precision
                             real or character value that defines the hydraulic conductivity of the reach
                             streambed. bedk can be any positive value if the reach is not connected to an
                             underlying gwf cell. otherwise, bedk must be greater than zero. if the options
                             block includes a timeseriesfile entry (see the 'time-variable input' section),
                             values can be obtained from a time series by entering the time-series name in
                             place of a numeric value.
-                * manning : string
+                * manning : double precision
                             real or character value that defines the manning's roughness coefficient for
                             the reach. manning must be greater than zero.  if the options block includes a
                             timeseriesfile entry (see the 'time-variable input' section), values can be
                             obtained from a time series by entering the time-series name in place of a
                             numeric value.
-                * inflow : string
+                * inflow : double precision
                             real or character value that defines the volumetric inflow rate for the
                             streamflow routing reach. if the options block includes a timeseriesfile entry
                             (see the 'time-variable input' section), values can be obtained from a time
                             series by entering the time-series name in place of a numeric value. by
                             default, inflow rates are zero for each reach.
-                * rainfall : string
+                * rainfall : double precision
                             real or character value that defines the  volumetric rate per unit area of
                             water added by precipitation directly on the streamflow routing reach. if the
                             options block includes a timeseriesfile entry (see the 'time-variable input'
                             section), values can be obtained from a time series by entering the time-series
                             name in place of a numeric value. by default, rainfall  rates are zero for each
                             reach.
-                * evaporation : string
+                * evaporation : double precision
                             real or character value that defines the volumetric rate per unit area of water
                             subtracted by evaporation from the streamflow routing reach. a positive
                             evaporation rate should be provided. if the options block includes a
@@ -350,7 +368,7 @@ class ModflowGwfsfr(MFPackage):
                             runoff but excluding groundwater leakage into the reach) the volumetric
                             evaporation rate is limited to the sources of water to the reach. by default,
                             evaporation rates are zero for each reach.
-                * runoff : string
+                * runoff : double precision
                             real or character value that defines the volumetric rate of diffuse overland
                             runoff that enters the streamflow routing reach. if the options block includes
                             a timeseriesfile entry (see the 'time-variable input' section), values can be
@@ -460,6 +478,13 @@ class ModflowGwfsfr(MFPackage):
         ],
         [
             "block options",
+            "name ats_courant",
+            "type double precision",
+            "reader urword",
+            "optional true",
+        ],
+        [
+            "block options",
             "name auxiliary",
             "type string",
             "shape (naux)",
@@ -480,6 +505,7 @@ class ModflowGwfsfr(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -494,6 +520,7 @@ class ModflowGwfsfr(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -501,6 +528,7 @@ class ModflowGwfsfr(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -514,6 +542,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name stage",
+            "mf6internal options_stage",
             "type keyword",
             "shape",
             "in_record true",
@@ -535,6 +564,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name budget_filerecord",
+            "mf6internal budfilerec",
             "type record budget fileout budgetfile",
             "shape",
             "reader urword",
@@ -575,6 +605,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name budgetcsv_filerecord",
+            "mf6internal budcsvfilerec",
             "type record budgetcsv fileout budgetcsvfile",
             "shape",
             "reader urword",
@@ -605,6 +636,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name package_convergence_filerecord",
+            "mf6internal pkgconvfilerec",
             "type record package_convergence fileout package_convergence_filename",
             "shape",
             "reader urword",
@@ -614,6 +646,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name package_convergence",
+            "mf6internal pkgconv",
             "type keyword",
             "shape",
             "in_record true",
@@ -624,6 +657,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name package_convergence_filename",
+            "mf6internal pkgconvfname",
             "type string",
             "shape",
             "in_record true",
@@ -656,6 +690,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name filein",
+            "mf6internal options_filein",
             "type keyword",
             "shape",
             "in_record true",
@@ -716,6 +751,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name maximum_picard_iterations",
+            "mf6internal maxsfrpicard",
             "type integer",
             "reader urword",
             "optional true",
@@ -723,6 +759,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name maximum_iterations",
+            "mf6internal maxsfrit",
             "type integer",
             "reader urword",
             "optional true",
@@ -730,6 +767,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name maximum_depth_change",
+            "mf6internal dmaxchg",
             "type double precision",
             "reader urword",
             "optional true",
@@ -745,6 +783,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name length_conversion",
+            "mf6internal lengthconv",
             "type double precision",
             "reader urword",
             "optional true",
@@ -759,7 +798,24 @@ class ModflowGwfsfr(MFPackage):
         [
             "block options",
             "name dev_storage_weight",
+            "mf6internal storage_weight",
             "type double precision",
+            "reader urword",
+            "optional true",
+        ],
+        [
+            "block options",
+            "name dev_no_check",
+            "mf6internal icheck",
+            "type keyword",
+            "reader urword",
+            "optional true",
+        ],
+        [
+            "block options",
+            "name dev_no_final_check",
+            "mf6internal iconvchk",
+            "type keyword",
             "reader urword",
             "optional true",
         ],
@@ -767,6 +823,7 @@ class ModflowGwfsfr(MFPackage):
             "block dimensions",
             "name nreaches",
             "type integer",
+            "mf6internal maxbound",
             "reader urword",
             "optional false",
         ],
@@ -774,12 +831,13 @@ class ModflowGwfsfr(MFPackage):
             "block packagedata",
             "name packagedata",
             "type recarray ifno cellid rlen rwid rgrd rtp rbth rhk man ncon ustrf ndv aux boundname",
-            "shape (maxbound)",
+            "shape (nreaches)",
             "reader urword",
         ],
         [
             "block packagedata",
             "name ifno",
+            "mf6internal packagedata_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -854,7 +912,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block packagedata",
             "name man",
-            "type string",
+            "type double precision",
             "shape",
             "tagged false",
             "in_record true",
@@ -916,12 +974,13 @@ class ModflowGwfsfr(MFPackage):
             "type recarray ifno tab6 filein tab6_filename",
             "shape",
             "valid",
-            "optional false",
+            "optional true",
             "reader urword",
         ],
         [
             "block crosssections",
             "name ifno",
+            "mf6internal crosssect_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -932,6 +991,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block crosssections",
             "name tab6",
+            "mf6internal xs_tab6",
             "type keyword",
             "shape",
             "in_record true",
@@ -942,6 +1002,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block crosssections",
             "name filein",
+            "mf6internal xs_filein",
             "type keyword",
             "shape",
             "in_record true",
@@ -952,6 +1013,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block crosssections",
             "name tab6_filename",
+            "mf6internal sfrtab6_filename",
             "type string",
             "preserve_case true",
             "in_record true",
@@ -963,12 +1025,13 @@ class ModflowGwfsfr(MFPackage):
             "block connectiondata",
             "name connectiondata",
             "type recarray ifno ic",
-            "shape (maxbound)",
+            "shape (nreaches)",
             "reader urword",
         ],
         [
             "block connectiondata",
             "name ifno",
+            "mf6internal conndata_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -992,12 +1055,14 @@ class ModflowGwfsfr(MFPackage):
             "block diversions",
             "name diversions",
             "type recarray ifno idv iconr cprior",
-            "shape (maxbound)",
+            "shape",
+            "optional true",
             "reader urword",
         ],
         [
             "block diversions",
             "name ifno",
+            "mf6internal diversions_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -1008,6 +1073,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block diversions",
             "name idv",
+            "mf6internal diversions_idv",
             "type integer",
             "shape",
             "tagged false",
@@ -1038,14 +1104,15 @@ class ModflowGwfsfr(MFPackage):
             "block initialstages",
             "name initialstages",
             "type recarray ifno initialstage",
-            "shape (maxbound)",
+            "shape (nreaches)",
             "valid",
-            "optional false",
+            "optional true",
             "reader urword",
         ],
         [
             "block initialstages",
             "name ifno",
+            "mf6internal initstage_ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -1114,7 +1181,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name bedk",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1124,7 +1191,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name manning",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1134,7 +1201,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name stage",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1144,7 +1211,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name inflow",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1154,7 +1221,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name rainfall",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1164,7 +1231,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name evaporation",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1174,7 +1241,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name runoff",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -1221,15 +1288,18 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name upstream_fraction",
+            "mf6internal upstream_frac",
             "type double precision",
             "shape",
             "tagged true",
             "in_record true",
             "reader urword",
+            "time_series true",
         ],
         [
             "block period",
             "name cross_sectionrecord",
+            "mf6internal xsectionrecord",
             "type record cross_section tab6 filein tab6_filename",
             "shape",
             "tagged",
@@ -1288,6 +1358,7 @@ class ModflowGwfsfr(MFPackage):
         [
             "block period",
             "name auxiliary",
+            "mf6internal period_auxiliary",
             "type keyword",
             "shape",
             "in_record true",
@@ -1319,6 +1390,7 @@ class ModflowGwfsfr(MFPackage):
         model,
         loading_package=False,
         storage=None,
+        ats_courant=None,
         auxiliary=None,
         boundnames=None,
         print_input=None,
@@ -1339,6 +1411,8 @@ class ModflowGwfsfr(MFPackage):
         length_conversion=None,
         time_conversion=None,
         dev_storage_weight=None,
+        dev_no_check=None,
+        dev_no_final_check=None,
         nreaches=None,
         packagedata=None,
         crosssections=None,
@@ -1361,6 +1435,7 @@ class ModflowGwfsfr(MFPackage):
         )
 
         self.storage = self.build_mfdata("storage", storage)
+        self.ats_courant = self.build_mfdata("ats_courant", ats_courant)
         self.auxiliary = self.build_mfdata("auxiliary", auxiliary)
         self.boundnames = self.build_mfdata("boundnames", boundnames)
         self.print_input = self.build_mfdata("print_input", print_input)
@@ -1402,6 +1477,10 @@ class ModflowGwfsfr(MFPackage):
         self.time_conversion = self.build_mfdata("time_conversion", time_conversion)
         self.dev_storage_weight = self.build_mfdata(
             "dev_storage_weight", dev_storage_weight
+        )
+        self.dev_no_check = self.build_mfdata("dev_no_check", dev_no_check)
+        self.dev_no_final_check = self.build_mfdata(
+            "dev_no_final_check", dev_no_final_check
         )
         self.nreaches = self.build_mfdata("nreaches", nreaches)
         self.packagedata = self.build_mfdata("packagedata", packagedata)

@@ -7,7 +7,6 @@ from pprint import pformat
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-import shapefile
 from flaky import flaky
 from modflow_devtools.markers import excludes_platform, requires_exe, requires_pkg
 from modflow_devtools.misc import has_pkg
@@ -161,7 +160,7 @@ def unstructured_grid(example_data_path):
     )
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 @pytest.mark.parametrize("pathlike", (True, False))
 def test_output_helper_shapefile_export(pathlike, function_tmpdir, example_data_path):
     ml = Modflow.load(
@@ -180,7 +179,7 @@ def test_output_helper_shapefile_export(pathlike, function_tmpdir, example_data_
     )
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 @pytest.mark.slow
 def test_freyberg_export(function_tmpdir, example_data_path):
     # steady state
@@ -242,7 +241,7 @@ def test_freyberg_export(function_tmpdir, example_data_path):
     assert m.drn.stress_period_data.mg.angrot == m.modelgrid.angrot
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "shapely", name_map={"pyshp": "shapefile"})
 @pytest.mark.parametrize("missing_arrays", [True, False])
 @pytest.mark.slow
 def test_disu_export(function_tmpdir, missing_arrays):
@@ -324,7 +323,7 @@ def test_write_gridlines_shapefile(function_tmpdir):
         assert len(sf) == 22
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 def test_export_shapefile_polygon_closed(function_tmpdir):
     from shapefile import Reader
 
@@ -443,7 +442,7 @@ def test_netcdf_classmethods(function_tmpdir, example_data_path):
     new_f.nc.close()
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 def test_shapefile_ibound(function_tmpdir, example_data_path):
     from shapefile import Reader
 
@@ -466,7 +465,7 @@ def test_shapefile_ibound(function_tmpdir, example_data_path):
     shape.close()
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 @pytest.mark.slow
 @pytest.mark.parametrize("namfile", namfiles())
 def test_shapefile(function_tmpdir, namfile):
@@ -556,7 +555,7 @@ def test_export_netcdf(function_tmpdir, namfile):
     nc.close()
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 def test_export_array2(function_tmpdir):
     nrow = 7
     ncol = 11
@@ -587,7 +586,7 @@ def test_export_array2(function_tmpdir):
 
 
 @pytest.mark.mf6
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 def test_array3d_export_structured(function_tmpdir):
     from shapefile import Reader
 
@@ -624,7 +623,7 @@ def test_array3d_export_structured(function_tmpdir):
         ]
 
 
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "shapely", name_map={"pyshp": "shapefile"})
 def test_array3d_export_unstructured(function_tmpdir):
     from shapefile import Reader
 
@@ -976,6 +975,77 @@ def test_export_huge_shapefile(function_tmpdir):
     )
     gdf = m.to_geodataframe()
     gdf.to_file(function_tmpdir / "huge.shp")
+
+
+@requires_pkg("geopandas")
+def test_to_geodataframe_incomplete_stress_period_data():
+    sim = flopy.mf6.MFSimulation()
+    tdis = flopy.mf6.ModflowTdis(
+        sim,
+        nper=2,
+        perioddata=[(1, 1, 1), (1, 1, 1)],
+    )
+    ims = flopy.mf6.ModflowIms(sim)
+
+    gwf = flopy.mf6.ModflowGwf(sim, modelname="dev_gdf")
+
+    dis = flopy.mf6.ModflowGwfdis(
+        gwf, nlay=1, nrow=10, ncol=11, delc=100, delr=100, top=100, botm=0, idomain=1
+    )
+
+    npf = flopy.mf6.ModflowGwfnpf(
+        gwf,
+        k=10,
+    )
+
+    ic = flopy.mf6.ModflowGwfic(gwf, strt=99)
+
+    chd_rec = [(0, i, 0, 95) for i in range(10)]
+    chd = flopy.mf6.ModflowGwfchd(gwf, stress_period_data={0: chd_rec})
+
+    ghb_rec = [(0, i, 10, 85.0, 10.0) for i in range(10)]
+    ghb = flopy.mf6.ModflowGwfghb(gwf, stress_period_data={0: ghb_rec, 1: ghb_rec})
+
+    rch_rec = np.full((10, 11), 0.0005)
+    rch_rec[:, 0] = 0
+    rch_rec[:, -1] = 0
+    rch = flopy.mf6.ModflowGwfrcha(gwf, recharge={0: rch_rec})
+
+    wel_rec = [
+        (0, 4, 5, -1500.0),
+    ]
+    wel = flopy.mf6.ModflowGwfwel(gwf, stress_period_data={0: wel_rec})
+
+    recharge = rch.recharge.array[0].ravel()
+    gdf = rch.to_geodataframe(kper=1)
+
+    np.testing.assert_allclose(
+        recharge,
+        gdf["rcha_recharge_1"].values,
+        err_msg="GeoDataFrame does not match recharge values from package",
+    )
+
+    wel_data = wel.stress_period_data.to_array(kper=0, mask=True)["q"].ravel()
+    gdf = wel.to_geodataframe(kper=1)
+    np.testing.assert_allclose(
+        wel_data,
+        gdf["wel_q_0_1"].values,
+        err_msg="GeoDataFrame does not match pumping values from wel package",
+    )
+
+    gdf = gwf.to_geodataframe(kper=1)
+
+    np.testing.assert_allclose(
+        recharge,
+        gdf["rcha_recharge_1"].values,
+        err_msg="GeoDataFrame from gwf does not match recharge values from package",
+    )
+
+    np.testing.assert_allclose(
+        wel_data,
+        gdf["wel_q_0_1"].values,
+        err_msg="GeoDataFrame from gwf does not match pumping values from wel package",
+    )
 
 
 @requires_pkg("netCDF4", "pyproj")
@@ -1418,7 +1488,6 @@ def test_vtk_cbc(function_tmpdir, example_data_path):
 
 
 @requires_pkg("vtk")
-@pytest.mark.slow
 def test_vtk_vector(function_tmpdir, example_data_path):
     # test mf 2005 freyberg
     mpth = example_data_path / "freyberg_multilayer_transient"
@@ -1479,6 +1548,40 @@ def test_vtk_vector(function_tmpdir, example_data_path):
     assert info["number_of_points"] == 19200
     assert info["celldata_names"] == ["discharge"]
     assert info["pointdata_names"] == []
+
+
+@requires_pkg("vtk")
+@pytest.mark.parametrize("point_scalars", [False, True])
+@pytest.mark.parametrize("size", ["nnodes", "ncpl"])
+def test_vtk_add_vector_components(size, point_scalars):
+    """Cell i must get (x[i], y[i], z[i]) for either input size"""
+    from vtk.util import numpy_support
+
+    nlay, nrow, ncol = 2, 3, 4
+    grid = StructuredGrid(
+        delr=np.full(ncol, 10.0),
+        delc=np.full(nrow, 10.0),
+        top=np.full((nrow, ncol), 10.0),
+        botm=np.array([np.full((nrow, ncol), 0.0), np.full((nrow, ncol), -10.0)]),
+        nlay=nlay,
+    )
+    n = nlay * nrow * ncol if size == "nnodes" else nrow * ncol
+
+    # a constant field is used because inverse distance weighting of a
+    # constant returns the constant, so the point and the cell case have the
+    # same expected value
+    vector = np.array([np.full(n, 1.0), np.full(n, 2.0), np.full(n, 3.0)])
+    vtk = Vtk(modelgrid=grid, point_scalars=point_scalars)
+    vtk.add_vector(vector, "v")
+
+    data = vtk.vtk_grid.GetPointData() if point_scalars else vtk.vtk_grid.GetCellData()
+    arr = numpy_support.vtk_to_numpy(data.GetVectors())
+    assert arr.shape[1] == 3
+
+    # cells that the ncpl sized vector does not reach are filled with nan
+    finite = arr[np.isfinite(arr).all(axis=1)]
+    assert len(finite) > 0
+    assert np.allclose(finite, [1.0, 2.0, 3.0])
 
 
 @requires_pkg("vtk")
@@ -2128,10 +2231,12 @@ def test_to_shapefile_raises_attributeerror():
 
 
 @pytest.mark.mf6
-@requires_pkg("pyshp", name_map={"pyshp": "shapefile"})
+@requires_pkg("pyshp", "geopandas", name_map={"pyshp": "shapefile"})
 @pytest.mark.parametrize("use_pandas", [True])  # TODO: test non-pandas
 @pytest.mark.parametrize("sparse", [True, False])
 def test_mf6_chd_shapefile_export_structured(function_tmpdir, use_pandas, sparse):
+    import shapefile
+
     from flopy.mf6 import (
         MFSimulation,
         ModflowGwf,
@@ -2183,6 +2288,8 @@ def test_mf6_chd_shapefile_export_structured(function_tmpdir, use_pandas, sparse
 @pytest.mark.parametrize("sparse", [True])  # TODO: test non-sparse
 def test_mf6_chd_shapefile_export_unstructured(function_tmpdir, use_pandas, sparse):
     """Test CHD package shapefile export for DISU (unstructured) grids"""
+    import shapefile
+
     from flopy.mf6 import (
         MFSimulation,
         ModflowGwf,

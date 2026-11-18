@@ -4,6 +4,7 @@ from pathlib import Path
 from shutil import copytree, which
 
 import numpy as np
+import pandas as pd
 import pytest
 from modflow_devtools.markers import requires_exe, requires_pkg
 from modflow_devtools.misc import set_dir
@@ -58,6 +59,7 @@ from flopy.mf6.coordinates.modeldimensions import (
 )
 from flopy.mf6.data.mffileaccess import MFFileAccessArray
 from flopy.mf6.data.mfstructure import MFDataItemStructure, MFDataStructure
+from flopy.mf6.mfbase import MFDataException
 from flopy.mf6.mfsimbase import MFSimulationData
 from flopy.mf6.modflow import (
     mfgwf,
@@ -495,6 +497,50 @@ def test_subdir(function_tmpdir):
     assert gwf_r.dis.delc.get_file_entry() == gwf_r2.dis.delc.get_file_entry(), (
         "Something wrong with model external paths"
     )
+
+
+@pytest.mark.parametrize("sep", ["win", "posix"])
+def test_load_subdir_ext_files_with_any_sep(function_tmpdir, sep):
+    if sep == "win" and platform.system() != "Windows":
+        pytest.skip("backslash is not a path separator on this OS")
+
+    # model in a subdirectory with external array and list files
+    sim = MFSimulation(sim_ws=function_tmpdir)
+    ModflowTdis(sim)
+    ims = ModflowIms(sim)
+    gwf = ModflowGwf(sim, modelname="gwf", model_rel_path="level2")
+    sim.register_ims_package(ims, [gwf.name])
+    botm = np.array([[[-1.0, -2.0, -3.0], [-4.0, -5.0, -6.0]]])
+    ModflowGwfdis(gwf, nlay=1, nrow=2, ncol=3, top=10.0, botm=botm)
+    spd = [[(0, 0, 0), 1.0], [(0, 1, 2), 0.0]]
+    ModflowGwfchd(gwf, stress_period_data={0: spd})
+    sim.set_all_data_external(external_data_folder="dat")
+    sim.write_simulation()
+
+    # move external files to level2/dat and reference them relative to the
+    # simulation folder with the given separator, e.g. "level2/dat/botm.txt"
+    # as written by other tools such as iMOD Python
+    ext_dir = function_tmpdir / "level2" / "dat"
+    for ext_file in (function_tmpdir / "dat").glob("*"):
+        ext_file.rename(ext_dir / ext_file.name)
+    s = "\\" if sep == "win" else "/"
+    for pkg_file in (function_tmpdir / "level2").glob("gwf.*"):
+        lines = pkg_file.read_text().splitlines(keepends=True)
+        with open(pkg_file, "w") as f:
+            for l in lines:
+                tokens = l.split()
+                if tokens and tokens[0].lower() in ("open/close", "open\\close"):
+                    name = Path(to_posix_sep(tokens[1].strip("'"))).name
+                    tokens[:2] = ["open/close", s.join(["level2", "dat", name])]
+                    l = f"    {' '.join(tokens)}\n"
+                f.write(l)
+
+    # external file paths must resolve to the files written above
+    sim_r = MFSimulation.load(sim_ws=function_tmpdir)
+    gwf_r = sim_r.get_model("gwf")
+    np.testing.assert_allclose(gwf_r.dis.botm.array, botm)
+    spd_r = gwf_r.chd.stress_period_data.get_data(0)
+    assert [tuple(r) for r in spd_r] == [tuple(r) for r in spd]
 
 
 @requires_exe("mf6")
@@ -1448,6 +1494,49 @@ def test_get_set_data_record(function_tmpdir):
     assert spd_record[0]["data"][0][0] == (0, 0, 7)
 
     sim.write_simulation()
+
+
+def test_set_data_dataframe_column_mismatch_error(function_tmpdir):
+    """
+    DataFrame with a wrong column count should raise MFDataException.
+    Previously the error message code referenced len(data[0]), which on a
+    DataFrame accesses the column named 0 and raises KeyError instead.
+    """
+    sim = MFSimulation(sim_ws=str(function_tmpdir), exe_name="mf6")
+    ModflowTdis(sim, nper=1, perioddata=[(1.0, 1, 1.0)])
+    ModflowIms(sim)
+    gwf = ModflowGwf(sim, modelname="gwf")
+    ModflowGwfdis(gwf, nlay=1, nrow=10, ncol=10)
+    ModflowGwfic(gwf, strt=0.0)
+    ModflowGwfnpf(gwf)
+    ModflowGwfwel(gwf, stress_period_data={0: [[(0, 0, 0), -1.0]]})
+    spd = gwf.get_package("WEL").stress_period_data
+
+    # 3 columns: matches neither _header_names (4) nor _data_item_names (2)
+    df = pd.DataFrame({"a": [0], "b": [3], "c": [-500.0]})
+    with pytest.raises(MFDataException):
+        spd.set_data({0: df})
+
+
+def test_set_data_dataframe_tupled_cellid(function_tmpdir):
+    """DataFrame with a tuple 'cellid' is accepted, consistent with recarrays."""
+    sim = MFSimulation(sim_ws=str(function_tmpdir), exe_name="mf6")
+    ModflowTdis(sim, nper=1, perioddata=[(1.0, 1, 1.0)])
+    ModflowIms(sim)
+    gwf = ModflowGwf(sim, modelname="gwf")
+    ModflowGwfdis(gwf, nlay=1, nrow=10, ncol=10)
+    ModflowGwfic(gwf, strt=0.0)
+    ModflowGwfnpf(gwf)
+    ModflowGwfwel(gwf, stress_period_data={0: [[(0, 0, 0), -1.0]]})
+    spd = gwf.get_package("WEL").stress_period_data
+
+    df = pd.DataFrame({"cellid": [(0, 3, 4)], "q": [-500.0]})
+    spd.set_data({0: df})
+    result = spd.get_data(key=0)
+    assert result is not None
+    assert len(result) == 1
+    assert result[0]["cellid"] == (0, 3, 4)
+    assert result[0]["q"] == pytest.approx(-500.0)
 
 
 @requires_exe("mf6")

@@ -23,6 +23,8 @@ def _get_vars(d: dict, developmode: bool = True) -> dict[str, dict]:
         if (
             isinstance(v, dict)
             and "type" in v
+            # skip vars removed as of the DFN's MF6 version
+            and not v.get("removed", False)
             # support 'prerelease' for now but it's been deprecated for 'developmode'
             and (developmode or not v.get("developmode", v.get("prerelease", False)))
         ):
@@ -363,6 +365,7 @@ def attrs(
 
     legacy_dfn = dfn.get("legacy_dfn", {})
     legacy_meta = dfn.get("legacy_meta", [])
+    legacy_meta = [s.replace("#", "").replace("flopy", "").replace("mf6", "").strip() for s in legacy_meta]
     legacy_dfn = _dfn(legacy_dfn, _filter_metadata(legacy_meta))
     if component_base == "MFPackage":
         attrs.extend(

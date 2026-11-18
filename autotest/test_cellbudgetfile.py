@@ -3,6 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
+from modflow_devtools.markers import requires_pkg
 
 from autotest.conftest import get_example_data_path
 from flopy.mf6.modflow.mfsimulation import MFSimulation
@@ -861,6 +862,7 @@ def test_cellbudgetfile_get_ts_aux_vars_mf6_dis(dis_sim):
 
 
 @pytest.mark.requires_exe("mf6")
+@requires_pkg("shapely")
 def test_cellbudgetfile_get_ts_aux_vars_mf6_disv(dis_sim):
     from flopy.mf6 import ModflowGwfchd, ModflowGwfdisv
 
@@ -938,6 +940,7 @@ def test_cellbudgetfile_get_ts_aux_vars_mf6_disv(dis_sim):
 
 
 @pytest.mark.requires_exe("mf6")
+@requires_pkg("shapely")
 def test_cellbudgetfile_get_ts_aux_vars_mf6_disu(dis_sim):
     from flopy.mf6 import ModflowGwfchd, ModflowGwfdisu
 
@@ -1013,6 +1016,7 @@ def test_cellbudgetfile_get_ts_aux_vars_mf6_disu(dis_sim):
 
 
 @pytest.mark.requires_exe("mf6")
+@requires_pkg("shapely")
 def test_cellbudgetfile_get_ts_imeth1_disv_grid(dis_sim, function_tmpdir):
     """Test that IMETH=1 budget terms (like STO-SS) work with DISV grids.
 
@@ -1074,6 +1078,7 @@ def test_cellbudgetfile_get_ts_imeth1_disv_grid(dis_sim, function_tmpdir):
 
 
 @pytest.mark.requires_exe("mf6")
+@requires_pkg("shapely")
 def test_cellbudgetfile_get_ts_backwards_compatible_idx_format(
     dis_sim, function_tmpdir
 ):
@@ -1159,6 +1164,94 @@ def test_cellbudgetfile_get_ts_backwards_compatible_idx_format(
 
 
 @pytest.mark.requires_exe("mf6")
+def test_cellbudgetfile_full3D_aux_var(function_tmpdir):
+    """
+    Reproduce GitHub issue #2774: get_data(full3D=True) should return
+    correct values for auxiliary variables (e.g. sat), not just for q.
+    """
+    from flopy.mf6 import (
+        MFSimulation,
+        ModflowGwf,
+        ModflowGwfchd,
+        ModflowGwfdis,
+        ModflowGwfic,
+        ModflowGwfnpf,
+        ModflowGwfoc,
+        ModflowIms,
+        ModflowTdis,
+    )
+
+    sim_name = "test_full3d_sat"
+    sim = MFSimulation(sim_name=sim_name, sim_ws=function_tmpdir, exe_name="mf6")
+    ModflowTdis(sim, nper=2, perioddata=[(1.0, 1, 1.0), (1.0, 1, 1.0)])
+    ModflowIms(sim)
+    gwf = ModflowGwf(sim, modelname=sim_name, save_flows=True)
+    nlay, nrow, ncol = 1, 5, 5
+    ModflowGwfdis(
+        gwf, nlay=nlay, nrow=nrow, ncol=ncol, delr=10.0, delc=10.0, top=10.0, botm=[0.0]
+    )
+    ModflowGwfic(gwf, strt=5.0)
+    ModflowGwfnpf(gwf, k=1.0, icelltype=1, save_saturation=True)
+    ModflowGwfchd(gwf, stress_period_data=[[(0, 0, 0), 9.0], [(0, 4, 4), 1.0]])
+    ModflowGwfoc(
+        gwf,
+        budget_filerecord=f"{sim_name}.cbc",
+        head_filerecord=f"{sim_name}.hds",
+        saverecord=[("HEAD", "ALL"), ("BUDGET", "ALL")],
+    )
+
+    sim.write_simulation()
+    success, _ = sim.run_simulation(silent=True)
+    assert success
+
+    cbc = gwf.output.budget()
+
+    # non-full3D
+    sat_rec = cbc.get_data(text="DATA-SAT")
+    assert len(sat_rec) > 0
+    assert "sat" in sat_rec[0].dtype.names
+    assert "q" in sat_rec[0].dtype.names
+    assert np.allclose(sat_rec[0]["q"], 0.0), "q should be zero in DATA-SAT records"
+    assert not np.allclose(sat_rec[0]["sat"], 0.0), "sat values should be non-zero"
+    assert not np.allclose(sat_rec[0]["sat"], sat_rec[0]["sat"][0]), (
+        "sat values should vary across cells"
+    )
+
+    # full3D with default variable="q"
+    q_3d = cbc.get_data(text="DATA-SAT", full3D=True)
+    assert q_3d[0].shape == (nlay, nrow, ncol)
+    assert np.allclose(np.ma.filled(q_3d[0], 0.0), 0.0)
+
+    # full3D with variable="sat"
+    sat_3d = cbc.get_data(text="DATA-SAT", full3D=True, variable="sat")
+    assert sat_3d[0].shape == (nlay, nrow, ncol)
+    assert not np.allclose(np.ma.filled(sat_3d[0], 0.0), 0.0)
+
+    # check recarray and full 3D array match
+    rec = sat_rec[0]
+    arr = sat_3d[0]
+    for node, sat_val in zip(rec["node"], rec["sat"]):
+        k = (node - 1) // (nrow * ncol)
+        rc = (node - 1) % (nrow * ncol)
+        r = rc // ncol
+        c = rc % ncol
+        np.testing.assert_allclose(
+            arr[k, r, c],
+            sat_val,
+            err_msg=f"3D SAT value mismatch at node {node}",
+        )
+
+
+def test_cellbudgetfile_get_data_variable_without_full3D(example_data_path):
+    """variable= is only meaningful with full3D=True; without it, raise ValueError."""
+    mf2005_model_path = example_data_path / "mf2005_test"
+    cbc = CellBudgetFile(mf2005_model_path / "test1tr.gitcbc")
+    with pytest.raises(ValueError, match="only used when full3D=True"):
+        cbc.get_data(text="WELLS", variable="IFACE")
+    cbc.close()
+
+
+@pytest.mark.requires_exe("mf6")
 def test_cellbudgetfile_write_preserves_aux_vars(dis_sim, function_tmpdir):
     """Test that write() method preserves auxiliary variables in imeth=6 records."""
     from pathlib import Path
@@ -1206,3 +1299,295 @@ def test_cellbudgetfile_write_preserves_aux_vars(dis_sim, function_tmpdir):
             assert np.allclose(spdis_orig[i][field], spdis_rewritten[i][field]), (
                 f"Field {field} mismatch at timestep {i}"
             )
+
+
+@pytest.fixture
+def multi_rch_sim(function_tmpdir):
+    """
+    MF6 model with two list-based RCH packages, so the budget file
+    has two RCH records per time step, and two stress periods.
+    """
+    from flopy.mf6 import (
+        ModflowGwf,
+        ModflowGwfchd,
+        ModflowGwfdis,
+        ModflowGwfic,
+        ModflowGwfnpf,
+        ModflowGwfoc,
+        ModflowGwfrch,
+        ModflowIms,
+        ModflowTdis,
+    )
+
+    name = "multirch"
+    sim = MFSimulation(sim_name=name, sim_ws=function_tmpdir, exe_name="mf6")
+    ModflowTdis(sim, nper=2, perioddata=[(1.0, 1, 1.0), (1.0, 1, 1.0)])
+    ModflowIms(sim)
+    gwf = ModflowGwf(sim, modelname=name, save_flows=True)
+    ModflowGwfdis(gwf, nlay=1, nrow=3, ncol=3, top=10.0, botm=0.0)
+    ModflowGwfnpf(gwf, save_specific_discharge=True)
+    ModflowGwfic(gwf, strt=5.0)
+    ModflowGwfchd(gwf, stress_period_data=[((0, 0, 0), 5.0)])
+    ModflowGwfrch(
+        gwf,
+        stress_period_data={0: [((0, 2, 2), 2.0)], 1: [((0, 2, 2), 4.0)]},
+        pname="rch_10",
+        filename=f"{name}_10.rch",
+    )
+    ModflowGwfrch(
+        gwf,
+        stress_period_data={0: [((0, 1, 1), 1.0)], 1: [((0, 1, 1), 3.0)]},
+        pname="rch_1",
+        filename=f"{name}_1.rch",
+    )
+    ModflowGwfoc(gwf, budget_filerecord=f"{name}.cbc", saverecord=[("BUDGET", "ALL")])
+    sim.write_simulation(silent=True)
+    success, _ = sim.run_simulation(silent=True)
+    assert success
+    return sim
+
+
+def _assert_records_equal(cbc, exported, idx_orig, idx_exported=None):
+    if idx_exported is None:
+        idx_exported = idx_orig
+    fields = ["kstp", "kper", "text", "imeth", "paknam2"]
+    orig_ra = cbc.recordarray[idx_orig]
+    exp_ra = exported.recordarray[idx_exported]
+    assert len(orig_ra) == len(exp_ra)
+    for field in fields:
+        assert np.array_equal(orig_ra[field], exp_ra[field]), field
+    for i, j in zip(idx_orig, idx_exported):
+        a = cbc.get_data(idx=int(i))[0]
+        b = exported.get_data(idx=int(j))[0]
+        if a.dtype.names:
+            assert a.dtype.names == b.dtype.names
+            for name in a.dtype.names:
+                assert np.allclose(a[name], b[name]), (i, name)
+        else:
+            assert np.allclose(a, b), i
+
+
+@pytest.mark.requires_exe("mf6")
+def test_cellbudgetfile_export_multiple_packages(multi_rch_sim, function_tmpdir):
+    cbc = multi_rch_sim.get_model().output.budget()
+    rch = cbc.get_data(text="RCH")
+    assert len(rch) == 4  # 2 packages x 2 stress periods
+
+    out = function_tmpdir / "all.cbc"
+    cbc.export(out)
+    exported = CellBudgetFile(out)
+    all_idx = np.arange(len(cbc.recordarray))
+    assert len(exported.recordarray) == len(cbc.recordarray)
+    _assert_records_equal(cbc, exported, all_idx)
+    assert len(exported.get_data(text="RCH")) == 4
+
+    # the export should be the same size as the original. it is not
+    # byte-identical because MF6 right-justifies auxiliary variable names
+    # (e.g. DATA-SPDIS qx, qy, qz), which flopy strips when reading.
+    assert out.stat().st_size == os.path.getsize(cbc.filename)
+
+
+@pytest.mark.requires_exe("mf6")
+def test_cellbudgetfile_export_multiple_packages_text_subset(
+    multi_rch_sim, function_tmpdir
+):
+    cbc = multi_rch_sim.get_model().output.budget()
+    out = function_tmpdir / "rch.cbc"
+    cbc.export(out, text="RCH")
+    exported = CellBudgetFile(out)
+    assert [t.strip() for t in exported.textlist] == [b"RCH"]
+    assert [p.strip() for p in exported.recordarray["paknam2"]] == [
+        b"RCH_10",
+        b"RCH_1",
+        b"RCH_10",
+        b"RCH_1",
+    ]
+    rch_idx = np.flatnonzero(cbc.recordarray["text"] == exported.textlist[0])
+    _assert_records_equal(cbc, exported, rch_idx, np.arange(len(rch_idx)))
+
+    # text given as a list in a different order than in the file
+    # should still produce records in file order
+    out = function_tmpdir / "rch_spdis.cbc"
+    cbc.export(out, text=["RCH", "DATA-SPDIS"])
+    exported = CellBudgetFile(out)
+    assert [t.strip() for t in exported.recordarray["text"]] == [
+        b"DATA-SPDIS",
+        b"RCH",
+        b"RCH",
+    ] * 2
+    mask = np.isin(cbc.recordarray["text"], exported.textlist)
+    idx = np.flatnonzero(mask)
+    assert len(idx) == 6
+    _assert_records_equal(cbc, exported, idx, np.arange(len(idx)))
+
+
+@pytest.mark.requires_exe("mf6")
+def test_cellbudgetfile_export_multiple_packages_kstpkper_subset(
+    multi_rch_sim, function_tmpdir
+):
+    cbc = multi_rch_sim.get_model().output.budget()
+    assert cbc.kstpkper == [(1, 1), (1, 2)]
+    out = function_tmpdir / "sp2.cbc"
+    cbc.export(out, kstpkper=[(1, 2)])
+    exported = CellBudgetFile(out)
+    assert exported.kstpkper == [(1, 2)]
+    idx = np.flatnonzero(cbc.recordarray["kper"] == 2)
+    _assert_records_equal(cbc, exported, idx, np.arange(len(idx)))
+    rch = exported.get_data(text="RCH")
+    assert len(rch) == 2
+    assert [float(r["q"][0]) for r in rch] == [4.0, 3.0]
+
+
+@pytest.mark.parametrize(
+    "relpath",
+    [
+        # imeth 1 and 2 (compact list without aux)
+        "freyberg_multilayer_transient/freyberg.cbc",
+        # imeth 5 (compact list with naux + 1 = 1)
+        "preserve_unitnums/testsfr2.ghb.cbc",
+        # imeth 1, 2 and 5
+        "mfusg_test/03_conduit_confined/output/ex3.cbb",
+        # CLN records whose ncol differs from the file-level ncol
+        "mfusg_test/03A_conduit_unconfined/output/ex3A.cln.cbb",
+    ],
+)
+def test_cellbudgetfile_export_mf2005_compact_unchanged(
+    example_data_path, function_tmpdir, relpath
+):
+    """Exporting a whole MF2005 compact file reproduces it byte for byte."""
+    src = example_data_path / relpath
+    out = function_tmpdir / "out.cbc"
+    CellBudgetFile(src).export(out)
+    assert src.read_bytes() == out.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "relpath,kstpkper",
+    [
+        ("freyberg_multilayer_transient/freyberg.cbc", [(1, 1), (1, 2)]),
+        ("mfusg_test/03_conduit_confined/output/ex3.cbb", None),
+    ],
+)
+def test_cellbudgetfile_export_mf2005_compact_lists(
+    example_data_path, function_tmpdir, relpath, kstpkper
+):
+    """MF2005 compact records keep their imeth, and list records their fields."""
+    cbc = CellBudgetFile(example_data_path / relpath)
+    out = function_tmpdir / "out.cbc"
+    cbc.export(out, kstpkper=kstpkper)
+    exported = CellBudgetFile(out)
+
+    if kstpkper is None:
+        kstpkper = cbc.kstpkper
+    kk = [
+        (int(k), int(p))
+        for k, p in zip(cbc.recordarray["kstp"], cbc.recordarray["kper"])
+    ]
+    idx = [i for i, ksp in enumerate(kk) if ksp in set(kstpkper)]
+    assert len(exported.recordarray) == len(idx)
+    for j, i in enumerate(idx):
+        hdr = cbc.recordarray[i]
+        exp_hdr = exported.recordarray[j]
+        for field in ["kstp", "kper", "text", "ncol", "nrow", "nlay", "imeth"]:
+            assert hdr[field] == exp_hdr[field]
+        a = cbc.get_data(idx=i)[0]
+        b = exported.get_data(idx=j)[0]
+        if hdr["imeth"] in (2, 5):
+            assert b.dtype.names == a.dtype.names
+            for name in a.dtype.names:
+                assert np.array_equal(a[name], b[name]), name
+        else:
+            assert np.array_equal(a, b, equal_nan=True)
+
+
+def _write_mf2005_compact_cbc(path, precision):
+    """Write a compact budget file with imeth 2, 3, 4 and 5 records."""
+    realtype = np.float32 if precision == "single" else np.float64
+    nlay, nrow, ncol = 3, 2, 2
+    h1 = np.dtype(
+        [
+            ("kstp", "i4"),
+            ("kper", "i4"),
+            ("text", "S16"),
+            ("ncol", "i4"),
+            ("nrow", "i4"),
+            ("nlay", "i4"),
+        ]
+    )
+    h2 = np.dtype(
+        [("imeth", "i4"), ("delt", realtype), ("pertim", realtype), ("totim", realtype)]
+    )
+
+    def header(f, text, imeth):
+        np.array([(1, 1, text, ncol, nrow, -nlay)], h1).tofile(f)
+        np.array([(imeth, 1.0, 1.0, 1.0)], h2).tofile(f)
+
+    with open(path, "wb") as f:
+        header(f, b"           WELLS", 2)
+        np.array([2], np.int32).tofile(f)
+        np.array([(3, -1.5), (10, -2.5)], [("node", "i4"), ("q", realtype)]).tofile(f)
+
+        header(f, b"              ET", 3)
+        np.array([[1, 2], [3, 1]], np.int32).tofile(f)
+        np.array([[1.0, 2.0], [3.0, 4.0]], realtype).tofile(f)
+
+        header(f, b"        RECHARGE", 4)
+        np.array([[5.0, 6.0], [7.0, 8.0]], realtype).tofile(f)
+
+        header(f, b" HEAD DEP BOUNDS", 5)
+        np.array([2], np.int32).tofile(f)  # naux + 1
+        f.write(b"IFACE           ")
+        np.array([2], np.int32).tofile(f)
+        np.array(
+            [(4, 0.5, 6.0), (11, 0.25, 0.0)],
+            [("node", "i4"), ("q", realtype), ("IFACE", realtype)],
+        ).tofile(f)
+
+
+@pytest.mark.parametrize("precision", ["single", "double"])
+def test_cellbudgetfile_export_imeth_2_to_5(function_tmpdir, precision):
+    """imeth 2-5 records, including aux names, are written unchanged."""
+    src = function_tmpdir / "mf2005.cbc"
+    _write_mf2005_compact_cbc(src, precision)
+    cbc = CellBudgetFile(src, precision=precision)
+    assert list(cbc.recordarray["imeth"]) == [2, 3, 4, 5]
+
+    out = function_tmpdir / "out.cbc"
+    cbc.export(out)
+    assert src.read_bytes() == out.read_bytes()
+
+    # subset
+    out = function_tmpdir / "subset.cbc"
+    cbc.export(out, text=["ET", "HEAD DEP BOUNDS"])
+    exported = CellBudgetFile(out, precision=precision)
+    assert list(exported.recordarray["imeth"]) == [3, 5]
+    ilayer, et = exported.get_data(idx=0)[0]
+    assert ilayer.tolist() == [[1, 2], [3, 1]]
+    assert et.tolist() == [[1.0, 2.0], [3.0, 4.0]]
+    ghb = exported.get_data(idx=1)[0]
+    assert ghb.dtype.names == ("node", "q", "IFACE")
+    assert ghb["IFACE"].tolist() == [6.0, 0.0]
+
+
+def test_cellbudgetfile_export_imeth_2_to_5_precision(function_tmpdir):
+    """imeth 2-5 real fields are converted to the requested precision."""
+    src = function_tmpdir / "mf2005.cbc"
+    _write_mf2005_compact_cbc(src, "single")
+    cbc = CellBudgetFile(src, precision="single")
+    out = function_tmpdir / "out.cbc"
+    cbc.export(out, precision="double")
+
+    expected = function_tmpdir / "expected.cbc"
+    _write_mf2005_compact_cbc(expected, "double")
+    assert out.read_bytes() == expected.read_bytes()
+
+
+def test_cellbudgetfile_export_auto_precision(example_data_path, function_tmpdir):
+    """With precision detected automatically, export keeps the file's precision."""
+    src = example_data_path / "freyberg_multilayer_transient" / "freyberg.cbc"
+    cbc = CellBudgetFile(src)
+    assert cbc.realtype == np.float32
+    out = function_tmpdir / "out.cbc"
+    cbc.export(out, kstpkper=[(1, 1)])
+    exported = CellBudgetFile(out)
+    assert exported.realtype == np.float32

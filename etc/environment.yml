@@ -6,10 +6,10 @@ dependencies:
   - pip
 
   # required
-  - python>=3.10
-  - numpy>=1.20.3
+  - python>=3.12
+  - numpy>=2.2.0
   - matplotlib>=1.4.0
-  - pandas>=2.0.0,<3
+  - pandas>=2.2.0,<3
 
   # codegen
   - boltons>=1.0
@@ -45,9 +45,8 @@ dependencies:
   # optional
   - affine
   - descartes
-  - fiona
   - geojson
-  - geopandas
+  - geopandas>=1.0
   - GitPython
   - imageio
   - netcdf4

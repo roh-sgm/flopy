@@ -87,6 +87,11 @@ class ModflowGwelke(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature temperature with a general mixing equation and
+        adds the result to the right-hand side of the gwe equations, instead of adding
+        a row to the solution matrix for each feature.  this development option is not
+        supported.
     packagedata : [(lakeno, strt, ktf, rbthcnd, aux, boundname)]
         * lakeno : integer
                 integer value that defines the lake number associated with the specified PERIOD
@@ -126,7 +131,7 @@ class ModflowGwelke(MFPackage):
                 package supports a 'withdrawal' flow term.  if this withdrawal term is active,
                 then water will be withdrawn from the lake at the calculated temperature of the
                 lake.
-                * temperature : string
+                * temperature : double precision
                             real or character value that defines the temperature for the lake. the
                             specified temperature is only applied if the lake is a constant temperature
                             lake. if the options block includes a timeseriesfile entry (see the 'time-
@@ -139,23 +144,23 @@ class ModflowGwelke(MFPackage):
                             fluxes into or out of the lake and the inactive value will be written for the
                             lake temperature.  if a lake is constant, then the temperature for the lake
                             will be fixed at the user specified value.
-                * rainfall : string
+                * rainfall : double precision
                             real or character value that defines the rainfall temperature for the lake. if
                             the options block includes a timeseriesfile entry (see the 'time-variable
                             input' section), values can be obtained from a time series by entering the
                             time-series name in place of a numeric value.
-                * evaporation : string
+                * evaporation : double precision
                             use of the evaporation keyword is allowed in the lke package; however, the
                             specified value is not currently used in lke calculations.  instead, the latent
                             heat of evaporation is multiplied by the simulated evaporation rate for
                             determining the thermal energy lost from a stream reach.
-                * runoff : string
+                * runoff : double precision
                             real or character value that defines the temperature of runoff for the lake.
                             users are free to use whatever temperature scale they want, which might include
                             negative temperatures. if the options block includes a timeseriesfile entry
                             (see the 'time-variable input' section), values can be obtained from a time
                             series by entering the time-series name in place of a numeric value.
-                * ext_inflow : string
+                * ext_inflow : double precision
                             real or character value that defines the temperature of external inflow for the
                             lake.  users are free to use whatever temperature scale they want, which might
                             include negative temperatures.  if the options block includes a timeseriesfile
@@ -205,7 +210,7 @@ class ModflowGwelke(MFPackage):
     _package_type = "lke"
     dfn_file_name = "gwe-lke.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -213,6 +218,7 @@ class ModflowGwelke(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -229,6 +235,7 @@ class ModflowGwelke(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -244,6 +251,7 @@ class ModflowGwelke(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -251,6 +259,7 @@ class ModflowGwelke(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -258,6 +267,7 @@ class ModflowGwelke(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -265,6 +275,7 @@ class ModflowGwelke(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -274,6 +285,7 @@ class ModflowGwelke(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal temp_filerec",
         ],
         [
             "block options",
@@ -304,6 +316,7 @@ class ModflowGwelke(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -344,6 +357,7 @@ class ModflowGwelke(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -441,10 +455,18 @@ class ModflowGwelke(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray lakeno strt ktf rbthcnd aux boundname",
-            "shape (maxbound)",
+            "shape (nlakes)",
             "reader urword",
         ],
         [
@@ -456,6 +478,7 @@ class ModflowGwelke(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -527,6 +550,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name lakeno",
+            "mf6internal ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -555,7 +579,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name temperature",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -565,7 +589,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name rainfall",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -575,7 +599,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name evaporation",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -585,7 +609,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name runoff",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -595,7 +619,7 @@ class ModflowGwelke(MFPackage):
         [
             "block period",
             "name ext-inflow",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -618,6 +642,7 @@ class ModflowGwelke(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -657,6 +682,7 @@ class ModflowGwelke(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         lakeperioddata=None,
         filename=None,
@@ -703,6 +729,9 @@ class ModflowGwelke(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.lakeperioddata = self.build_mfdata("lakeperioddata", lakeperioddata)

@@ -87,6 +87,11 @@ class ModflowGwtsft(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature concentration with a general mixing equation
+        and adds the result to the right-hand side of the gwt equations, instead of
+        adding a row to the solution matrix for each feature.  this development option
+        is not supported.
     packagedata : [(ifno, strt, aux, boundname)]
         * ifno : integer
                 integer value that defines the feature (reach) number associated with the
@@ -120,7 +125,7 @@ class ModflowGwtsft(MFPackage):
                 terms.  concentrations cannot be specified for all flow terms.  for example,
                 the streamflow package supports a 'diversion' flow term.  diversion water will
                 be routed using the calculated concentration of the reach.
-                * concentration : string
+                * concentration : double precision
                             real or character value that defines the concentration for the reach. the
                             specified concentration is only applied if the reach is a constant
                             concentration reach. if the options block includes a timeseriesfile entry (see
@@ -133,12 +138,12 @@ class ModflowGwtsft(MFPackage):
                             mass fluxes into or out of the reach and the inactive value will be written for
                             the reach concentration.  if a reach is constant, then the concentration for
                             the reach will be fixed at the user specified value.
-                * rainfall : string
+                * rainfall : double precision
                             real or character value that defines the rainfall solute concentration
                             :math:`(ml^{-3})` for the reach. if the options block includes a timeseriesfile
                             entry (see the 'time-variable input' section), values can be obtained from a
                             time series by entering the time-series name in place of a numeric value.
-                * evaporation : string
+                * evaporation : double precision
                             real or character value that defines the concentration of evaporated water
                             :math:`(ml^{-3})` for the reach. if this concentration value is larger than the
                             simulated concentration in the reach, then the evaporated water will be removed
@@ -146,13 +151,13 @@ class ModflowGwtsft(MFPackage):
                             timeseriesfile entry (see the 'time-variable input' section), values can be
                             obtained from a time series by entering the time-series name in place of a
                             numeric value.
-                * runoff : string
+                * runoff : double precision
                             real or character value that defines the concentration of runoff
                             :math:`(ml^{-3})` for the reach. value must be greater than or equal to zero.
                             if the options block includes a timeseriesfile entry (see the 'time-variable
                             input' section), values can be obtained from a time series by entering the
                             time-series name in place of a numeric value.
-                * inflow : string
+                * inflow : double precision
                             real or character value that defines the concentration of inflow
                             :math:`(ml^{-3})` for the reach. value must be greater than or equal to zero.
                             if the options block includes a timeseriesfile entry (see the 'time-variable
@@ -204,7 +209,7 @@ class ModflowGwtsft(MFPackage):
     _package_type = "sft"
     dfn_file_name = "gwt-sft.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -212,6 +217,7 @@ class ModflowGwtsft(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -228,6 +234,7 @@ class ModflowGwtsft(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -243,6 +250,7 @@ class ModflowGwtsft(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -250,6 +258,7 @@ class ModflowGwtsft(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -257,6 +266,7 @@ class ModflowGwtsft(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -264,6 +274,7 @@ class ModflowGwtsft(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -273,6 +284,7 @@ class ModflowGwtsft(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal conc_filerec",
         ],
         [
             "block options",
@@ -303,6 +315,7 @@ class ModflowGwtsft(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -343,6 +356,7 @@ class ModflowGwtsft(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -440,10 +454,18 @@ class ModflowGwtsft(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray ifno strt aux boundname",
-            "shape (maxbound)",
+            "shape (nreaches)",
             "reader urword",
         ],
         [
@@ -455,6 +477,7 @@ class ModflowGwtsft(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -536,7 +559,7 @@ class ModflowGwtsft(MFPackage):
         [
             "block period",
             "name concentration",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -546,7 +569,7 @@ class ModflowGwtsft(MFPackage):
         [
             "block period",
             "name rainfall",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -556,7 +579,7 @@ class ModflowGwtsft(MFPackage):
         [
             "block period",
             "name evaporation",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -566,7 +589,7 @@ class ModflowGwtsft(MFPackage):
         [
             "block period",
             "name runoff",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -576,7 +599,7 @@ class ModflowGwtsft(MFPackage):
         [
             "block period",
             "name inflow",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -599,6 +622,7 @@ class ModflowGwtsft(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -638,6 +662,7 @@ class ModflowGwtsft(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         reachperioddata=None,
         filename=None,
@@ -684,6 +709,9 @@ class ModflowGwtsft(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.reachperioddata = self.build_mfdata("reachperioddata", reachperioddata)

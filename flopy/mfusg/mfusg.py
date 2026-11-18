@@ -1000,7 +1000,10 @@ def fmt_string(array, free=False):
             raise TypeError(msg)
         else:
             raise TypeError(f"mfusg.fmt_string error: unknown vtype in field: {field}")
-    return "".join(fmts)
+    # a free format list is read with URWORD, so the fields are separated the
+    # way MfList.fmt_string separates them; a fixed format list is read by
+    # position and relies on the field widths
+    return (" " if free else "").join(fmts)
 
 
 # Per-component transport factors of EVT (ETFACTOR) and ETS (ESFACTOR):

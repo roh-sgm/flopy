@@ -87,6 +87,11 @@ class ModflowGwemwe(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature temperature with a general mixing equation and
+        adds the result to the right-hand side of the gwe equations, instead of adding
+        a row to the solution matrix for each feature.  this development option is not
+        supported.
     packagedata : [(mawno, strt, ktf, fthk, aux, boundname)]
         * mawno : integer
                 integer value that defines the well number associated with the specified PERIOD
@@ -126,7 +131,7 @@ class ModflowGwemwe(MFPackage):
                 aquifer well package supports a 'withdrawal' flow term.  if this withdrawal
                 term is active, then water will be withdrawn from the well at the calculated
                 temperature of the well.
-                * temperature : string
+                * temperature : double precision
                             real or character value that defines the temperature for the well. the
                             specified temperature is only applied if the well is a constant temperature
                             well. if the options block includes a timeseriesfile entry (see the 'time-
@@ -139,7 +144,7 @@ class ModflowGwemwe(MFPackage):
                             mass fluxes into or out of the well and the inactive value will be written for
                             the well temperature.  if a well is constant, then the temperature for the well
                             will be fixed at the user specified value.
-                * rate : string
+                * rate : double precision
                             real or character value that defines the injection temperature
                             :math:`(e.g.,:^{circ}c:or:^{circ}f)` for the well. if the options block
                             includes a timeseriesfile entry (see the 'time-variable input' section), values
@@ -189,7 +194,7 @@ class ModflowGwemwe(MFPackage):
     _package_type = "mwe"
     dfn_file_name = "gwe-mwe.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -197,6 +202,7 @@ class ModflowGwemwe(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -213,6 +219,7 @@ class ModflowGwemwe(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -228,6 +235,7 @@ class ModflowGwemwe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -235,6 +243,7 @@ class ModflowGwemwe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -242,6 +251,7 @@ class ModflowGwemwe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -249,6 +259,7 @@ class ModflowGwemwe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -258,6 +269,7 @@ class ModflowGwemwe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal temp_filerec",
         ],
         [
             "block options",
@@ -288,6 +300,7 @@ class ModflowGwemwe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -328,6 +341,7 @@ class ModflowGwemwe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -425,10 +439,18 @@ class ModflowGwemwe(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray mawno strt ktf fthk aux boundname",
-            "shape (maxbound)",
+            "shape (nmawwells)",
             "reader urword",
         ],
         [
@@ -440,6 +462,7 @@ class ModflowGwemwe(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -511,6 +534,7 @@ class ModflowGwemwe(MFPackage):
         [
             "block period",
             "name mawno",
+            "mf6internal ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -539,7 +563,7 @@ class ModflowGwemwe(MFPackage):
         [
             "block period",
             "name temperature",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -549,7 +573,7 @@ class ModflowGwemwe(MFPackage):
         [
             "block period",
             "name rate",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -572,6 +596,7 @@ class ModflowGwemwe(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -611,6 +636,7 @@ class ModflowGwemwe(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         mweperioddata=None,
         filename=None,
@@ -657,6 +683,9 @@ class ModflowGwemwe(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.mweperioddata = self.build_mfdata("mweperioddata", mweperioddata)

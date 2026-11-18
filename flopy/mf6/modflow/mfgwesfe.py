@@ -87,6 +87,11 @@ class ModflowGwesfe(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature temperature with a general mixing equation and
+        adds the result to the right-hand side of the gwe equations, instead of adding
+        a row to the solution matrix for each feature.  this development option is not
+        supported.
     packagedata : [(rno, strt, ktf, rbthcnd, aux, boundname)]
         * rno : integer
                 integer value that defines the reach number associated with the specified
@@ -126,7 +131,7 @@ class ModflowGwesfe(MFPackage):
                 temperatures cannot be specified for all flow terms.  for example, the
                 streamflow package supports a 'diversion' flow term.  diversion water will be
                 routed using the calculated temperature of the reach.
-                * temperature : string
+                * temperature : double precision
                             real or character value that defines the temperature for the reach. the
                             specified temperature is only applied if the reach is a constant temperature
                             reach. if the options block includes a timeseriesfile entry (see the 'time-
@@ -139,25 +144,25 @@ class ModflowGwesfe(MFPackage):
                             fluxes into or out of the reach and the inactive value will be written for the
                             reach temperature.  if a reach is constant, then the temperature for the reach
                             will be fixed at the user specified value.
-                * rainfall : string
+                * rainfall : double precision
                             real or character value that defines the rainfall temperature
                             :math:`(e.g.,:^{circ}c:or:^{circ}f)` for the reach. if the options block
                             includes a timeseriesfile entry (see the 'time-variable input' section), values
                             can be obtained from a time series by entering the time-series name in place of
                             a numeric value.
-                * evaporation : string
+                * evaporation : double precision
                             use of the evaporation keyword is allowed in the sfe package; however, the
                             specified value is not currently used in sfe calculations.  instead, the latent
                             heat of evaporation is multiplied by the simulated evaporation rate for
                             determining the thermal energy lost from a stream reach.
-                * runoff : string
+                * runoff : double precision
                             real or character value that defines the temperature of runoff
                             :math:`(e.g.,:^{circ}c:or:^{circ}f)` for the reach.  users are free to use
                             whatever temperature scale they want, which might include negative
                             temperatures.  if the options block includes a timeseriesfile entry (see the
                             'time-variable input' section), values can be obtained from a time series by
                             entering the time-series name in place of a numeric value.
-                * inflow : string
+                * inflow : double precision
                             real or character value that defines the temperature of inflow
                             :math:`(e.g.,:^{circ}c:or:^{circ}f)` for the reach. users are free to use
                             whatever temperature scale they want, which might include negative
@@ -210,7 +215,7 @@ class ModflowGwesfe(MFPackage):
     _package_type = "sfe"
     dfn_file_name = "gwe-sfe.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -218,6 +223,7 @@ class ModflowGwesfe(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -234,6 +240,7 @@ class ModflowGwesfe(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -249,6 +256,7 @@ class ModflowGwesfe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -256,6 +264,7 @@ class ModflowGwesfe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -263,6 +272,7 @@ class ModflowGwesfe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -270,6 +280,7 @@ class ModflowGwesfe(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -279,6 +290,7 @@ class ModflowGwesfe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal temp_filerec",
         ],
         [
             "block options",
@@ -309,6 +321,7 @@ class ModflowGwesfe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -349,6 +362,7 @@ class ModflowGwesfe(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -446,10 +460,18 @@ class ModflowGwesfe(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray rno strt ktf rbthcnd aux boundname",
-            "shape (maxbound)",
+            "shape (nreaches)",
             "reader urword",
         ],
         [
@@ -461,6 +483,7 @@ class ModflowGwesfe(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -532,6 +555,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name rno",
+            "mf6internal ifno",
             "type integer",
             "shape",
             "tagged false",
@@ -560,7 +584,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name temperature",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -570,7 +594,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name rainfall",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -580,7 +604,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name evaporation",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -590,7 +614,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name runoff",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -600,7 +624,7 @@ class ModflowGwesfe(MFPackage):
         [
             "block period",
             "name inflow",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -623,6 +647,7 @@ class ModflowGwesfe(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -662,6 +687,7 @@ class ModflowGwesfe(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         reachperioddata=None,
         filename=None,
@@ -708,6 +734,9 @@ class ModflowGwesfe(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.reachperioddata = self.build_mfdata("reachperioddata", reachperioddata)

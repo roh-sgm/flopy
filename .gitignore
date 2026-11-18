@@ -122,3 +122,6 @@ test.gsf
 
 # Generated USG-T transport validation output; too large for the repo
 examples/data/mfusg_transport/Ex3_CLN_Conduit/Dispersion/*.CBB
+# MODFLOW cell-by-cell budget output
+*.cbb
+*.CBB

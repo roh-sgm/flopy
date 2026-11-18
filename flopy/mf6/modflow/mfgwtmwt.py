@@ -87,6 +87,11 @@ class ModflowGwtmwt(MFPackage):
         obs package with variable names as keys and package data as values. Data for
         the observations variable is also acceptable. See obs package documentation for
         more information.
+    dev_nonexpanding_matrix : keyword
+        keyword that solves the feature concentration with a general mixing equation
+        and adds the result to the right-hand side of the gwt equations, instead of
+        adding a row to the solution matrix for each feature.  this development option
+        is not supported.
     packagedata : [(ifno, strt, aux, boundname)]
         * ifno : integer
                 integer value that defines the feature (well) number associated with the
@@ -120,7 +125,7 @@ class ModflowGwtmwt(MFPackage):
                 supports a 'withdrawal' flow term.  if this withdrawal term is active, then
                 water will be withdrawn from the well at the calculated concentration of the
                 well.
-                * concentration : string
+                * concentration : double precision
                             real or character value that defines the concentration for the well. the
                             specified concentration is only applied if the well is a constant concentration
                             well. if the options block includes a timeseriesfile entry (see the 'time-
@@ -133,7 +138,7 @@ class ModflowGwtmwt(MFPackage):
                             mass fluxes into or out of the well and the inactive value will be written for
                             the well concentration.  if a well is constant, then the concentration for the
                             well will be fixed at the user specified value.
-                * rate : string
+                * rate : double precision
                             real or character value that defines the injection solute concentration
                             :math:`(ml^{-3})` for the well. if the options block includes a timeseriesfile
                             entry (see the 'time-variable input' section), values can be obtained from a
@@ -182,7 +187,7 @@ class ModflowGwtmwt(MFPackage):
     _package_type = "mwt"
     dfn_file_name = "gwt-mwt.dfn"
     dfn = [
-        ["header", "multi-package"],
+        ["header", "multi-package", "package-type advanced-stress-package"],
         [
             "block options",
             "name flow_package_name",
@@ -190,6 +195,7 @@ class ModflowGwtmwt(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal flow_pkg_name",
         ],
         [
             "block options",
@@ -206,6 +212,7 @@ class ModflowGwtmwt(MFPackage):
             "shape",
             "reader urword",
             "optional true",
+            "mf6internal fp_aux_name",
         ],
         [
             "block options",
@@ -221,6 +228,7 @@ class ModflowGwtmwt(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprpak",
         ],
         [
             "block options",
@@ -228,6 +236,7 @@ class ModflowGwtmwt(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprconc",
         ],
         [
             "block options",
@@ -235,6 +244,7 @@ class ModflowGwtmwt(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal iprflow",
         ],
         [
             "block options",
@@ -242,6 +252,7 @@ class ModflowGwtmwt(MFPackage):
             "type keyword",
             "reader urword",
             "optional true",
+            "mf6internal ipakcb",
         ],
         [
             "block options",
@@ -251,6 +262,7 @@ class ModflowGwtmwt(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal conc_filerec",
         ],
         [
             "block options",
@@ -281,6 +293,7 @@ class ModflowGwtmwt(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budfilerec",
         ],
         [
             "block options",
@@ -321,6 +334,7 @@ class ModflowGwtmwt(MFPackage):
             "reader urword",
             "tagged true",
             "optional true",
+            "mf6internal budcsvfilerec",
         ],
         [
             "block options",
@@ -418,10 +432,18 @@ class ModflowGwtmwt(MFPackage):
             "optional false",
         ],
         [
+            "block options",
+            "name dev_nonexpanding_matrix",
+            "type keyword",
+            "reader urword",
+            "optional true",
+            "mf6internal dev_nonexpanding",
+        ],
+        [
             "block packagedata",
             "name packagedata",
             "type recarray ifno strt aux boundname",
-            "shape (maxbound)",
+            "shape (nmawwells)",
             "reader urword",
         ],
         [
@@ -433,6 +455,7 @@ class ModflowGwtmwt(MFPackage):
             "in_record true",
             "reader urword",
             "numeric_index true",
+            "mf6internal packagedata_ifno",
         ],
         [
             "block packagedata",
@@ -514,7 +537,7 @@ class ModflowGwtmwt(MFPackage):
         [
             "block period",
             "name concentration",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -524,7 +547,7 @@ class ModflowGwtmwt(MFPackage):
         [
             "block period",
             "name rate",
-            "type string",
+            "type double precision",
             "shape",
             "tagged true",
             "in_record true",
@@ -547,6 +570,7 @@ class ModflowGwtmwt(MFPackage):
             "shape",
             "in_record true",
             "reader urword",
+            "mf6internal period_auxiliary",
         ],
         [
             "block period",
@@ -586,6 +610,7 @@ class ModflowGwtmwt(MFPackage):
         budgetcsv_filerecord=None,
         timeseries=None,
         observations=None,
+        dev_nonexpanding_matrix=None,
         packagedata=None,
         mwtperioddata=None,
         filename=None,
@@ -632,6 +657,9 @@ class ModflowGwtmwt(MFPackage):
         self._obs_filerecord = self.build_mfdata("obs_filerecord", None)
         self._obs_package = self.build_child_package(
             "obs", observations, "continuous", self._obs_filerecord
+        )
+        self.dev_nonexpanding_matrix = self.build_mfdata(
+            "dev_nonexpanding_matrix", dev_nonexpanding_matrix
         )
         self.packagedata = self.build_mfdata("packagedata", packagedata)
         self.mwtperioddata = self.build_mfdata("mwtperioddata", mwtperioddata)

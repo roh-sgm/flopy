@@ -58,6 +58,13 @@ class ModflowGwfdisu(MFPackage):
     export_array_ascii : keyword
         keyword that specifies input griddata arrays should be written to layered ascii
         output files.
+    crs : [string]
+        is a real-world coordinate reference system (crs) for the model, for example,
+        an epsg integer code (e.g. 26915), authority string (i.e. epsg:26915), or open
+        geospatial consortium well-known text (wkt) specification. limited to 5000
+        characters. the entry for crs does not affect the model simulation, but it is
+        written to the binary grid file so that postprocessors can locate the grid in
+        space.
     nodes : integer
         is the number of cells in the model grid.
     nja : integer
@@ -136,10 +143,28 @@ class ModflowGwfdisu(MFPackage):
         only needed if horizontal anisotropy is specified in the npf package, if the
         xt3d option is used in the npf package, or if the save_specific_discharge
         option is specified in the npf package.  angldegx does not need to be specified
-        if these conditions are not met.  angldegx is of size nja; values specified for
-        vertical connections and for the diagonal position are not used.  note that
-        angldegx is read in degrees, which is different from modflow-usg, which reads a
-        similar variable (anglex) in radians.
+        otherwise.  angldegx is of size nja; values specified for vertical connections
+        and for the diagonal position are not used.  note that angldegx is read in
+        degrees, which is different from modflow-usg, which reads a similar variable
+        (anglex) in radians.  only the value specified for the connection from the
+        lower to the higher cell number is used, but the values for both directions of
+        every horizontal connection between active cells are checked.  because angldegx
+        is the outward normal of the shared face, the value for the connection from
+        cell n to cell m must differ by 180 degrees (within 0.01 degrees) from the
+        value for the connection from cell m to cell n.  if vertices and cell2d are
+        specified, angldegx must be expressed in the same coordinate system as the
+        vertex coordinates; the centers of two connected cells must lie on opposite
+        sides of their shared face, so angldegx must be within 90 degrees of the
+        direction from the cell center to the center of the connected cell, and, for
+        cells that share exactly two vertices, angldegx must agree within 1 degree with
+        the outward normal of the face computed from those vertices.  a warning is
+        issued for each of these three conditions that is not met, and the simulation
+        terminates with an error if any of them is not met and the npf package requires
+        angldegx to be specified (xt3d, k22, or save_specific_discharge).  a warning is
+        also issued if angldegx deviates by more than 45 degrees from the direction
+        between the centers of the connected cells; this is not an error, but such
+        connections depart from the assumptions of the control-volume finite-difference
+        method and may warrant a closer look at the grid.
     vertices : [(iv, xv, yv)]
         * iv : integer
                 is the vertex number.  Records in the VERTICES block must be listed in
@@ -177,6 +202,7 @@ class ModflowGwfdisu(MFPackage):
     grb_filerecord = ListTemplateGenerator(
         ("gwf6", "disu", "options", "grb_filerecord")
     )
+    crs = ArrayTemplateGenerator(("gwf6", "disu", "options", "crs"))
     top = ArrayTemplateGenerator(("gwf6", "disu", "griddata", "top"))
     bot = ArrayTemplateGenerator(("gwf6", "disu", "griddata", "bot"))
     area = ArrayTemplateGenerator(("gwf6", "disu", "griddata", "area"))
@@ -290,7 +316,6 @@ class ModflowGwfdisu(MFPackage):
             "preserve_case true",
             "reader urword",
             "optional true",
-            "developmode true",
         ],
         [
             "block dimensions",
@@ -498,6 +523,7 @@ class ModflowGwfdisu(MFPackage):
         angrot=None,
         vertical_offset_tolerance=0.0,
         export_array_ascii=None,
+        crs=None,
         nodes=None,
         nja=None,
         nvert=None,
@@ -539,6 +565,7 @@ class ModflowGwfdisu(MFPackage):
         self.export_array_ascii = self.build_mfdata(
             "export_array_ascii", export_array_ascii
         )
+        self.crs = self.build_mfdata("crs", crs)
         self.nodes = self.build_mfdata("nodes", nodes)
         self.nja = self.build_mfdata("nja", nja)
         self.nvert = self.build_mfdata("nvert", nvert)

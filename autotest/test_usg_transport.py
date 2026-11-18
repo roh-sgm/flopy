@@ -17046,3 +17046,36 @@ def test_mfusg_transport_factor_fixed_values_fallback(function_tmpdir, kind):
     loaded, _ = _b2_load(kind, ml, function_tmpdir, Path(pkg.fn_path).read_text())
     got = loaded.esfactor if kind == "ets" else loaded.etfactor
     assert np.allclose(got, [float(f) for f in fields], rtol=1e-12)
+
+
+def test_mfusgrch_selev_iznrch(function_tmpdir):
+    """Repro #2763"""
+    from flopy.modflow import ModflowDis
+
+    m = MfUsg(
+        version="mfusg",
+        structured=True,
+        model_ws=function_tmpdir,
+        modelname="test_rch",
+    )
+    ModflowDis(m, nlay=1, nrow=3, ncol=3, nper=2)
+
+    rech = 1e-3
+    selev_data = np.full((3, 3), 5.0, dtype=np.float32)
+    iznrch_data = np.full((3, 3), 2, dtype=np.int32)
+
+    rch = MfUsgRch(
+        m,
+        nrchop=3,
+        rech=rech,
+        seepelev=1,
+        selev=selev_data,
+        iznrch=iznrch_data,
+    )
+
+    assert np.allclose(rch.selev[0].array, selev_data)
+    assert np.array_equal(rch.iznrch[0].array, iznrch_data)
+
+    rch.write_file(check=False)
+    content = (function_tmpdir / "test_rch.rch").read_text()
+    assert " # Stress period 1" in content

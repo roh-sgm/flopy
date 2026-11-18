@@ -2,7 +2,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
-from modflow_devtools.markers import requires_exe
+from modflow_devtools.markers import requires_exe, requires_pkg
 
 import flopy
 from flopy.mf6 import (
@@ -148,6 +148,16 @@ def test_get_structured_faceflows(function_tmpdir, nlay, nrow, ncol):
     assert np.any(frf) == (ncol > 1)
     assert np.any(fff) == (nrow > 1)
     assert np.any(flf) == (nlay > 1)
+
+    if nlay * nrow * ncol == 3:
+        # The 1-D cases have unit K and cell dimensions, with all heads
+        # prescribed as 11, 12, 13. Darcy flow is -1 toward increasing
+        # column, row, or layer number; the final face has no neighbor.
+        expected = np.array([-1.0, -1.0, 0.0]).reshape(nlay, nrow, ncol)
+        for flow, size in zip((frf, fff, flf), (ncol, nrow, nlay)):
+            if size == 3:
+                np.testing.assert_allclose(flow, expected, rtol=0.0, atol=1e-8)
+                assert flow.flat[-1] == 0.0
 
 
 @pytest.mark.mf6
@@ -556,6 +566,7 @@ def test_get_transmissivities_mf6_structured(function_tmpdir):
     assert np.array_equal(Tcoords, Tcellids)
 
 
+@requires_pkg("shapely")
 def test_get_transmissivities_mf6_vertex(function_tmpdir):
     nl = 1
     nr = 8
@@ -593,6 +604,7 @@ def test_get_transmissivities_mf6_vertex(function_tmpdir):
         assert "r, c parameters only valid for structured grids" in str(e.value)
 
 
+@requires_pkg("shapely")
 def test_get_transmissivities_mf6_unstructured(function_tmpdir):
     nl = 1
     nr = 8

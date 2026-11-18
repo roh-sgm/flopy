@@ -744,7 +744,7 @@ class MFModel(ModelInterface):
 
         Returns
         -------
-        inner_hclose, rclose : float, float
+        inner_dvclose, rclose : float, float
 
         """
         ims = self.get_ims_package()
@@ -752,7 +752,7 @@ class MFModel(ModelInterface):
             rclose = ims.rcloserecord.get_data()
             if rclose is not None:
                 rclose = rclose[0][0]
-            return ims.inner_hclose.get_data(), rclose
+            return ims.inner_dvclose.get_data(), rclose
         return None
 
     @property
@@ -816,14 +816,21 @@ class MFModel(ModelInterface):
             gdf : GeoDataFrame
         """
         if gdf is None:
+            from ..discretization.grid import Grid
+
             modelgrid = self.modelgrid
-            if modelgrid is not None:
-                gdf = modelgrid.to_geodataframe()
-            else:
+            if modelgrid is None:
                 raise AttributeError(
                     "model does not have a grid instance, "
                     "please supply a geodataframe"
                 )
+            if type(modelgrid) is Grid:
+                raise AttributeError(
+                    "model does not have a discretization package; cannot build a "
+                    "GeoDataFrame without geometry. Attach a discretization package "
+                    "or supply a gdf."
+                )
+            gdf = modelgrid.to_geodataframe()
 
         if package_names is None:
             package_names = [pak.name[0] for pak in self.packagelist]
@@ -1037,13 +1044,9 @@ class MFModel(ModelInterface):
                     print(f"    loading package {ftype}...")
                 # load package
                 instance.load_package(ftype, fname, pname, strict, None)
-                sim_data = simulation.simulation_data
-                if ftype == "dis" and sim_data._max_columns_set_by != 'user':
-                    # set column wrap to ncol
-                    dis = instance.get_package("dis", type_only=True)
-                    if dis is not None and hasattr(dis, "ncol"):
-                        sim_data._max_columns_of_data = dis.ncol.get_data()
-                        sim_data._max_columns_set_by = 'auto'
+                if ftype == "dis":
+                    # instance is not yet in simulation._models at this point
+                    simulation._auto_set_max_columns(models=[instance])
         # load referenced packages
         if modelname in instance.simulation_data.referenced_files:
             for ref_file in instance.simulation_data.referenced_files[
@@ -1369,11 +1372,7 @@ class MFModel(ModelInterface):
 
         self.name_file.write(ext_file_action=ext_file_action)
 
-        if self.simulation_data._max_columns_set_by != 'user':
-            grid_type = self.get_grid_type()
-            if grid_type == DiscretizationType.DIS:
-                self.simulation_data._max_columns_of_data = self.dis.ncol.get_data()
-                self.simulation_data._max_columns_set_by = 'auto'
+        self.simulation._auto_set_max_columns()
 
         # write packages
         for pp in self.packagelist:
@@ -1888,6 +1887,8 @@ class MFModel(ModelInterface):
                 will not be rewritten. Default is False.
 
         """
+        self.simulation._auto_set_max_columns()
+
         for package in self.packagelist:
             package.set_all_data_external(
                 check_data,
@@ -2005,7 +2006,6 @@ class MFModel(ModelInterface):
 
             return path, self.structure.nam_spec
 
-        package_extension = package.package_type
         if set_package_name:
             # produce a default package name
             if (
@@ -2020,16 +2020,6 @@ class MFModel(ModelInterface):
                         not in self._package_container.package_name_dict
                     ):
                         package.package_name = package_name
-                        suffix = package_name.split("_")
-                        if (
-                            len(suffix) > 1
-                            and datautil.DatumUtil.is_int(suffix[-1])
-                            and suffix[-1] != "0"
-                        ):
-                            # update file extension to make unique
-                            package_extension = (
-                                f"{package_extension}_{suffix[-1]}"
-                            )
                         break
             else:
                 package.package_name = package.package_type
