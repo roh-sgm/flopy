@@ -20,6 +20,64 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.DPT-B1 — DPT read sequence, components and DPF
+
+- Audited against `gwt2dptu1.f` (GWT2DPTU1AR) of USG-T 2.8.1, with 2.7.0 as
+  the compatibility version.
+- With a DPF package, PHIF and the FRAHK, MOBILESAT and INPUTSAT options
+  are not written or read (USG-T reads them only when the flow is not dual
+  porosity); DLIM is written with DPF and IDISPIM not 0. FloPy wrote PHIF
+  with DPF, and USG-T then read every later array shifted without an error.
+  When writing, dual porosity is the presence of a registered DPF package;
+  `model.idpf` must agree with it (`ValueError` otherwise, for example after
+  the DPF package was removed, since `model.idpf` is not reset). When
+  loading, `model.idpf` from the name file is used, so DPT loads without
+  the DPF object (`load_only`). A replaced DPF package is accepted. The
+  single-domain options with DPF raise `ValueError`.
+- `concim` has one value per component, the MCOMP mobile components then
+  the IMCOMP immobile components (a scalar is used for all), and is written
+  and loaded for all of them. Immobile components are supported only
+  without adsorption, decay and A-W_ADSORBIM, the input that USG-T 2.8.1 and
+  2.7.0 read the same way (2.8.1 also reads reaction arrays for immobile
+  components; 2.7.0 does not).
+- Load: the option words are compared in upper case and the last of
+  MOBILESAT and INPUTSAT sets the saturation option, as in USG-T. Building a
+  package with both `mobilesat` and `inputsat` True raises `ValueError`.
+- The default unit number 158 is registered (it was `None`, and writing the
+  name file failed). `write_file(f)` writes into the given file object and
+  does not close it; `load(f)` does not close a given file object and
+  closes the files it opens, also after an error.
+- The component counts are taken when the package is built (it needs a BCT
+  package, or counts set by hand); `write_file` raises `ValueError` if the
+  BCT package was removed, replaced by one with other counts, or its counts
+  changed. `write_file` also checks the package as it is when written,
+  not only as it was built: the unsupported options below, the current BCT
+  package (CHAINDECAY with SPATIALREACT), MOBILESAT with INPUTSAT, the
+  A-W_ADSORBIM indices, and that every array the current flags and counts
+  read is present (`ValueError` naming the missing array, for example
+  `bulkdim` after setting `iadsorbim` on a package built without
+  adsorption). Supported changes (header values, options, arrays assigned
+  to an existing attribute, flags that need no new array) are written. The
+  whole text is built before the file is opened, so a rejected package
+  leaves the file or the file object untouched.
+- `htcondsim` is deprecated and never written (USG-T reads one heat array in
+  DPT); a value other than 0.0 emits `DeprecationWarning`.
+- Not supported yet (`NotImplementedError` before any array is written or
+  read; limits of this class, not invalid USG-T input): IHEAT=1, the
+  SD_MASS_TR option, immobile components with reactions or A-W_ADSORBIM,
+  BCT CHAINDECAY with SPATIALREACT (SPTLRCTIM), IZODIM/IFODIM 3 without
+  adsorption and 4. INPUTSAT is written as before but is not claimed as
+  runnable: the local 2.8.1 and 2.7.0 builds stopped with SIGSEGV in the
+  case tried, as they did for the heat and IZODIM=3 cases tried.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_dpt.py`, DISU
+  model): FloPy-written and hand-written DPT files give the same CON/CIM
+  files with and without DPF and with an immobile component; DDTR and the
+  mobile CONCIM change the results; the immobile CONCIM does not change the
+  mobile results (2.7.0 does not save immobile components in the CIM file,
+  so only 2.8.1 checks their values).
+- Not changed here: DPF, BCT, MDT, CLN; DPT heat, SD_MASS_TR, ZODRAWIM and
+  FODRAWIM, SPTLRCTIM, immobile reactions, the fixed-format option columns.
+
 ### Stage 5.NTCOMP-B2 — EVT ETFACTOR and ETS ESFACTOR by MCOMPT
 
 - USG-T 2.8.1 and 2.7.0 (same `gwf2evt8u1.f`/`gwf2ets8u1.f`) read the
