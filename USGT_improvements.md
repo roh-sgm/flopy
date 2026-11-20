@@ -20,6 +20,88 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.DDF-B1 — DDF sharp interface without CLN, precision and validation
+
+- Audited against `density.f` (DDF1AR, SHARPINT1AR) and `utl7u1.f` (URWORD,
+  URDCOM) of USG-T 2.8.1; both files are the same in 2.7.0.
+- With ISHARP other than 0, the record HSEA ISWIUN is written after the
+  NONLINEAR table and read back (`hsea`, `iswiun`; ISWIUN missing on load is
+  0). FloPy did not write it, and USG-T stopped at end of file in the DDF
+  unit (the next package is not read). `hsea` is required with ISHARP and
+  rejected without it, as is an ISWIUN greater than 0. The new arguments
+  follow `filenames`, so the existing positional order is unchanged.
+- ISWIUN greater than 0 registers a binary output file (extension `zta`,
+  `filenames=[DDF file, interface file]`), saved by USG-T with the OC head
+  flags and readable with `HeadUFile(text="interface elev.")`. The name and
+  unit are kept by `MfUsg.load` (also when the DATA(BINARY) entry is listed
+  before DDF in the name file) and `change_model_ws`. The constructor
+  computes the name `add_output_file` would register (the base name of the
+  given path, or the default name and its fallback) and raises `ValueError`,
+  without changing the model, when the unit is a package unit, an external
+  file or an output of another package (or of none), when that name is
+  already an output, an external file or a package file of the model, or
+  the DDF file itself, and
+  when an output is still registered for DDF on another unit (replacing a
+  DDF package with another ISWIUN is refused until that output is removed
+  with `model.remove_output`). On load the ISWIUN entry of the name file
+  must be DATA(BINARY). `write_file` raises `ValueError` before opening the
+  file if `iswiun` was changed, or if its output was removed, renamed, made
+  non-binary or given to another package. These are the cases tested; other
+  ways of editing the model's file lists are not checked.
+- The header and the table are written without rounding (they were written
+  with 2 decimals and 6 significant digits; CSTD 0.0357 became 0.04, which
+  changes heads). USG-T reads the header into a single-precision variable,
+  so its effective precision stays single; the table is read in double
+  precision.
+- Load reads the subset of USG-T input described here, not every form
+  that the list-directed READ of the table accepts: `#` comments in column
+  1, blank, comma or tab separators, D exponents, integers missing at the
+  end of the first record are 0, NONLINEAR only as the item after ISHARP
+  (in ISHARP's place it raises `ValueError`), and table rows that continue
+  on later lines (the rest of the last line is ignored). Null values, `/`,
+  repeat counts, quotes, blank records and end of file raise `ValueError`
+  instead of being read as zeros. `load(f)` closes only the files it opens,
+  also after an error, and leaves a given file object after the last
+  record read.
+- Input is checked in the constructor, before the package touches the
+  model, and again in `write_file`, before the file is opened: finite real
+  densities, CSTD and HSEA; integer flags (fractions are not truncated);
+  ISWIUN an integer 0 or greater; RHOFRESH not 0; CSTD not 0 when ISHARP is
+  0, also with NONLINEAR (USG-T divides by CSTD before using the table);
+  RHOSTD different from RHOFRESH with ISHARP (USG-T divides by their
+  difference); a non-empty table only with NONLINEAR, two values per row,
+  strictly increasing concentrations (one row is accepted). USG-T reads
+  RHOFRESH, RHOSTD, CSTD and HSEA into single-precision (REAL) variables,
+  so these zero denominators and the REAL range (overflow, and underflow to
+  0 of a denominator) are checked on the single-precision values, for
+  example RHOSTD = 1000 + 1e-7 with RHOFRESH = 1000 and ISHARP; the values
+  are still written as given. These are protections; those cases were not
+  run with USG-T.
+- Not supported (`NotImplementedError`, no file written): BAS without FREE
+  (USG-T reads the first record with 5F10.4 and stops on its integers),
+  also on load when the BAS package is already in the model (before the
+  file is opened or the model changes; without a BAS package the format is
+  not inferred), and
+  ISHARP with CLN, when writing (CLN package or a CLN entry kept in the name
+  file) and when loading (CLN in the model or in the name file, also with
+  `load_only`). USG-T then reads ZETASWI for the CLN nodes, and its CLN
+  branch of ZETANODE uses an unset index. Non-sharp DDF with CLN is
+  unchanged.
+- `check()` reports an error for ISHARP 0 without a BCT package (USG-T
+  stopped with a segmentation fault). With a structured grid, non-sharp DDF
+  and saved heads also stopped USG-T 2.8.1 and 2.7.0 with a segmentation
+  fault; this is not checked.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_ddf.py`, DISU
+  model with LAYTYP 4): FloPy-written and hand-written files give the same
+  heads and interface elevations (ISHARP 1 and 2, sharp after a table, CSTD
+  0.0357, NONLINEAR equivalent to the linear header); HSEA changes the
+  heads; the interface elevation agrees with the analytical value; hand
+  files with commas, D exponents and continued rows are read by FloPy as
+  by USG-T; a model loaded from its name file and written again gives the
+  same heads and interface elevations. The sharp interface was not run on
+  a structured grid or with CLN.
+- Not changed here: BCT, CLN, OC, the structured interface output, IEQSWI.
+
 ### Stage 5.DPT-B1 — DPT read sequence, components and DPF
 
 - Audited against `gwt2dptu1.f` (GWT2DPTU1AR) of USG-T 2.8.1, with 2.7.0 as
