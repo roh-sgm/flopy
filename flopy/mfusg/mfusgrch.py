@@ -4,6 +4,9 @@ the MfUsgRch class as `flopy.mfusg.MfUsgRch`.
 
 """
 
+import copy
+import io
+
 import numpy as np
 
 from ..modflow.mfparbc import ModflowParBc as mfparbc
@@ -15,6 +18,155 @@ from ..utils.utils_def import (
     get_unitnumber_from_ext_unit_dict,
 )
 from .mfusg import MfUsg
+
+
+def _is_int(value):
+    return isinstance(value, (int, np.integer)) and not isinstance(value, bool)
+
+
+def _period_flags(value, nper, name):
+    """INRCHZONES/INSELEV values as {kper: int}; a list or array has one
+    value per stress period."""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        flags = dict(value)
+    elif isinstance(value, (list, tuple, np.ndarray)):
+        if len(value) != nper:
+            raise ValueError(
+                f"{name} has {len(value)} values for {nper} stress periods"
+            )
+        flags = dict(enumerate(value))
+    else:
+        raise ValueError(f"{name} must be a dict {{kper: int}} or one int per period")
+    for kper, flag in flags.items():
+        if not _is_int(kper) or not 0 <= kper < nper:
+            raise ValueError(f"{name}: stress period {kper!r} not in 0..{nper - 1}")
+        if not _is_int(flag):
+            raise ValueError(f"{name}[{kper}] = {flag!r} is not an integer")
+    return {int(k): int(v) for k, v in flags.items()}
+
+
+def _array_keys(value, nper, name):
+    """Check the stress-period keys of selev/iznrch as given: a dict or a
+    Transient2d needs integer keys in 0..nper-1 (no float, bool or text keys,
+    which Transient2d would convert); other values are period 1."""
+    if isinstance(value, Transient2d):
+        keys = value.transient_2ds
+    elif isinstance(value, dict):
+        keys = value
+    else:
+        return
+    for kper in keys:
+        if not _is_int(kper) or not 0 <= kper < nper:
+            raise ValueError(
+                f"{name}: stress period key {kper!r} is not an integer in 0..{nper - 1}"
+            )
+
+
+def _as_transient2d(model, value, dtype, name):
+    """value as a new Transient2d; a given Transient2d is not changed
+    (Transient2d(value=Transient2d) rebuilds the Util2d of its dict)."""
+    if value is None:
+        return None
+    if isinstance(value, Transient2d):
+        value = copy.copy(value)
+        value.transient_2ds = dict(value.transient_2ds)
+        shape = value.shape
+    else:
+        shape = get_pak_vals_shape(model, value)
+    return Transient2d(model, shape, dtype, value, name=name)
+
+
+def _rts_seepelev_options(nper, mxrtzones, seepelev, iznrch, selev, iniznrch, inselev):
+    """Checks that need no array conversion; returns the INRCHZONES and
+    INSELEV values as {kper: int}."""
+    if not _is_int(mxrtzones) or mxrtzones < 0:
+        raise ValueError(f"mxrtzones = {mxrtzones!r} must be an integer >= 0")
+    if not _is_int(seepelev) or seepelev not in (0, 1):
+        raise ValueError(f"seepelev = {seepelev!r} must be 0 or 1")
+    izn = _period_flags(iniznrch, nper, "iniznrch")
+    sel = _period_flags(inselev, nper, "inselev")
+    if mxrtzones == 0 and (iznrch is not None or izn):
+        raise ValueError("iznrch/iniznrch need the RTS option (mxrtzones > 0)")
+    if not seepelev and (selev is not None or sel):
+        raise ValueError("selev/inselev need the SEEPELEV option (seepelev=1)")
+    _array_keys(iznrch, nper, "iznrch")
+    _array_keys(selev, nper, "selev")
+    return izn, sel
+
+
+def _rts_seepelev_plan(
+    nper, shape, mxrtzones, seepelev, iznrch, selev, iniznrch, inselev
+):
+    """Check the RTS zones (INRCHZONES, IZNRCH) and seepage elevations
+    (INSELEV, SELEV) and return the [INRCHZONES, INSELEV] values of every
+    stress period, None for a keyword that is not written.
+
+    USG-T RP (gwf2rch8u1.f): INRCHZONES n > 0 reads IZNRCH and sets the
+    number of RTS zones to n (the RTS header count is not used then); the
+    RTS array is allocated with the period 1 count, so period 1 must read
+    zones and later positive values must keep that count. n <= 0 or no
+    keyword reuses the zones. INSELEV n > 0 reads SELEV and turns seepage
+    on; 0 or no keyword turns it off; n < 0 keeps the previous state and
+    SELEV. An array is read only with a value > 0, so a period with an
+    array needs a value > 0 and the other way round. Without explicit
+    values: a period with an array writes INRCHZONES with the period 1
+    count (mxrtzones in period 1) / INSELEV 1, any other period writes no
+    INRCHZONES / INSELEV -1."""
+    izn, sel = _rts_seepelev_options(
+        nper, mxrtzones, seepelev, iznrch, selev, iniznrch, inselev
+    )
+    defined = {}
+    for name, t2d in (("iznrch", iznrch), ("selev", selev)):
+        defined[name] = set()
+        if t2d is None:
+            continue
+        for kper, u2d in t2d.transient_2ds.items():
+            if tuple(u2d.shape) != tuple(shape):
+                raise ValueError(
+                    f"{name} period {kper + 1} has shape {u2d.shape}, RECH {shape}"
+                )
+            defined[name].add(kper)
+    plan = []
+    count = None  # number of RTS zones set in period 1
+    for kper in range(nper):
+        n = s = None
+        if mxrtzones > 0:
+            new = kper in defined["iznrch"]
+            default = (mxrtzones if count is None else count) if new else None
+            n = izn.get(kper, default)
+            if n is not None and n > 0:
+                if not new:
+                    raise ValueError(
+                        f"INRCHZONES {n} in period {kper + 1} needs iznrch data"
+                    )
+                if count is None:
+                    count = n
+                elif n != count:
+                    raise ValueError(
+                        f"INRCHZONES {n} in period {kper + 1}: the number of RTS "
+                        f"zones is fixed in period 1 to {count}"
+                    )
+            elif new:
+                raise ValueError(
+                    f"iznrch is given for period {kper + 1} but INRCHZONES {n} "
+                    "does not read it"
+                )
+            elif kper == 0:
+                raise ValueError("RTS needs iznrch and INRCHZONES > 0 in period 1")
+        if seepelev and (selev is not None or sel):
+            new = kper in defined["selev"]
+            s = sel.get(kper, 1 if new else -1)
+            if s > 0 and not new:
+                raise ValueError(f"INSELEV {s} in period {kper + 1} needs selev data")
+            if s <= 0 and new:
+                raise ValueError(
+                    f"selev is given for period {kper + 1} but INSELEV {s} "
+                    "does not read it"
+                )
+        plan.append([n, s])
+    return plan
 
 
 class MfUsgRch(ModflowRch):
@@ -55,6 +207,19 @@ class MfUsgRch(ModflowRch):
         number greater than zero. To define the names for all package files
         (input and output) the length of the list of strings should be 2.
         Default is None.
+    inselev : dict {kper: int} or one int per stress period, optional
+        INSELEV of each stress period (SEEPELEV option): > 0 reads selev of
+        the period and turns seepage on, 0 turns it off, < 0 keeps the
+        previous state and SELEV. Periods without a value write 1 when selev
+        has an array for the period and -1 otherwise (default is None).
+    iniznrch : dict {kper: int} or one int per stress period, optional
+        INRCHZONES of each stress period (RTS option): > 0 reads iznrch of
+        the period; the period 1 value is the number of RTS zones (it may
+        differ from mxrtzones, which USG-T does not use then) and later
+        values > 0 must keep it; <= 0 reuses the zones. Periods without a
+        value write that number (mxrtzones in period 1) when iznrch has an
+        array for the period and no keyword otherwise. Period 1 must read
+        zones (default is None).
 
     Attributes
     ----------
@@ -91,6 +256,8 @@ class MfUsgRch(ModflowRch):
         rchconc=None,
         unitnumber=None,
         filenames=None,
+        inselev=None,
+        iniznrch=None,
     ):
         """Package constructor."""
         msg = (
@@ -98,6 +265,26 @@ class MfUsgRch(ModflowRch):
             f"but received type: {type(model)}."
         )
         assert isinstance(model, MfUsg), msg
+
+        # SELEV/IZNRCH are checked before the package is added to the model:
+        # options and keys first, then the arrays converted without changing
+        # the given objects
+        nper = model.nrow_ncol_nlay_nper[3]
+        _rts_seepelev_options(
+            nper, mxrtzones, seepelev, iznrch, selev, iniznrch, inselev
+        )
+        selev = _as_transient2d(model, selev, np.float32, "rech_selev")
+        iznrch = _as_transient2d(model, iznrch, np.int32, "rech_izn")
+        _rts_seepelev_plan(
+            nper,
+            get_pak_vals_shape(model, rech),
+            mxrtzones,
+            seepelev,
+            iznrch,
+            selev,
+            iniznrch,
+            inselev,
+        )
 
         # call base package constructor
         super().__init__(
@@ -113,20 +300,10 @@ class MfUsgRch(ModflowRch):
         self.mxrtzones = mxrtzones
         self.seepelev = seepelev
         self.iconc = iconc
-
-        self.selev = None
-        if selev is not None:
-            selev_u2d_shape = get_pak_vals_shape(model, selev)
-            self.selev = Transient2d(
-                model, selev_u2d_shape, np.float32, selev, name="rech_selev"
-            )
-
-        self.iznrch = None
-        if iznrch is not None:
-            iznrch_u2d_shape = get_pak_vals_shape(model, iznrch)
-            self.iznrch = Transient2d(
-                model, iznrch_u2d_shape, np.int32, iznrch, name="rech_izn"
-            )
+        self.selev = selev
+        self.iznrch = iznrch
+        self.inselev = inselev
+        self.iniznrch = iniznrch
 
         self.rchconc = None
         if rchconc is not None:
@@ -153,6 +330,18 @@ class MfUsgRch(ModflowRch):
         None
 
         """
+        nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
+        # checked again (attributes may have changed) before any output
+        plan = _rts_seepelev_plan(
+            nper,
+            self.rech.shape,
+            self.mxrtzones,
+            self.seepelev,
+            self.iznrch,
+            self.selev,
+            self.iniznrch,
+            self.inselev,
+        )
         # allows turning off package checks when writing files at model level
         if check:
             self.check(
@@ -160,12 +349,8 @@ class MfUsgRch(ModflowRch):
                 verbose=self.parent.verbose,
                 level=1,
             )
-        nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
-        # Open file for writing
-        if f is not None:
-            f_rch = f
-        else:
-            f_rch = open(self.fn_path, "w")
+        # the text is built in memory; the file is opened at the end
+        f_rch = io.StringIO()
         f_rch.write(f"{self.heading}\n")
         f_rch.write(f"{self.nrchop:10d}{self.ipakcb:10d}")
         if self.seepelev:
@@ -216,10 +401,11 @@ class MfUsgRch(ModflowRch):
             else:
                 f_rch.write(f"{inrech:10d} ")
 
-            if self.iznrch is not None:
-                f_rch.write(" INRCHZONES 1")
-            if self.selev is not None:
-                f_rch.write(" INSELEV 1")
+            inrchzones, inselev = plan[kper]
+            if inrchzones is not None:
+                f_rch.write(f" INRCHZONES {inrchzones}")
+            if inselev is not None:
+                f_rch.write(f" INSELEV {inselev}")
             if self.rchconc is not None:
                 f_rch.write(" INCONC")
             f_rch.write(f" # Stress period {kper + 1}\n")
@@ -230,16 +416,20 @@ class MfUsgRch(ModflowRch):
                 if inirch >= 0:
                     f_rch.write(file_entry_irch)
 
-            if self.iznrch is not None:
-                inrech, file_entry_iznrch = self.iznrch.get_kper_entry(kper)
-                f_rch.write(file_entry_iznrch)
-            if self.selev is not None:
-                inrech, file_entry_selev = self.selev.get_kper_entry(kper)
-                f_rch.write(file_entry_selev)
+            # arrays only for INRCHZONES/INSELEV > 0 (RP reads them then)
+            if inrchzones is not None and inrchzones > 0:
+                f_rch.write(self.iznrch.transient_2ds[kper].get_file_entry())
+            if inselev is not None and inselev > 0:
+                f_rch.write(self.selev.transient_2ds[kper].get_file_entry())
             if self.rchconc is not None:
                 inrech, file_entry_rchconc = self.rchconc.get_kper_entry(kper)
                 f_rch.write(file_entry_rchconc)
-        f_rch.close()
+        # a handle given by the caller is written and left open
+        if f is not None:
+            f.write(f_rch.getvalue())
+        else:
+            with open(self.fn_path, "w") as f_out:
+                f_out.write(f_rch.getvalue())
 
     @classmethod
     def load(cls, f, model, nper=None, ext_unit_dict=None, check=True):
@@ -358,17 +548,12 @@ class MfUsgRch(ModflowRch):
             irch = {}
         current_irch = []
 
-        iznrch = None
-        if mxrtzones:
-            iznrch = {}
-        iniznrch = [0] * nper
-        current_iznrch = []
-
-        selev = None
-        if seepelev:
-            selev = {}
-        inselev = [0] * nper
-        current_selev = []
+        # arrays only of the periods that read them (flag > 0); flags as read,
+        # INSELEV 0 for a period without the keyword (RP sets ISELEV = 0)
+        iznrch = {}
+        iniznrch = {}
+        selev = {}
+        inselev = {}
 
         rchconc = None
         if iconc:
@@ -388,6 +573,7 @@ class MfUsgRch(ModflowRch):
             elif not model.structured:
                 u2d_shape = (1, ncol[0])
 
+            inselev[iper] = 0
             if "INSELEV" in t:
                 idx = t.index("INSELEV")
                 inselev[iper] = int(t[idx + 1])
@@ -446,23 +632,21 @@ class MfUsgRch(ModflowRch):
 
             # Item 9 for mfusg transport
             if mxrtzones:
-                if iniznrch[iper]:
+                if iniznrch.get(iper, 0) > 0:
                     if model.verbose:
                         print(f"   loading iznrch stress period {iper + 1:3d}...")
-                    current_iznrch = Util2d.load(
+                    iznrch[iper] = Util2d.load(
                         f, model, u2d_shape, np.int32, "iznrch", ext_unit_dict
                     )
-                iznrch[iper] = current_iznrch
 
             # Item 10 for mfusg transport
             if seepelev:
-                if inselev[iper]:
+                if inselev[iper] > 0:
                     if model.verbose:
                         print(f"   loading selev stress period {iper + 1:3d}...")
-                    current_selev = Util2d.load(
+                    selev[iper] = Util2d.load(
                         f, model, u2d_shape, np.float32, "selev", ext_unit_dict
                     )
-                selev[iper] = current_selev
 
             # Item 11 for mfusg transport
             if iconc:
@@ -507,11 +691,14 @@ class MfUsgRch(ModflowRch):
             seepelev=seepelev,
             mxrtzones=mxrtzones,
             iconc=iconc,
-            selev=selev,
-            iznrch=iznrch,
+            selev=selev or None,
+            iznrch=iznrch or None,
             rchconc=rchconc,
             unitnumber=unitnumber,
             filenames=filenames,
+            # without SEEPELEV/RTS, RP ignores INSELEV/INRCHZONES
+            inselev=inselev if seepelev else None,
+            iniznrch=iniznrch if mxrtzones else None,
         )
         if check:
             rch.check(

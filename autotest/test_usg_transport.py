@@ -15292,13 +15292,16 @@ def test_mfusg_rch_iznrch_written_before_selev(function_tmpdir, grid):
 @pytest.mark.parametrize("mxrtzones", [0, 1, 3, 12345])
 def test_mfusg_rch_rts_option(function_tmpdir, grid, mxrtzones):
     """RTS is written with its integer MXZNRCH; without zones (0) there is
-    no RTS keyword."""
+    no RTS keyword. RTS needs zones in period 1 (INRCHZONES MXZNRCH)."""
     ml = _g01_model(function_tmpdir, grid)
-    rch = MfUsgRch(ml, nrchop=3, ipakcb=50, rech=1e-3, mxrtzones=mxrtzones)
+    zones = {"iznrch": _g01_arr(grid, [1, 0, 1, 0], np.int32)} if mxrtzones else {}
+    rch = MfUsgRch(ml, nrchop=3, ipakcb=50, rech=1e-3, mxrtzones=mxrtzones, **zones)
     rch.write_file(check=False)
     opts, periods = _g01_read(rch.fn_path, 4)
     assert opts == ["3", "50"] + (["RTS", str(mxrtzones)] if mxrtzones else [])
-    assert periods[0] == (["1"], {"rech": [1e-3] * 4})
+    head = ["1"] + (["INRCHZONES", str(mxrtzones)] if mxrtzones else [])
+    arrays = {"iznrch": [1, 0, 1, 0]} if mxrtzones else {}
+    assert periods[0] == (head, {"rech": [1e-3] * 4, **arrays})
     assert [p[0] for p in periods[1:]] == [["-1"], ["-1"]]
 
 
@@ -17069,6 +17072,7 @@ def test_mfusgrch_selev_iznrch(function_tmpdir):
         nrchop=3,
         rech=rech,
         seepelev=1,
+        mxrtzones=2,
         selev=selev_data,
         iznrch=iznrch_data,
     )

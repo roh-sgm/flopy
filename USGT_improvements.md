@@ -20,6 +20,58 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.RCH-B2 (partial) — RCH INRCHZONES and INSELEV per stress period
+
+- Audited against `gwf2rch8u1.f` (RP) and `glo2basu1.f` (RTS records) of
+  USG-T 2.8.1; the RP logic is the same in 2.7.0. INRCHZONES n > 0 reads
+  IZNRCH and sets the number of RTS zones to n; 0, a negative value or no
+  keyword reuses the zones. INSELEV n > 0 reads SELEV and turns seepage on;
+  0 or no keyword turns it off for the period; a negative value keeps the
+  previous state (a -1 after a 0 does not turn it on again).
+- `MfUsgRch` wrote `INRCHZONES 1` and `INSELEV 1` with an array in every
+  period (F42): a model with two RTS zones lost the second one, and a 0 or
+  missing INSELEV turned seepage back on. Load read an array for any value
+  other than 0, so INSELEV -1 failed. Now the new arguments `inselev` and
+  `iniznrch` (dict `{kper: int}` or one int per period, after `filenames`,
+  so the positional order is unchanged) keep the values; load keeps the
+  values it reads (no INSELEV keyword is kept as 0) and only the arrays it
+  reads (`rch.selev[kper]` still returns the array in use). The period 1
+  INRCHZONES is the number of RTS zones; it may differ from the RTS header
+  count, which USG-T does not use then, and both are kept. Without values,
+  a period with an array writes INRCHZONES with that number (`mxrtzones`
+  in period 1) / `INSELEV 1` and any other period writes no INRCHZONES /
+  `INSELEV -1`.
+- `ValueError` before the package is added to the model, and again in
+  `write_file` before any output (attributes may change): `iznrch` or
+  `iniznrch` without RTS (F43), `selev` or `inselev` without SEEPELEV, RTS
+  without zones in period 1 (USG-T allocates the RTS array there; without
+  it the run stops with a negative time step), a later positive
+  INRCHZONES other than the period 1 one (USG-T keeps the period 1 array
+  size and reads the new number of values from the RTS file without a
+  check), an array in a period whose value does not read it or the other
+  way round, arrays whose shape differs from RECH, `selev`/`iznrch` keys
+  that are not integer stress periods (float, bool or text keys, which
+  `Transient2d` would convert, e.g. 0.9 to 0), periods out of range and
+  non-integer values. A `Transient2d` given as `selev`/`iznrch` is not
+  changed (it was rebuilt in place, also when the package was rejected).
+  The file is built in memory and opened at the end; a file handle passed
+  as `f` is no longer closed. Array file entries (e.g. external files) are
+  made after the checks, so an error there can still leave them. A key set
+  with `rch.selev[0.9] = ...` is converted by `Transient2d` before FloPy
+  sees it.
+- Two existing tests built files USG-T cannot run and were changed: the RTS
+  header test now gives zones for period 1, and the #2763 repro test now
+  sets `mxrtzones=2` for its `iznrch` array.
+- Run with USG-T 2.8.1 and 2.7.0 (local builds): two RTS zones in three
+  periods (other zones in period 2, reused in period 3), a header count of
+  1 with INRCHZONES 2, INRCHZONES -1/0, INSELEV 1/0/-1/1, seepage off in period 1 and on later, RTS and SEEPELEV
+  together: the rewritten and the from-scratch files give the heads and
+  recharge budget of the hand-written controls.
+- RCH stays Partial. Still open: per-component IRCHCONC flags (F41), INCONC
+  given once and DISU with NRCHOP=2 and IRCH given once. Load still writes
+  RECH again in every period (same values). See `USGT_roadmap.md` (RCH and
+  RTS rows).
+
 ### Stage 5.DDF-B1 — DDF sharp interface without CLN, precision and validation
 
 - Audited against `density.f` (DDF1AR, SHARPINT1AR) and `utl7u1.f` (URWORD,
