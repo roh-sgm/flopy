@@ -7,7 +7,7 @@ from .mfusgbcf import MfUsgBcf
 from .mfusgchd import MfUsgChd
 from .mfusgbct import MfUsgBct
 from .mfusgcln import MfUsgCln
-from .mfusgcompat import MfUsgStr, MfUsgSub, MfUsgSwt
+from .mfusgcompat import MfUsgSub, MfUsgSwt
 from .mfusgddf import MfUsgDdf
 from .mfusgdis import MfUsgDis
 from .mfusgdrn import MfUsgDrn
@@ -68,7 +68,6 @@ __all__ = [
     "MfUsgRiv",
     "MfUsgSgb",
     "MfUsgSms",
-    "MfUsgStr",
     "MfUsgSub",
     "MfUsgSwt",
     "MfUsgTib",

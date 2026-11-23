@@ -1,7 +1,7 @@
 """
 Compatibility guards for base MODFLOW-2005 packages under MODFLOW-USG.
 
-STR, SUB, and SWT have no USG-T-specific FloPy implementation. Their base
+SUB and SWT have no USG-T-specific FloPy implementation. Their base
 MODFLOW-2005 classes assume a structured grid, and the USG-T unstructured
 (node-indexed) item layouts have not been validated, so using them on an
 unstructured (DISU) ``MfUsg`` model could silently read or write a non-USG-T
@@ -28,7 +28,6 @@ the model) and in ``load`` (before any file is read), so no partial file is
 written and no partial state is left on the model.
 """
 
-from ..modflow.mfstr import ModflowStr
 from ..modflow.mfsub import ModflowSub
 from ..modflow.mfswt import ModflowSwt
 
@@ -50,19 +49,6 @@ def _guard_compat(model, label):
             f"{label} package, or keep the file as a raw external input if you "
             "need it."
         )
-
-
-class MfUsgStr(ModflowStr):
-    """STR guarded for unstructured MfUsg (see module docstring)."""
-
-    def __init__(self, model, *args, **kwargs):
-        _guard_compat(model, "STR")
-        super().__init__(model, *args, **kwargs)
-
-    @classmethod
-    def load(cls, f, model, *args, **kwargs):
-        _guard_compat(model, "STR")
-        return ModflowStr.load(f, model, *args, **kwargs)
 
 
 class MfUsgSub(ModflowSub):
