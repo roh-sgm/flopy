@@ -8,7 +8,7 @@ access the MfUsgBct class as `flopy.mfusg.MfUsgBct`.
 import numpy as np
 
 from ..pakbase import Package
-from ..utils import Util2d, Util3d, read1d
+from ..utils import Util2d, Util3d
 from ..utils.utils_def import (
     get_open_file_object,
     get_util2d_shape_for_layer,
@@ -166,6 +166,25 @@ class MfUsgBct(Package):
       ``free_format_input``; MfUsg.load reads BCT before BAS6, so for a
       fixed-format model the check fails when the BCT file is written.
 
+    The zero-order and first-order decay arrays follow the USG-T 2.8.1
+    readers: ``izod=1`` zodrw; ``izod=2`` zodrs and ``izod=3`` zodrw and
+    zodrs, both only with ``iadsorb > 0``; ``izod=4`` zodrw, zodrs and zodraw
+    only with ``aw_adsorb``; ``ifod`` likewise. An array that USG-T does not
+    read is not required and, if passed, is neither kept as an attribute nor
+    written.
+
+    ``solubility=True`` (keyword argument) writes the SOLUBILITY option and
+    the keyword arguments ``sollim`` and ``solslope`` (one value per mobile
+    component) once, before the per-species arrays.
+
+    Rejected with NotImplementedError (guards, not support):
+
+    - VARIABLE_SOLUBILITY, on load and on construction
+      (``variable_solubility`` or ``solubility=2``).
+    - ``iheat=1`` with ``iadsorb=0`` on a structured grid, on load and on
+      write: the structured reader of USG-T 2.8.1 reads BULKD only with
+      IADSORB but uses it for the heat capacity term.
+
     Examples
     --------
 
@@ -235,6 +254,11 @@ class MfUsgBct(Package):
             kwargs.get("aw_adsorb"),
             kwargs.get("ikawi_fn"),
         )
+        if kwargs.get("variable_solubility") or kwargs.get("solubility") == 2:
+            raise NotImplementedError(
+                "BCT VARIABLE_SOLUBILITY (variable_solubility or solubility=2) "
+                "is not supported"
+            )
         if imcomp > 0:
             if "imconc" not in kwargs:
                 raise ValueError(f"BCT imcomp={imcomp} requires imconc")
@@ -404,37 +428,40 @@ class MfUsgBct(Package):
                 model, nlay, np.float32, flich, "flich", mcomp
             )
 
-        if self.izod in {1, 3, 4}:
+        zod = self._decay_arrays(self.izod, self.iadsorb, self.aw_adsorb)
+        fod = self._decay_arrays(self.ifod, self.iadsorb, self.aw_adsorb)
+
+        if "rw" in zod:
             zodrw = kwargs["zodrw"]
             self.zodrw = self.mcomp_arrays(
                 model, nlay, np.float32, zodrw, "zodrw", mcomp
             )
 
-        if self.iadsorb and self.izod in {2, 3, 4}:
+        if "rs" in zod:
             zodrs = kwargs["zodrs"]
             self.zodrs = self.mcomp_arrays(
                 model, nlay, np.float32, zodrs, "zodrs", mcomp
             )
 
-        if self.aw_adsorb and self.izod == 4:
+        if "raw" in zod:
             zodraw = kwargs["zodraw"]
             self.zodraw = self.mcomp_arrays(
                 model, nlay, np.float32, zodraw, "zodraw", mcomp
             )
 
-        if self.ifod in {1, 3, 4}:
+        if "rw" in fod:
             fodrw = kwargs["fodrw"]
             self.fodrw = self.mcomp_arrays(
                 model, nlay, np.float32, fodrw, "fodrw", mcomp
             )
 
-        if self.iadsorb and self.ifod in {2, 3, 4}:
+        if "rs" in fod:
             fodrs = kwargs["fodrs"]
             self.fodrs = self.mcomp_arrays(
                 model, nlay, np.float32, fodrs, "fodrs", mcomp
             )
 
-        if self.aw_adsorb and self.ifod == 4:
+        if "raw" in fod:
             fodraw = kwargs["fodraw"]
             self.fodraw = self.mcomp_arrays(
                 model, nlay, np.float32, fodraw, "fodraw", mcomp
@@ -475,6 +502,32 @@ class MfUsgBct(Package):
             model.imcomp = imcomp
             model._counts_owner = self
             self.parent.add_package(self)
+
+    @staticmethod
+    def _decay_arrays(iorder, iadsorb, aw_adsorb):
+        """Decay arrays USG-T 2.8.1 reads per species for IZOD or IFOD equal to
+        iorder (glo2btnu1.f, SGWT2BCT1S and SGWT2BCT1G): "rw" in water, "rs"
+        on soil, "raw" on the air-water interface (zodrw, fodrs, ...)."""
+        if iorder == 1:
+            return ("rw",)
+        if iorder == 2 and iadsorb > 0:
+            return ("rs",)
+        if iorder == 3 and iadsorb > 0:
+            return ("rw", "rs")
+        if iorder == 4 and aw_adsorb:
+            return ("rw", "rs", "raw")
+        return ()
+
+    @staticmethod
+    def _check_structured_heat(structured, iheat, iadsorb):
+        """Reject IHEAT=1 with IADSORB=0 on a structured grid: SGWT2BCT1S reads
+        BULKD only with IADSORB /= 0 but uses it for the heat capacity term."""
+        if structured and iheat == 1 and not iadsorb:
+            raise NotImplementedError(
+                "BCT iheat=1 with iadsorb=0 on a structured grid is not supported: "
+                "USG-T 2.8.1 reads BULKD on structured grids only with IADSORB "
+                "but uses it for the heat capacity term"
+            )
 
     @staticmethod
     def _immobile_species_options(iadsorb, izod, ifod, chaindecay, aw_adsorb, ikawi_fn):
@@ -547,6 +600,19 @@ class MfUsgBct(Package):
             self.aw_adsorb,
             getattr(self, "ikawi_fn", None),
         )
+        self._check_structured_heat(self.parent.structured, self.iheat, self.iadsorb)
+        zod = self._decay_arrays(self.izod, self.iadsorb, self.aw_adsorb)
+        fod = self._decay_arrays(self.ifod, self.iadsorb, self.aw_adsorb)
+        needed = ["zod" + k for k in zod] + ["fod" + k for k in fod]
+        if self.solubility:
+            needed += ["sollim", "solslope"]
+        missing = [name for name in needed if not hasattr(self, name)]
+        if missing:
+            raise ValueError(
+                f"BCT {', '.join(missing)} not built for the current izod, ifod, "
+                "iadsorb, aw_adsorb or solubility; rebuild or reload the BCT "
+                "package instead of changing them afterwards"
+            )
         if len(self.conc) != self.mcomp:
             raise ValueError(
                 f"BCT conc has {len(self.conc)} components for mcomp={self.mcomp}"
@@ -742,6 +808,14 @@ class MfUsgBct(Package):
             self._write_array(f_obj, self.awamax)
         if self.aw_adsorb and self.iarea_fn == 2:
             self._write_array(f_obj, self.grain_dia)
+
+        # Item S1 - S2: SOLLIM, SOLSLOPE (once, before the species loop)
+        if self.solubility:
+            f_obj.write(self.sollim.get_file_entry())
+            f_obj.write(self.solslope.get_file_entry())
+
+        zod = self._decay_arrays(self.izod, self.iadsorb, self.aw_adsorb)
+        fod = self._decay_arrays(self.ifod, self.iadsorb, self.aw_adsorb)
         for icomp in range(self.mcomp):
             if self.chaindecay:
                 f_obj.write(f"{self.nparent[icomp]:9d}\n")
@@ -761,17 +835,17 @@ class MfUsgBct(Package):
                 self._write_array(f_obj, self.adsorb[icomp])
             if self.iadsorb == 2 or self.iadsorb == 3:
                 self._write_array(f_obj, self.flich[icomp])
-            if self.izod == 1 or self.izod == 3 or self.izod == 4:
+            if "rw" in zod:
                 self._write_array(f_obj, self.zodrw[icomp])
-            if self.iadsorb and (self.izod == 2 or self.izod == 3 or self.izod == 4):
+            if "rs" in zod:
                 self._write_array(f_obj, self.zodrs[icomp])
-            if self.aw_adsorb and self.izod == 4:
+            if "raw" in zod:
                 self._write_array(f_obj, self.zodraw[icomp])
-            if self.ifod == 1 or self.ifod == 3 or self.ifod == 4:
+            if "rw" in fod:
                 self._write_array(f_obj, self.fodrw[icomp])
-            if self.iadsorb and (self.ifod == 2 or self.ifod == 3 or self.ifod == 4):
+            if "rs" in fod:
                 self._write_array(f_obj, self.fodrs[icomp])
-            if self.aw_adsorb and self.ifod == 4:
+            if "raw" in fod:
                 self._write_array(f_obj, self.fodraw[icomp])
 
             # Item 20: CONC
@@ -960,9 +1034,14 @@ class MfUsgBct(Package):
             idx = t.index("MULTIFILE")
             kwargs["crootname"] = str(t[idx + 1])
 
-        # immobile-component guards before any array is read: the arrays
-        # that follow would otherwise be assigned to the wrong items
+        # guards before any array is read: the arrays that follow would
+        # otherwise be assigned to the wrong items
         try:
+            if "VARIABLE_SOLUBILITY" in t:
+                raise NotImplementedError("BCT VARIABLE_SOLUBILITY is not supported")
+            cls._check_structured_heat(
+                model.structured, kwargs["iheat"], kwargs["iadsorb"]
+            )
             cls._check_counts(
                 kwargs["mcomp"],
                 kwargs["imcomp"],
@@ -978,9 +1057,9 @@ class MfUsgBct(Package):
             f_obj.close()
             raise
 
-        # item 1b ifmbc == 1
+        # item 1b ifmbc != 0
         mbegwunf, mbegwunt, mbeclnunf, mbeclnunt = 0, 0, 0, 0
-        if kwargs["ifmbc"] == 1:
+        if kwargs["ifmbc"] != 0:
             line = f_obj.readline().upper()
             t = line.split()
             mbegwunf, mbegwunt, mbeclnunf, mbeclnunt = (
@@ -1101,6 +1180,17 @@ class MfUsgBct(Package):
             #         f_obj, model, nlay, np.float32, "awarea_x0", ext_unit_dict
             #     )
 
+        # item S1 - S2 SOLLIM, SOLSLOPE if SOLUBILITY option is on
+        if kwargs["solubility"]:
+            if model.verbose:
+                print("   loading SOLUBILITY ...")
+            kwargs["sollim"] = Util2d.load(
+                f_obj, model, (mcomp,), np.float32, "sollim", ext_unit_dict
+            )
+            kwargs["solslope"] = Util2d.load(
+                f_obj, model, (mcomp,), np.float32, "solslope", ext_unit_dict
+            )
+
         adsorb = [0] * mcomp
         flich = [0] * mcomp
         zodrw = [0] * mcomp
@@ -1116,20 +1206,12 @@ class MfUsgBct(Package):
         stotio = [0] * mcomp
         sptlrct = [0] * mcomp
 
-        sollim = [0] * mcomp
-        solslope = [0] * mcomp
-
         alangaw = [0] * mcomp
         blangaw = [0] * mcomp
 
+        zod = cls._decay_arrays(kwargs["izod"], kwargs["iadsorb"], kwargs["aw_adsorb"])
+        fod = cls._decay_arrays(kwargs["ifod"], kwargs["iadsorb"], kwargs["aw_adsorb"])
         for icomp in range(mcomp):
-            # item S1  - S2 if SOLUBILITY option is on  -- not tested
-            if kwargs["solubility"] == 1:
-                if model.verbose:
-                    print("   loading SOLUBILITY ...")
-                sollim[icomp] = read1d(f_obj, sollim)
-                solslope[icomp] = read1d(f_obj, solslope)
-
             # item C1  - C3 if CHAINDECAY option is on
             if kwargs["chaindecay"] == 1:
                 if model.verbose:
@@ -1172,31 +1254,27 @@ class MfUsgBct(Package):
                 flich[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "flich", ext_unit_dict
                 )
-            if kwargs["izod"] == 1 or kwargs["izod"] == 3 or kwargs["izod"] == 4:
+            if "rw" in zod:
                 zodrw[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "zodrw", ext_unit_dict
                 )
-            if kwargs["iadsorb"] and (
-                kwargs["izod"] == 2 or kwargs["izod"] == 3 or kwargs["izod"] == 4
-            ):
+            if "rs" in zod:
                 zodrs[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "zodrs", ext_unit_dict
                 )
-            if kwargs["aw_adsorb"] and (kwargs["izod"] == 4):
+            if "raw" in zod:
                 zodraw[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "zodraw", ext_unit_dict
                 )
-            if kwargs["ifod"] == 1 or kwargs["ifod"] == 3 or kwargs["ifod"] == 4:
+            if "rw" in fod:
                 fodrw[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "fodrw", ext_unit_dict
                 )
-            if kwargs["iadsorb"] and (
-                kwargs["ifod"] == 2 or kwargs["ifod"] == 3 or kwargs["ifod"] == 4
-            ):
+            if "rs" in fod:
                 fodrs[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "fodrs", ext_unit_dict
                 )
-            if kwargs["aw_adsorb"] and (kwargs["ifod"] == 4):
+            if "raw" in fod:
                 fodraw[icomp] = cls._load_prop_arrays(
                     f_obj, model, nlay, np.float32, "fodraw", ext_unit_dict
                 )
@@ -1223,8 +1301,6 @@ class MfUsgBct(Package):
         kwargs["jparent"] = jparent
         kwargs["stotio"] = stotio
         kwargs["sptlrct"] = sptlrct
-        kwargs["sollim"] = sollim
-        kwargs["solslope"] = solslope
         kwargs["alangaw"] = alangaw
         kwargs["blangaw"] = blangaw
 
