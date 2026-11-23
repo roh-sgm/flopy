@@ -2285,9 +2285,12 @@ def test_usgt_exe_sms_rewrite_matches_control(function_tmpdir, case):
 
 @requires_usgt
 def test_usgt_exe_sms_shift_is_read(function_tmpdir):
-    """SHIFT is read by the engine and changes this PCGU run (engine
-    behaviour observed with CHD: dry cells), unlike DAMPBOT or no option;
-    a rewrite must therefore keep SHIFT."""
+    """SHIFT is read by the engine and changes this PCGU run, unlike DAMPBOT
+    or no option; a rewrite must therefore keep SHIFT. How the run with SHIFT
+    ends depends on the engine build: it terminates with dry cells, or it
+    does not converge in the first time step. In the second case the
+    evidence of the change is that the control run terminates and the run
+    with SHIFT does not."""
     from autotest.test_usg_transport import _g04_model
 
     runs = {}
@@ -2297,18 +2300,28 @@ def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     assert runs[" SHIFT"]["messages"] == ["SHIFT"]
     assert runs[" SHIFT"]["outer"] != runs[""]["outer"]
     assert runs[" DAMPBOT"]["outer"] == runs[""]["outer"]
-    for opt in (" SHIFT", ""):
+
+    def report(opt, what):
         run, diag = runs[opt], runs[opt]["diag"]
-        assert run["heads"] is not None, _usgt_run_report(
-            f"SMS option {opt.strip() or '(none)'}: no heads read "
+        return _usgt_run_report(
+            f"SMS option {opt.strip() or '(none)'}: {what} "
             f"(normal={run['normal']}, t.hds exists={diag['hds']})",
             diag["ws"],
             diag["success"],
             diag["buff"],
             diag["ws"] / "t.list",
         )
-    assert np.max(np.abs(runs[" SHIFT"]["heads"])) >= 1.0e29  # dry cells
+
+    assert runs[""]["heads"] is not None, report("", "no heads read")
     assert np.max(np.abs(runs[""]["heads"])) < 1.0e29
+    shift = runs[" SHIFT"]
+    if shift["normal"]:
+        assert shift["heads"] is not None, report(" SHIFT", "no heads read")
+        assert np.max(np.abs(shift["heads"])) >= 1.0e29  # dry cells
+    else:
+        assert any("failure to converge" in b.lower() for b in shift["diag"]["buff"]), (
+            report(" SHIFT", "neither normal termination nor failure to converge")
+        )
 
 
 @requires_usgt
