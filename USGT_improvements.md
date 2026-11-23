@@ -20,6 +20,94 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.OC-B1 — OC solver words per period, REAL text and COMPACT BUDGET without AUX
+
+- Audited against `SGWF2BAS7J`/`SGWF2BAS7N` (`glo2basu1.f`) of USG-T 2.8.1 and
+  2.7.0. Word-format OC has one reader for structured and unstructured grids.
+- `MfUsgOc.load` keeps the per-period solver words that USG-T 2.8.1 reads besides
+  MXITER: HCLOSE, BTOL, THETA, AKAPPA, GAMMA, AMOMENTUM, NUMTRACK, BREDUC, RESLIM
+  and TRUNCATEDNEWTONCUTOFF, with the text of their value; `write_file` writes them
+  back and `check()` knows them. Before, the last eight were dropped without a
+  message and HCLOSE/BTOL were rewritten with four decimals.
+- USG-T 2.7.0 reads HCLOSE, BTOL and MXITER only and stops at the other eight
+  words. FloPy does not know the engine version, so it writes what the package holds.
+- `COMPACT BUDGET` without `AUX` is kept on load and rewrite (`compact_aux`, a
+  keyword argument, True by default). The constructor signature and the default
+  output (`COMPACT BUDGET AUX`) are unchanged. Ten example models are now rewritten
+  without `AUX`, as their files have it.
+- Behaviour changes on load (`ValueError` instead of a silent loss): a solver word
+  before the first `PERIOD` record (USG-T stops there); a record whose first word
+  matches none of the words FloPy handles, including a record that starts with an
+  integer; a solver word without a value or with a value that is not an explicit
+  finite REAL or INTEGER (a FloPy guard: USG-T reads some of them, e.g. a missing
+  value as 0). The same values are rejected by `write_file` before the file is opened.
+- Known limit: the older branches match the first word by substring, so words
+  such as `PRINTX` or `MXITERS`, at which USG-T stops, are still accepted.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_oc_solver.py`): the
+  FloPy rewrite gives the same listing echo, heads and budgets as the hand-written
+  file; HCLOSE/BTOL keep their value; `COMPACT BUDGET` without `AUX` gives no
+  auxiliary column in the GHB budget records. The WEL package of USG-T 2.8.1 saves
+  its auxiliary values with or without `AUX`.
+- Not changed here: numeric OC, FASTFORWARD/FASTFORWARDC, BOOTSTRAPPING, MXITER
+  parsing, header records after a PERIOD record, comments after the first record.
+
+### Stage 5.BCT-B1 — BCT header and read conditions
+
+- `MfUsgBct.load` reads the record MBEGWUNF MBEGWUNT MBECLNUNF MBECLNUNT with any
+  IFMBC≠0, as USG-T does and as `write_file` already wrote it (it was read only
+  with IFMBC=1).
+- The zero-order and first-order decay arrays follow the USG-T 2.8.1 readers
+  (`SGWT2BCT1S` and `SGWT2BCT1G`, the same in 2.7.0): IZOD=1 ZODRW; IZOD=2 ZODRS
+  and IZOD=3 ZODRW and ZODRS, both only with IADSORB>0; IZOD=4 ZODRW, ZODRS and
+  ZODRAW only with A-W_ADSORB (also with IADSORB=0); IFOD likewise. Before, ZODRW
+  was written with IZOD=3 without adsorption and with IZOD=4 without A-W_ADSORB,
+  and ZODRS was missing with IZOD=4, A-W_ADSORB and IADSORB=0. An array that USG-T
+  does not read is no longer required and, if passed, is neither kept as an
+  attribute nor written (behaviour change).
+- `solubility=True` writes the SOLUBILITY option and `sollim`/`solslope` (one value
+  per mobile component) once, after the A-W arrays and before the per-species
+  arrays; `load` reads them there. Before, the arrays were never written and were
+  read inside the species loop.
+- Guards (`NotImplementedError`, not support): VARIABLE_SOLUBILITY on load and on
+  construction (`variable_solubility` or `solubility=2`, which used to become
+  SOLUBILITY silently); IHEAT=1 with IADSORB=0 on a structured grid on load and on
+  write, because the structured reader reads BULKD only with IADSORB but uses it
+  for the heat capacity term. DISU is unchanged.
+- `write_file` raises `ValueError`, before the file is opened, when `izod`, `ifod`,
+  `iadsorb`, `aw_adsorb` or `solubility` were changed after construction and the
+  arrays they need were not built.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_bct_b1.py`): SOLUBILITY
+  and IZOD=4 with and without A-W_ADSORB give the same CON file as hand-written
+  files, with sensitivity controls.
+- Not changed here: CHAINDECAY, SPATIALREACT, the A-W_ADSORB branches, REACTION1,
+  fixed format, CLN decay conditions, the MBE unit numbers on a direct load, the
+  caller's handle closed by `load`. IZOD/IFOD=3 without IADSORB is written as USG-T
+  reads it, but the engine then uses an unallocated array.
+
+### Stage 5.NTCOMP-B3 — MDT per-species arrays by NTCOMP
+
+- Audited against `gwt2mdtu1.for` (GWT2MDTU1AR) of USG-T 2.8.1; the 2.7.0 reader
+  is the same. MDT has one reader for structured and unstructured grids.
+- `kdmd`, `decaymd`, `yieldmd`, `diffmd` (and `aiold1md`, `aiold2md` with TSHIFTMD
+  > 1e-10) have one value per component: the MCOMP mobile species, then the
+  temperature when IHEAT is 1 (a scalar is used for all). FloPy used `model.mcomp`,
+  so with heat it wrote one block less and USG-T stopped reading the arrays of the
+  last component.
+- Immobile components (IMCOMP > 0) raise `NotImplementedError` when building,
+  loading and writing: USG-T reads the arrays for NTCOMP components into arrays
+  sized for MCOMPT (`gwt2mdtu1.for:169, 251`). This is a protection, not support.
+- The counts come from the model transport context. A removed or unsynchronized
+  BCT raises `ValueError`; without BCT and with `itrnsp` 0 the model counts are
+  used as they are. `write_file` checks the counts and the array lists before the
+  file is opened.
+- `load` does not close a file handle passed by the caller.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_mdt.py`, DISU model,
+  IHEAT=1): FloPy-written and hand-written MDT files give the same CON and HDS
+  files; the DIFFMD of the temperature changes the temperature and not the solute;
+  a file with the MCOMP blocks only does not run.
+- Not changed here: SEPARATE_AI2/MULTIFILE_MD outputs, fixed format, the IDPF≠0
+  branch (`gwt2mdtu1.for:209`), immobile components.
+
 ### Stage 5.RCH-B2 (partial) — RCH INRCHZONES and INSELEV per stress period
 
 - Audited against `gwf2rch8u1.f` (RP) and `glo2basu1.f` (RTS records) of
