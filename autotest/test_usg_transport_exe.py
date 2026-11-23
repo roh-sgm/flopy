@@ -2288,9 +2288,9 @@ def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     """SHIFT is read by the engine and changes this PCGU run, unlike DAMPBOT
     or no option; a rewrite must therefore keep SHIFT. How the run with SHIFT
     ends depends on the engine build: it terminates with dry cells, or it
-    does not converge in the first time step. In the second case the
-    evidence of the change is that the control run terminates and the run
-    with SHIFT does not."""
+    does not converge in the first time step, after all 100 outer iterations
+    (MXITER). In the second case the evidence of the change is that the
+    control run terminates and the run with SHIFT does not."""
     from autotest.test_usg_transport import _g04_model
 
     runs = {}
@@ -2321,6 +2321,10 @@ def test_usgt_exe_sms_shift_is_read(function_tmpdir):
     else:
         assert any("failure to converge" in b.lower() for b in shift["diag"]["buff"]), (
             report(" SHIFT", "neither normal termination nor failure to converge")
+        )
+        # one time step solved, with the MXITER = 100 outer iterations used up
+        assert shift["outer"] == [100], report(
+            " SHIFT", f"no convergence, outer iterations {shift['outer']}"
         )
 
 
