@@ -713,13 +713,6 @@ class MfUsg(Modflow):
 
         dis.start_datetime = model.start_datetime
 
-        # For DISU (unstructured) models, default to 10 values per line for
-        # free-format array output.  Without this, all nodes in a layer land on
-        # a single line (~29 000 chars for a 1942-node grid), which exceeds the
-        # internal buffer in some USG-T executables (e.g. usgt_270_arm).
-        if not model.structured and model.free_format_npl is None:
-            model.free_format_npl = 10
-
         # BCT has to be loaded before other transport packages for MFUSG-TRANSPORT
         bct_key = ext_pkg_d.get("BCT")
         if bct_key is not None:
