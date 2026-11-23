@@ -146,7 +146,7 @@ TABLEINPUT table contents external, GAGE separate, multi-lake-with-sill
 from-scratch execution not exe-smoke-tested (authoring done); **EVT** — ETS-zonal
 time-series (ATS-coupled). **SFR/FHB/GAGE** are compatibility base classes;
 **STR/SUB/SWT** are compatibility-only **guarded** on unstructured `MfUsg`
-(Stage 4.6A).
+(Stage 4.6A). **Update (Stage 5.SMOKE):** the STR guard was removed. `MfUsgStr` no longer exists and STR is registered on the base `ModflowStr`, as upstream FloPy; SUB and SWT keep their guards. Fixed-format STR on an unstructured grid is a known upstream defect.
 
 `MfUsgDrt`: new class subclassing `ModflowDrt`; **structured (DIS) grids
 delegate to the base class** (USG-T extensions are unstructured-only).

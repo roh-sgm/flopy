@@ -20,6 +20,49 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.SMOKE — model check with HFB, STR on the base class, free_format_npl on load
+
+- Four items that made the smoke-test job fail. Three of the failing tests are
+  upstream tests (`autotest/test_usg.py`), which were not modified.
+- **HFB.** `MfUsg.load` runs `model.check()`, and `Package.check` read the plain
+  dict that `MfUsgHfb` keeps in `stress_period_data` as an MfList, so loading any
+  model with HFB failed with `AttributeError`. `MfUsgHfb.has_stress_period_data`
+  is now False and `check()` takes the same path as `ModflowHfb`: there is no
+  HFB-specific check. The attribute, the constructor, `load` and `write_file` are
+  unchanged. Not fixed here: `MfUsgDrt`, `MfUsgQrt` and `MfUsgTib` also keep a
+  dict there, so `check()` still fails for them.
+- **STR.** `MfUsg` registers the base `ModflowStr` again, as upstream, and the
+  guarded `MfUsgStr` of Stage 4.6A was removed: the name `flopy.mfusg.MfUsgStr`
+  no longer exists. `ModflowStr` handles the node-based reach list of an
+  unstructured grid; with free format it is the record USG-T reads
+  (`gwf2str7u1.f:916-925`, same file in 2.8.1 and 2.7.0). SUB and SWT keep their
+  guards. Known limitation, an upstream defect that is not fixed here: with fixed
+  format on an unstructured grid `ModflowStr` uses `3I5,F15.0,4F10.0` for the
+  reach records and the engine reads `3I10,5F10.0` (`gwf2str7u1.f:912-915`, `:927`).
+- **free_format_npl.** `MfUsg.load` no longer forces `free_format_npl = 10` for
+  DISU models; it stays unset unless the user sets it, as upstream. Behaviour
+  change: a loaded DISU model is now rewritten with every `(FREE)` array record
+  on one line. The DISU connection arrays take NJA values on one line (2 099 760
+  characters in the `Conduit_Nest` example). Set `m.free_format_npl = 10` after
+  loading to wrap them; the DISU `top` and `bot` arrays use a Fortran format and
+  keep one layer per line either way. USG-T reads `(FREE)` arrays with
+  list-directed input (`utl7u1.f:754-755` and the other array readers).
+- **SMS SHIFT test.** `test_usgt_exe_sms_shift_is_read` required the run with
+  SHIFT to end with dry cells. How that run ends depends on the engine build, so
+  the test now accepts normal termination with dry cells, or no convergence in
+  the first time step with the 100 outer iterations of MXITER used up
+  (`glo2sms-u1.f:947-956`, `:1153-1154`). It still requires the SHIFT echo, outer
+  iterations that differ from the control, and a control that terminates without
+  dry cells. A passing test does not tell which of the two ends a build gave.
+- Run with local USG-T 2.8.1 and 2.7.0 builds: three DISU examples written with
+  and without wrapping give identical heads and concentrations
+  (`test_usgt_free_format_npl.py`), and a one-off run outside the test suite read
+  a line of 24 315 000 characters (NJA = 1 621 000) with both builds. With the
+  executables that CI installs, these tests pass on Linux, macOS and Windows;
+  lines longer than 2 099 760 characters were not run with them.
+- Not changed here: fixed-format STR on unstructured grids, the SUB and SWT
+  guards, `check()` for DRT, QRT and TIB.
+
 ### Stage 5.OC-B1 — OC solver words per period, REAL text and COMPACT BUDGET without AUX
 
 - Audited against `SGWF2BAS7J`/`SGWF2BAS7N` (`glo2basu1.f`) of USG-T 2.8.1 and
@@ -1153,7 +1196,9 @@ honest, upstream-ready USG-T 2.7 story.
   passing tests. SFR stays compatibility/base support (DISU-validated via
   `freyberg_usg`), *not* a Full USG-T transport claim; **FHB/GAGE** untouched
   (Ex8). Code touched: `mfusgcompat.py` (new), `mfusg.py` (register STR/SUB/SWT),
-  `__init__.py` (exports). 3 tests (`-k compat`): load guard, write/authoring
+  `__init__.py` (exports). *(Superseded for STR by Stage 5.SMOKE: `MfUsgStr`
+  was removed and STR is registered on the base `ModflowStr` again, as
+  upstream; SUB and SWT keep their guards.)* 3 tests (`-k compat`): load guard, write/authoring
   guard, and a no-op + SFR/FHB/GAGE-registry-untouched check; `freyberg_usg` SFR
   tests still pass; focused **241**, combined **245** (ARM). See
   `USGT_STAGE4_09_FINAL_GAP_AUDIT.md` / `USGT_STAGE4_07_COMPAT_PACKAGES.md`.
@@ -1481,7 +1526,9 @@ honest, upstream-ready USG-T 2.7 story.
   `freyberg_usg` DISU model (loaded/written/run via base in `test_usg.py`).
   *(Refined by Stage 4.6A, below — the "SFR/STR/SUB/SWT used by no target model"
   wording was wrong for SFR: `freyberg_usg` uses DISU+SFR. SFR is kept on the
-  base class; STR/SUB/SWT, which no model uses, are now guarded.)*
+  base class; SUB/SWT, which no model uses, are guarded. STR was guarded by
+  Stage 4.6A and returned to the base class in Stage 5.SMOKE: the
+  `usg_rch_evt_str` example is a DISU model with STR.)*
 - **Card 7 — QRT/DRT recipient `U1DINT` controls:** the Fortran `U1DINT`
   technically accepts `EXTERNAL`/`OPEN/CLOSE` for recipient-node lists, but
   these are short inline blocks in practice. Decision: support `INTERNAL` and
@@ -1492,8 +1539,8 @@ honest, upstream-ready USG-T 2.7 story.
 - **Card 8 — plain-`✅` hardening:** promoted to `✅ Full` (authoring +
   round-trip + Fortran-verified): **CLN** (PROCESSCCF/ISHAPE/GENERAL_SEC),
   **DPF** (FRAHK/IUZONTABIM/SC2IM/immobile Richards), **DIS**/**DISU**
-  (foundational; DISU large-grid `free_format_npl` formatting protected by
-  `test_usg.py`), and **PCB** (new node/iSpec/conc authoring + round-trip
+  (foundational; `free_format_npl` is left unset on load and its formatting is
+  covered by `test_usg.py` and `test_usgt_free_format_npl.py`), and **PCB** (new node/iSpec/conc authoring + round-trip
   test). Kept honest `✅` (not Full) with strengthened coverage/notes:
   **OC** (new `ATSA` authoring round-trip; `BOOTSTRAPPING` parsed on load),
   **EVT** (new transport `IETFACTOR`/`ETFACTOR` authoring test), and **MDT**
@@ -1589,9 +1636,10 @@ explicitly rather than producing incomplete or mis-parsed files.
   Card D; six bugs fixed) plus the `Ex8_Lake` round-trip, but stays `✅` not Full
   (TABLEINPUT table contents and GAGE remain out of scope; **sill/connectivity +
   multi-lake authoring is now done and validated — Stage 4.6D**). `SFR/STR/GAGE/FHB/SUB/SWT` are **compatibility** base
-  MODFLOW-2005 classes; CLN is the preferred coupling. (Refined by Stage 4.6A:
-  STR/SUB/SWT guarded on unstructured `MfUsg`; SFR kept — DISU-validated via
-  `freyberg_usg`; FHB/GAGE retained via Ex8.)
+  MODFLOW-2005 classes; CLN is the preferred coupling. (Refined by Stage 4.6A and
+  Stage 5.SMOKE: SUB/SWT guarded on unstructured `MfUsg`; STR and SFR on their
+  base classes — SFR DISU-validated via `freyberg_usg`, STR with the free-format
+  DISU example `usg_rch_evt_str`; FHB/GAGE retained via Ex8.)
 - **Post-processing (Priority 5):** `MfusgTransportListBudget` old/new format
   and multi-species isolation are tested. Real-model run-validation stays a
   manual, out-of-CI tier (see the Validation section below); the `Ex*`

@@ -42,7 +42,7 @@ All priority tiers below have been worked through. Commits on `develop`:
   Stage 4 Card D (six bugs fixed; kept `✅` not Full, gaps listed) plus Ex8;
   SFR/STR/GAGE/FHB/SUB/SWT compatibility-only (documented) — later refined by
   Stage 4.6A: STR/SUB/SWT guarded, SFR kept (DISU-validated via `freyberg_usg`),
-  FHB/GAGE retained.
+  FHB/GAGE retained. **Update (Stage 5.SMOKE):** the STR guard was removed. `MfUsgStr` no longer exists and STR is registered on the base `ModflowStr`, as upstream FloPy; SUB and SWT keep their guards. Fixed-format STR on an unstructured grid is a known upstream defect.
 - **P5 — post-processing:** transport list-budget tested (old/new/multi-species);
   real-model run-validation is a documented manual tier (Ex* loads in CI).
 
@@ -1008,6 +1008,7 @@ Tasks:
 > compatibility/base support, *not* a Full USG-T transport claim. **STR/SUB/SWT**
 > are now **guarded** (`flopy/mfusg/mfusgcompat.py`): using them on an
 > unstructured `MfUsg` model raises `NotImplementedError` on load/authoring.
+> **Update (Stage 5.SMOKE):** the STR guard was removed. `MfUsgStr` no longer exists and STR is registered on the base `ModflowStr`, as upstream FloPy; SUB and SWT keep their guards. Fixed-format STR on an unstructured grid is a known upstream defect.
 > **FHB/GAGE** remain compatibility (round-trip via base in `Ex8`). See the
 > "Stage 4.6A — DONE" addendum and `USGT_STAGE4_09_FINAL_GAP_AUDIT.md`. The
 > historical text below is kept for provenance.

@@ -2,6 +2,8 @@
 
 Date: 2026-06-02 · Base: `develop` @ `e0ea8073` (after Stage 4.5B + polish + cleanup)
 
+> **Update (Stage 5.SMOKE):** the STR guard was removed. `MfUsgStr` no longer exists and STR is registered on the base `ModflowStr`, as upstream FloPy; SUB and SWT keep their guards. Fixed-format STR on an unstructured grid is a known upstream defect.
+>
 > **Final snapshot (post-Stage 4.6G).** The implementation cards proposed in this
 > audit have been executed: **4.6A** (STR/SUB/SWT guarded; SFR kept), **4.6B/C**
 > (DRT/HFB/SGB/QRT/ETS from-scratch parameter authoring), **4.6D** (LAK

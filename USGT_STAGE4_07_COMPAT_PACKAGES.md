@@ -18,6 +18,8 @@ Current project preference is CLN-based coupling, so these are lower priority.
 
 ## Outcome — Stage 4.6A (STR/SUB/SWT guard; SFR kept) — executed
 
+> **Update (Stage 5.SMOKE):** the STR guard was removed. `MfUsgStr` no longer exists and STR is registered on the base `ModflowStr`, as upstream FloPy; SUB and SWT keep their guards. Fixed-format STR on an unstructured grid is a known upstream defect.
+
 The final gap audit (`USGT_STAGE4_09_FINAL_GAP_AUDIT.md`) flagged these six
 base-class packages as the only place a USG-T model could be written silently
 wrong. Stage 4.6A closes that with a **targeted guard**:
