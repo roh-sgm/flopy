@@ -10,7 +10,6 @@ import numpy as np
 from ..pakbase import Package
 from ..utils import Util2d, Util3d
 from ..utils.utils_def import (
-    get_open_file_object,
     get_unitnumber_from_ext_unit_dict,
     get_util2d_shape_for_layer,
 )
@@ -87,6 +86,12 @@ class MfUsgMdt(Package):
 
     Notes
     -----
+    kdmd, decaymd, yieldmd, diffmd, aiold1md and aiold2md take a scalar (used
+    for every component) or one value per component: the MCOMP mobile
+    species, then the temperature when IHEAT is 1 (USG-T reads these arrays
+    for each of the NTCOMP components). The counts are those of the model,
+    set by the BCT package. Immobile components (IMCOMP > 0) are not
+    supported with MDT (``NotImplementedError``).
 
     Examples
     --------
@@ -199,16 +204,20 @@ class MfUsgMdt(Package):
             model, (nlay, nrow, ncol), np.float32, tortmd, name="tortmd"
         )
 
-        mcomp = model.mcomp
+        # component counts of the model, checked again by write_file
+        self._built_counts = self._context_counts(model)
+        ncomp = self._ncomp(self._built_counts)
 
         def _per_comp(val, label, required):
-            """Broadcast a scalar to MCOMP, or validate a per-species sequence."""
+            """Broadcast a scalar to every component, or validate a sequence."""
             if np.isscalar(val):
-                return [val] * mcomp
+                return [val] * ncomp
             seq = list(val)
-            if required and len(seq) != mcomp:
+            if required and len(seq) != ncomp:
                 raise ValueError(
-                    f"MDT {label} must have MCOMP={mcomp} entries; got {len(seq)}."
+                    f"MDT {label} must have {ncomp} entries (MCOMP="
+                    f"{self._built_counts[0]} species, plus the temperature when "
+                    f"IHEAT is 1); got {len(seq)}."
                 )
             return seq
 
@@ -219,14 +228,14 @@ class MfUsgMdt(Package):
         aiold1md = _per_comp(aiold1md, "aiold1md", self.tshiftmd > MDT_TSHIFT_THRESHOLD)
         aiold2md = _per_comp(aiold2md, "aiold2md", self.tshiftmd > MDT_TSHIFT_THRESHOLD)
 
-        self.kdmd = [0] * mcomp
-        self.decaymd = [0] * mcomp
-        self.yieldmd = [0] * mcomp
-        self.diffmd = [0] * mcomp
-        self.aiold1md = [0] * mcomp
-        self.aiold2md = [0] * mcomp
+        self.kdmd = [0] * ncomp
+        self.decaymd = [0] * ncomp
+        self.yieldmd = [0] * ncomp
+        self.diffmd = [0] * ncomp
+        self.aiold1md = [0] * ncomp
+        self.aiold2md = [0] * ncomp
 
-        for icomp in range(mcomp):
+        for icomp in range(ncomp):
             self.kdmd[icomp] = Util3d(
                 model, (nlay, nrow, ncol), np.float32, kdmd[icomp], name="kdmd"
             )
@@ -258,6 +267,68 @@ class MfUsgMdt(Package):
         if add_package:
             self.parent.add_package(self)
 
+    @staticmethod
+    def _context_counts(model, who="MfUsgMdt"):
+        """(mcomp, iheat, imcomp) of the model, or an error.
+
+        GWT2MDTU1AR takes the component counts from the BCT module
+        (gwt2mdtu1.for 2.8.1:33-34). Without a BCT package and with itrnsp 0
+        the counts of the model are used as they are."""
+        state, counts = model._transport_context()
+        if state == "removed":
+            raise ValueError(
+                f"{who}: the BCT package was removed; its component counts are "
+                "stale. Add a BCT package again."
+            )
+        if state == "unsynced":
+            bct = model.get_package("BCT")
+            reason = bct._counts_mismatch() or (
+                "it was added without setting the model counts"
+            )
+            raise ValueError(
+                f"{who}: the registered BCT package does not match the model "
+                f"component counts ({reason}); build or load the BCT package "
+                "with its constructor."
+            )
+        if counts is None:
+            counts = (model.mcomp, model.iheat, model.imcomp)
+        if counts[2] > 0:
+            raise NotImplementedError(
+                f"{who}: immobile components (IMCOMP={counts[2]}) are not "
+                "supported with MDT: USG-T reads the per-species arrays for "
+                "NTCOMP components into arrays sized for MCOMPT "
+                "(gwt2mdtu1.for 2.8.1:169, 251)."
+            )
+        return counts
+
+    @staticmethod
+    def _ncomp(counts):
+        """Components with per-species arrays: MCOMP species, then the
+        temperature when IHEAT is 1 (NTCOMP without immobile components)."""
+        return counts[0] + (1 if counts[1] == 1 else 0)
+
+    def _check_write(self):
+        """Number of components to write, checked on the current model."""
+        counts = self._context_counts(self.parent)
+        if counts != self._built_counts:
+            raise ValueError(
+                "MfUsgMdt: the model component counts (mcomp, iheat, imcomp) "
+                f"changed from {self._built_counts} to {counts} after this "
+                "package was built (for example a BCT package with other counts "
+                "replaced it); build the MDT package again."
+            )
+        ncomp = self._ncomp(counts)
+        names = ["kdmd", "decaymd", "yieldmd", "diffmd"]
+        if self.tshiftmd > MDT_TSHIFT_THRESHOLD:
+            names += ["aiold1md", "aiold2md"]
+        for name in names:
+            if len(getattr(self, name)) != ncomp:
+                raise ValueError(
+                    f"MfUsgMdt: {name} has {len(getattr(self, name))} arrays; "
+                    f"{ncomp} are needed (one per component)."
+                )
+        return ncomp
+
     def write_file(self, f=None):
         """
         Write the mdt package file.
@@ -268,9 +339,15 @@ class MfUsgMdt(Package):
             Default is None, which will result in MfUsg.fn_path being
             opened for writing.
 
+        The component counts of the model are checked before the file is
+        opened, so a ``ValueError`` or ``NotImplementedError`` leaves an
+        existing file (or ``f``) untouched.
+
         Examples
         --------
         """
+        ncomp = self._check_write()
+
         # Open file for writing (use a caller-supplied handle if given).
         opened = f is None
         f_obj = open(self.fn_path, "w") if opened else f
@@ -308,9 +385,7 @@ class MfUsgMdt(Package):
         f_obj.write(self.tortmd.get_file_entry())
 
         # Item 2 - 7: KDM, DECAYMD, YIELDMD, DIFFMD, AIOLD1MD, AIOLD2MD
-        mcomp = self.parent.mcomp
-
-        for icomp in range(mcomp):
+        for icomp in range(ncomp):
             f_obj.write(self.kdmd[icomp].get_file_entry())
             f_obj.write(self.decaymd[icomp].get_file_entry())
             f_obj.write(self.yieldmd[icomp].get_file_entry())
@@ -331,7 +406,7 @@ class MfUsgMdt(Package):
         Parameters
         ----------
         f : filename or file handle
-            File to load.
+            File to load. A file handle is not closed.
         model : model object
             The model object (of type :class:`flopy.modflow.mf.Modflow`) to
             which this package will be added.
@@ -363,8 +438,28 @@ class MfUsgMdt(Package):
         if model.verbose:
             print("loading mdt package file...")
 
-        f_obj = get_open_file_object(f, "r")
+        # the component counts are checked before the file is opened
+        ncomp = cls._ncomp(cls._context_counts(model, "MfUsgMdt.load"))
 
+        # a file handle of the caller is not closed
+        openfile = not hasattr(f, "read")
+        f_obj = open(f) if openfile else f
+        try:
+            kwargs = cls._load_kwargs(f_obj, model, ext_unit_dict, ncomp)
+        finally:
+            if openfile:
+                f_obj.close()
+
+        # set package unit number
+        unitnumber, filenames = get_unitnumber_from_ext_unit_dict(
+            model, cls, ext_unit_dict, kwargs["ipakcb"]
+        )
+
+        return cls(model, unitnumber=unitnumber, filenames=filenames, **kwargs)
+
+    @classmethod
+    def _load_kwargs(cls, f_obj, model, ext_unit_dict, ncomp):
+        """Read the MDT records in the GWT2MDTU1AR order (gwt2mdtu1.for)."""
         nlay = model.nlay
 
         # item 0 + item 1a header. Keep the original case for the rootname;
@@ -422,16 +517,14 @@ class MfUsgMdt(Package):
             f_obj, model, nlay, np.float32, "tortmd", ext_unit_dict
         )
 
-        mcomp = model.mcomp
+        kdmd = [0] * ncomp
+        decaymd = [0] * ncomp
+        yieldmd = [0] * ncomp
+        diffmd = [0] * ncomp
+        aiold1md = [0] * ncomp
+        aiold2md = [0] * ncomp
 
-        kdmd = [0] * mcomp
-        decaymd = [0] * mcomp
-        yieldmd = [0] * mcomp
-        diffmd = [0] * mcomp
-        aiold1md = [0] * mcomp
-        aiold2md = [0] * mcomp
-
-        for icomp in range(mcomp):
+        for icomp in range(ncomp):
             kdmd[icomp] = cls._load_prop_arrays(
                 f_obj, model, nlay, np.float32, "kdmd", ext_unit_dict
             )
@@ -464,13 +557,7 @@ class MfUsgMdt(Package):
         kwargs["aiold1md"] = aiold1md
         kwargs["aiold2md"] = aiold2md
 
-        f_obj.close()
-        # set package unit number
-        unitnumber, filenames = get_unitnumber_from_ext_unit_dict(
-            model, cls, ext_unit_dict, kwargs["ipakcb"]
-        )
-
-        return cls(model, unitnumber=unitnumber, filenames=filenames, **kwargs)
+        return kwargs
 
     @staticmethod
     def _load_prop_arrays(f_obj, model, nlay, dtype, name, ext_unit_dict):
