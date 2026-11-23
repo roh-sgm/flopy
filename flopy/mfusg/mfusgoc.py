@@ -30,6 +30,20 @@ _ATS_LIMITS = {
     "TADJAT": (1.0, "2.0"),
     "TCUTAT": (1.0, "5.0"),
 }
+# solver parameters SGWF2BAS7N reads per stress period besides MXITER; NUMTRACK
+# is an INTEGER, the others are REAL. USG-T 2.7 reads HCLOSE and BTOL only
+_SOLVER_WORDS = (
+    "HCLOSE",
+    "BTOL",
+    "THETA",
+    "AKAPPA",
+    "GAMMA",
+    "AMOMENTUM",
+    "NUMTRACK",
+    "BREDUC",
+    "RESLIM",
+    "TRUNCATEDNEWTONCUTOFF",
+)
 _OC_OPTIONS = (
     "ATS",
     "ATSA",
@@ -39,6 +53,8 @@ _OC_OPTIONS = (
     "FASTFORWARDC",
     "BOOTSTRAPPING",
 )
+# first words of the records USG-T skips before the first PERIOD (SGWF2BAS7J)
+_SKIPPED_WORDS = ("ATSA", "FASTFORWARD", "FASTFORWARDC")
 # first words USG-T reads as numeric output control although they are options
 _NUMERIC_FIRST = ("ATS", "NPTIMES", "NPSTPS")
 # TMINAT when TIMOT is read (PTIMES1RP) and TIMOT(NPTIMES+1)
@@ -114,6 +130,47 @@ def _ats_action(text):
     if len(words) < 2:
         raise ValueError(f"MfUsgOc: {words[0]} needs a value")
     _ats_real(words[1], words[0])
+    return f"{words[0]} {words[1]}"
+
+
+def _oc_word(line):
+    """First word of an OC record as URWORD finds it ('' when it has none)."""
+    return next((w for w in re.split(r"[\s,]+", line.upper()) if w), "")
+
+
+def _not_read(line):
+    """ValueError for an OC record whose first word USG-T does not read at
+    that place of the file."""
+    return ValueError(
+        f"MfUsgOc: OC record {line.strip()!r} starts with {_oc_word(line)!r}, "
+        "which USG-T does not read there (it stops with ERROR READING OUTPUT "
+        "CONTROL INPUT DATA)"
+    )
+
+
+def _solver_action(text):
+    """'NAME value' for an OC action whose first word is one of _SOLVER_WORDS
+    (URWORD: blanks, tabs and commas separate words, any case); None for
+    other actions. FloPy requires an explicit finite REAL value (an INTEGER
+    for NUMTRACK) and rejects the rest; this is a guard of FloPy, USG-T reads
+    some of those records (a missing value as zero, for example)."""
+    words = [w for w in re.split(r"[\s,]+", text.strip().upper()) if w]
+    if not words or words[0] not in _SOLVER_WORDS:
+        return None
+    if len(words) < 2:
+        raise ValueError(f"MfUsgOc: {words[0]} needs a value")
+    msg = f"MfUsgOc: {words[0]} value {words[1]!r}: FloPy requires an explicit "
+    if words[0] != "NUMTRACK":
+        try:
+            _stofrac_from_word(words[1], 0)
+        except ValueError:
+            raise ValueError(msg + "finite REAL number") from None
+    elif (
+        re.fullmatch(r"[+-]?\d+", words[1]) is None
+        or len(words[1]) > 30
+        or abs(int(words[1])) >= 2**31
+    ):
+        raise ValueError(msg + "INTEGER of up to 30 characters, below 2**31")
     return f"{words[0]} {words[1]}"
 
 
@@ -300,6 +357,10 @@ class MfUsgOc(Package):
         The nptimes output times (TIMOT), increasing by more than 1.0E-10.
         They are written once, after the first line, with their full double
         precision value.
+    compact_aux : bool, optional keyword (default is True)
+        COMPACT BUDGET is written with AUX (auxiliary data are saved in the
+        budget files). False writes COMPACT BUDGET alone; load sets it from
+        the file.
 
     Attributes
     ----------
@@ -325,8 +386,25 @@ class MfUsgOc(Package):
     NPSTPS that changes between periods, IBOOT/IBOOTSCALE, INCODE < 0,
     ICBCFL = 2, IHDDFL = 0 with head or drawdown flags, transport, CLN, DPF,
     FASTFORWARD and BOOTSTRAPPING raise NotImplementedError. A common NPSTPS
-    of 0 is loaded as no output cadence. HCLOSE and BTOL actions are still
-    written with four significant digits.
+    of 0 is loaded as no output cadence.
+
+    HCLOSE, BTOL, THETA, AKAPPA, GAMMA, AMOMENTUM, NUMTRACK, BREDUC, RESLIM and
+    TRUNCATEDNEWTONCUTOFF actions keep their value as written. FloPy requires
+    an explicit finite REAL value for them (an INTEGER for NUMTRACK): another
+    value, or none, raises ValueError on load and on write. This is a guard
+    of FloPy; USG-T reads some of those records (a missing value as zero).
+    USG-T 2.7 reads HCLOSE, BTOL and MXITER only and stops at the other
+    solver words.
+
+    Loading output control by words raises ValueError, instead of dropping
+    the record, for a solver word before the first PERIOD record and for a
+    record that none of the words FloPy looks for matches (USG-T stops at
+    both). The lines USG-T skips before the first PERIOD (ATSA, FASTFORWARD,
+    FASTFORWARDC) are skipped. This does not check the whole file like USG-T
+    does: the other records are matched by substring, so a first word that
+    contains HEAD, DRAWDOWN, IBOUND, CONC, COMPACT, PERIOD, PRINT, SAVE,
+    MXITER or BOOTSTRAP (PRINTX, MXITERS) is taken as that word although
+    USG-T stops at it.
 
     Examples
     --------
@@ -453,6 +531,9 @@ class MfUsgOc(Package):
             self.npsteps = int(kwargs.pop("npsteps"))
         if "timot" in kwargs:
             self.timot = kwargs.pop("timot")
+
+        # COMPACT BUDGET AUX (auxiliary data saved in the budget files)
+        self.compact_aux = bool(kwargs.pop("compact_aux", True))
 
         if "fastforward" in kwargs:
             self.fastforward = int(kwargs.pop("fastforward"))
@@ -677,6 +758,14 @@ class MfUsgOc(Package):
                 "HCLOSE",
                 "BTOL",
                 "MXITER",
+                "THETA",
+                "AKAPPA",
+                "GAMMA",
+                "AMOMENTUM",
+                "NUMTRACK",
+                "BREDUC",
+                "RESLIM",
+                "TRUNCATEDNEWTONCUTOFF",
             }
             keys = list(self.stress_period_data.keys())
             for kper in range(dis.nper):
@@ -779,6 +868,7 @@ class MfUsgOc(Package):
                 kpers.append(kper)
             for item in data:
                 _ats_action(item)
+                _solver_action(item)
         dup = sorted({k + 1 for k in kpers if kpers.count(k) > 1})
         if ats and dup:
             raise ValueError(
@@ -871,7 +961,8 @@ class MfUsgOc(Package):
             f_oc.write(line)
 
         if self.compact:
-            f_oc.write("COMPACT BUDGET AUX\n")
+            aux = " AUX" if self.compact_aux else ""
+            f_oc.write(f"COMPACT BUDGET{aux}\n")
 
         # add a line separator between header and stress
         #  period data
@@ -1457,7 +1548,13 @@ class MfUsgOc(Package):
             last_period = 0
             iperoc, itsoc = 0, 0
             lines = []
+            # words whose record USG-T skips: the options of the first record
+            # (read above), then _SKIPPED_WORDS until the first PERIOD; empty
+            # from the first PERIOD on
+            skipped = _OC_OPTIONS
             while True:
+                if not pending and skipped:
+                    skipped = _SKIPPED_WORDS
                 line = (pending.pop() if pending else f.readline()).upper()
                 if not line:
                     if len(lines) > 0:
@@ -1473,10 +1570,6 @@ class MfUsgOc(Package):
                 # end add
 
                 # dataset 1 values
-
-                # TIMOT : output time values (read after the first record)
-                elif lnlst[0].isdigit():
-                    continue
                 elif (
                     "HEAD" in lnlst[0] and "PRINT" in lnlst[1] and "FORMAT" in lnlst[2]
                 ):
@@ -1518,9 +1611,14 @@ class MfUsgOc(Package):
                     ispcun = int(lnlst[3])
                 elif "COMPACT" in lnlst[0]:
                     compact = True
+                    # AUX or AUXILIARY after COMPACT BUDGET turns IAUXSV on
+                    words = [w for w in re.split(r"[\s,]+", line.strip()) if w]
+                    if not kwargs.get("compact_aux"):
+                        kwargs["compact_aux"] = words[2:3] in (["AUX"], ["AUXILIARY"])
 
                 # dataset 2
                 elif "PERIOD" in lnlst[0]:
+                    skipped = ()
                     iperoc1 = int(lnlst[1]) - 1
                     if kwargs["atsa"]:
                         # USG-T reads ATS output control once per stress
@@ -1573,10 +1671,12 @@ class MfUsgOc(Package):
                 elif (action := _ats_action(line)) is not None:
                     # keep the REAL word as written once USG-T can read it
                     lines.append(action)
-                elif "HCLOSE" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
-                elif "BTOL" in lnlst[0]:
-                    lines.append(f"{lnlst[0]} {float(lnlst[1]):11.4e}")
+                elif skipped and _oc_word(line) in _SOLVER_WORDS:
+                    # USG-T reads the solver words after a PERIOD record only
+                    raise _not_read(line)
+                elif (action := _solver_action(line)) is not None:
+                    # keep the value as written
+                    lines.append(action)
                 elif "MXITER" in lnlst[0]:
                     lines.append(f"{lnlst[0]} {int(lnlst[1]):11d}")
                 elif "BOOTSTRAP" in lnlst[0]:
@@ -1587,8 +1687,8 @@ class MfUsgOc(Package):
                     lines.append(f"{lnlst[0]}")
                 elif "NOBOOTSTRAPSCALE" in lnlst[0]:
                     lines.append(f"{lnlst[0]}")
-                else:
-                    continue
+                elif _oc_word(line) not in skipped:
+                    raise _not_read(line)
 
         # reset unit numbers
         unitnumber = cls._defaultunit()
