@@ -174,6 +174,13 @@ class MfUsgHfb(ModflowHfb):
         if not add_package:
             model.pop_package(self._ftype())
 
+    @property
+    def has_stress_period_data(self):
+        """False: ``stress_period_data`` is a plain dict of barrier recarrays
+        (TRANSIENT_HFB), not the MfList that ``Package.check`` reads. As with
+        ``ModflowHfb``, there is no HFB-specific check."""
+        return False
+
     # ------------------------------------------------------------------
     # write_file
     # ------------------------------------------------------------------
