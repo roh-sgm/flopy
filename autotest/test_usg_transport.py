@@ -12528,7 +12528,7 @@ def _g03_nam_entries(ws):
 def _g03_tree(ws):
     ws = Path(ws)
     return {
-        str(p.relative_to(ws)): (p.read_bytes(), p.stat().st_mtime_ns)
+        p.relative_to(ws).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
         for p in sorted(ws.rglob("*"))
         if p.is_file()
     }
