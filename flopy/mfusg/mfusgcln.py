@@ -142,6 +142,39 @@ class MfUsgCln(Package):
         is None, the package name will be created using the model name and
         package extensions.
 
+    Notes
+    -----
+    With a BCT package registered (create it before the CLN package), the
+    transport data of the CLN nodes are the keyword arguments ``icbund``
+    (BCT icbndflg=0), ``dll`` and ``dlm`` (BCT idisp not 0), and per
+    component, as USG-T 2.8.1 reads them (glo2btnu1.f, SGWT2BCT1CLN):
+
+    - ``conc``: one entry for each of the ``model.ntcomp`` components, in the
+      order species, temperature (iheat=1), immobile components;
+    - ``zodrw`` and ``fodrw``: one entry per species (mcomp), only with BCT
+      izod or ifod equal to 1 or 3 (none for temperature and immobile
+      components);
+    - ``sptlrct`` (BCT spatialreact): one entry for each of the ntcomp
+      components. An entry that is a scalar, an array, a Util2d or a flat
+      list of values is one array (constant or per node) used for the mcomp
+      parent positions of that component; a list whose items are arrays
+      (lists, arrays or Util2d) gives one array per parent position (the
+      factor of the 1st, 2nd... parent) and must have exactly mcomp items.
+
+    A scalar is used for all entries. A shorter list of components or species
+    raises ValueError; extra components or species are not written. After
+    construction or load, ``conc`` is a list of ntcomp Util2d, ``zodrw`` and
+    ``fodrw`` lists of mcomp entries (Util2d when read, else 0) and
+    ``sptlrct`` a list of ntcomp lists of mcomp Util2d (0 entries without
+    spatialreact). ``write_file`` raises ValueError, before
+    the file is opened, if the BCT package or the model counts no longer give
+    the arrays the package was built with. Not supported (NotImplementedError,
+    a guard, not support): BCT spatialreact without chaindecay, and izod or
+    ifod equal to 3 with iadsorb=0, which USG-T 2.8.1 and 2.7.0 cannot read
+    for CLN nodes (the arrays are not allocated). With BAS DPIN, USG-T
+    2.8.1 does not use the CLN ``conc`` values it reads (limitation of USG-T,
+    glo2btnu1.f :2152-2157; also seen with USG-T 2.7.0).
+
     Examples
     --------
     >>> import flopy
@@ -208,6 +241,9 @@ class MfUsgCln(Package):
             f"but received type: {type(model)}."
         )
         assert isinstance(model, MfUsg), msg
+
+        # checked before the model is changed
+        layout = self._transport_layout(model)
 
         # set default unit number of one is not specified
         if unitnumber is None:
@@ -334,9 +370,13 @@ class MfUsgCln(Package):
         )
 
         # Transport parameters
-        bct = model.get_package("BCT")
-        if bct is not None:
-            if bct.icbndflg == 0:
+        self._built_layout = layout
+        if layout is not None:
+            mcomp, _, _, read_icbund, read_disp, read_sptlrct, read_zod, read_fod = (
+                layout
+            )
+            ntcomp = self._ntcomp(layout)
+            if read_icbund:
                 icbund = kwargs.pop("icbund", None)
                 self.icbund = Util2d(
                     model,
@@ -346,7 +386,7 @@ class MfUsgCln(Package):
                     name="icbund",
                     locat=self.unit_number[0],
                 )
-            if bct.idisp:
+            if read_disp:
                 dll = kwargs.pop("dll", None)
                 self.dll = Util2d(
                     model,
@@ -366,39 +406,45 @@ class MfUsgCln(Package):
                     locat=self.unit_number[0],
                 )
 
-            mcomp = bct.mcomp
-            self.sptlrct = [0] * mcomp
+            self.sptlrct = [0] * ntcomp
             self.zodrw = [0] * mcomp
             self.fodrw = [0] * mcomp
-            self.conc = [0] * mcomp
+            self.conc = [0] * ntcomp
 
-            if bct.spatialreact:
-                sptlrct = kwargs.pop("sptlrct", None)
-                if isinstance(sptlrct, (int, float)):
-                    sptlrct = [sptlrct] * mcomp
-            if bct.izod:
-                zodrw = kwargs.pop("zodrw", None)
-                if isinstance(zodrw, (int, float)):
-                    zodrw = [zodrw] * mcomp
-            if bct.ifod:
-                fodrw = kwargs.pop("fodrw", None)
-                if isinstance(fodrw, (int, float)):
-                    fodrw = [fodrw] * mcomp
-            conc = kwargs.pop("conc", None)
-            if isinstance(conc, (int, float)):
-                conc = [conc] * mcomp
+            order = "species, temperature (iheat=1), immobile components"
+            if read_sptlrct:
+                sptlrct = self._entries(
+                    kwargs.pop("sptlrct", None), ntcomp, "sptlrct", order
+                )
+                sptlrct = [
+                    self._parents(s, mcomp, f"sptlrct[{i}]")
+                    for i, s in enumerate(sptlrct)
+                ]
+            if read_zod:
+                zodrw = self._entries(
+                    kwargs.pop("zodrw", None), mcomp, "zodrw", "species"
+                )
+            if read_fod:
+                fodrw = self._entries(
+                    kwargs.pop("fodrw", None), mcomp, "fodrw", "species"
+                )
+            conc = self._entries(kwargs.pop("conc", None), ntcomp, "conc", order)
 
-            for icomp in range(mcomp):
-                if bct.spatialreact:
-                    self.sptlrct[icomp] = Util2d(
-                        model,
-                        (self.nclnnds,),
-                        np.float32,
-                        sptlrct[icomp],
-                        name="sptlrct",
-                        locat=self.unit_number[0],
-                    )
-                if bct.izod:
+            for icomp in range(ntcomp):
+                if read_sptlrct:
+                    self.sptlrct[icomp] = [
+                        Util2d(
+                            model,
+                            (self.nclnnds,),
+                            np.float32,
+                            value,
+                            name="sptlrct",
+                            locat=self.unit_number[0],
+                        )
+                        for value in sptlrct[icomp]
+                    ]
+                # no decay data for the temperature and immobile components
+                if read_zod and icomp < mcomp:
                     self.zodrw[icomp] = Util2d(
                         model,
                         (self.nclnnds,),
@@ -407,7 +453,7 @@ class MfUsgCln(Package):
                         name="zodrw",
                         locat=self.unit_number[0],
                     )
-                if bct.ifod:
+                if read_fod and icomp < mcomp:
                     self.fodrw[icomp] = Util2d(
                         model,
                         (self.nclnnds,),
@@ -558,6 +604,17 @@ class MfUsgCln(Package):
         None
 
         """
+        # checked before the file is opened
+        layout = self._transport_layout(self.parent)
+        built = getattr(self, "_built_layout", None)
+        if layout is not None and layout != built:
+            raise ValueError(
+                "MfUsgCln: the BCT package or the model component counts changed "
+                "after this package was built (CLN transport layout (mcomp, iheat, "
+                "imcomp, icbund, dll/dlm, sptlrct, zodrw, fodrw) "
+                f"{built} -> {layout}); build the CLN package again after the "
+                "BCT package."
+            )
         if f is None:
             f = self.fn_path
         f_cln = get_open_file_object(f, "w")
@@ -605,7 +662,7 @@ class MfUsgCln(Package):
         f_cln.write(self.ibound.get_file_entry())
         f_cln.write(self.strt.get_file_entry())
 
-        self._write_transport(f_cln)
+        self._write_transport(f_cln, layout)
 
         f_cln.close()
 
@@ -643,23 +700,120 @@ class MfUsgCln(Package):
             f_cln.write(f" VISCOSITY {self.visk:f}")
         f_cln.write("\n")
 
-    def _write_transport(self, f_cln):
-        bct = self.parent.get_package("BCT")
-
-        if bct is not None:
-            if bct.icbndflg == 0:
+    def _write_transport(self, f_cln, layout):
+        if layout is not None:
+            mcomp, _, _, read_icbund, read_disp, read_sptlrct, read_zod, read_fod = (
+                layout
+            )
+            if read_icbund:
                 f_cln.write(self.icbund.get_file_entry())
-            if bct.idisp:
+            if read_disp:
                 f_cln.write(self.dll.get_file_entry())
                 f_cln.write(self.dlm.get_file_entry())
-            for icomp in range(bct.mcomp):
-                if bct.spatialreact:
-                    f_cln.write(self.sptlrct[icomp].get_file_entry())
-                if bct.izod:
+            for icomp in range(self._ntcomp(layout)):
+                if read_sptlrct:
+                    for util in self.sptlrct[icomp]:
+                        f_cln.write(util.get_file_entry())
+                # no decay data for the temperature and immobile components
+                if read_zod and icomp < mcomp:
                     f_cln.write(self.zodrw[icomp].get_file_entry())
-                if bct.ifod:
+                if read_fod and icomp < mcomp:
                     f_cln.write(self.fodrw[icomp].get_file_entry())
                 f_cln.write(self.conc[icomp].get_file_entry())
+
+    @staticmethod
+    def _transport_layout(model):
+        """Transport data of the CLN nodes that USG-T 2.8.1 reads, or None.
+
+        None without a registered BCT package: USG-T reads the CLN transport
+        data only for BCT (glo2btnu1.f 2.8.1:465-467). Otherwise the tuple
+        (mcomp, iheat, imcomp, icbund, disp, sptlrct, zod, fod): the component
+        counts of the model, and whether SGWT2BCT1CLN (:2034-2165) reads
+        ICBUND (IC_IBOUND_FLG=0), DLX and ATXY (IDISP not 0), SPTLRCT
+        (SPATIALREACT), ZODRW (IZOD 1 or 3) and FODRW (IFOD 1 or 3).
+
+        Raises ValueError if the BCT package did not set the model counts,
+        and NotImplementedError for data that USG-T reads into arrays it did
+        not allocate (USG-T 2.8.1 and 2.7.0 stop with a segmentation fault)."""
+        bct = model.get_package("BCT")
+        if bct is None:
+            return None
+        state, counts = model._transport_context()
+        if state != "bct":
+            reason = bct._counts_mismatch() or (
+                "it was added without setting the model counts"
+            )
+            raise ValueError(
+                "MfUsgCln: the registered BCT package does not match the model "
+                f"component counts ({reason}); build or load the BCT package "
+                "with its constructor."
+            )
+        if bct.spatialreact and not bct.chaindecay:
+            raise NotImplementedError(
+                "MfUsgCln: BCT SPATIALREACT without CHAINDECAY is not supported "
+                "with CLN: USG-T allocates SPTLRCT only with CHAINDECAY but reads "
+                "it for the CLN nodes (glo2btnu1.f 2.8.1:412-419, 2107). "
+                "SPTLRCT is only used with CHAINDECAY: remove SPATIALREACT."
+            )
+        for name, array, line in (("izod", "ZODRW", 2124), ("ifod", "FODRW", 2134)):
+            if getattr(bct, name) == 3 and not bct.iadsorb > 0:
+                raise NotImplementedError(
+                    f"MfUsgCln: BCT {name.upper()}=3 with IADSORB=0 is not "
+                    f"supported with CLN: USG-T allocates {array} for "
+                    f"{name.upper()}=3 only with IADSORB > 0 but reads it for the "
+                    f"CLN nodes (glo2btnu1.f 2.8.1:305-355, {line}). Without "
+                    "adsorption USG-T applies no decay on soil, so use "
+                    f"{name.upper()}=1 (decay in water only)."
+                )
+        return (
+            *counts,
+            bct.icbndflg == 0,
+            bool(bct.idisp),
+            bool(bct.spatialreact),
+            bct.izod in (1, 3),
+            bct.ifod in (1, 3),
+        )
+
+    @staticmethod
+    def _ntcomp(layout):
+        """NTCOMP: species, temperature (IHEAT=1) and immobile components."""
+        mcomp, iheat, imcomp = layout[:3]
+        return mcomp + (1 if iheat == 1 else 0) + imcomp
+
+    @staticmethod
+    def _entries(value, n, name, order):
+        """n entries: a scalar for all of them, or the first n entries of a
+        sequence (ValueError if it has fewer)."""
+        if isinstance(value, (int, float)):
+            return [value] * n
+        if value is None or len(value) < n:
+            got = "no" if value is None else len(value)
+            raise ValueError(
+                f"MfUsgCln: {name} has {got} entries; USG-T reads {n} ({order})."
+            )
+        return list(value[:n])
+
+    @staticmethod
+    def _parents(entry, mcomp, name):
+        """The mcomp SPTLRCT arrays of one component.
+
+        A list or tuple whose items include arrays (lists, tuples, ndarrays
+        or Util2d) gives one array per parent position and must have exactly
+        mcomp items; any other entry (scalar, ndarray, Util2d or a flat list
+        of values) is one array, used for all mcomp parent positions."""
+        arrays = (list, tuple, np.ndarray, Util2d)
+        if isinstance(entry, (list, tuple)) and any(
+            isinstance(item, arrays) for item in entry
+        ):
+            if len(entry) != mcomp:
+                raise ValueError(
+                    f"MfUsgCln: {name} has {len(entry)} arrays, one per parent "
+                    f"position; USG-T reads {mcomp} (mcomp)."
+                )
+            return list(entry)
+        if isinstance(entry, tuple):
+            entry = list(entry)  # Util2d does not take a tuple
+        return [entry] * mcomp
 
     @classmethod
     def load(cls, f, model, pak_type="cln", ext_unit_dict=None, **kwargs):
@@ -696,6 +850,9 @@ class MfUsgCln(Package):
             f"but received type: {type(model)}."
         )
         assert isinstance(model, MfUsg), msg
+
+        # checked before the file is opened or read
+        layout = cls._transport_layout(model)
 
         if model.verbose:
             print("loading CLN package file...\n")
@@ -765,8 +922,7 @@ class MfUsgCln(Package):
             print("   Reading strt...")
         strt = Util2d.load(f, model, (nclnnds, 1), np.float32, "strt", ext_unit_dict)
 
-        bct = model.get_package("BCT")
-        if bct is not None:
+        if layout is not None:
             if model.verbose:
                 print("loading transport parameters...")
             (
@@ -777,7 +933,7 @@ class MfUsgCln(Package):
                 kwargs["zodrw"],
                 kwargs["fodrw"],
                 kwargs["conc"],
-            ) = cls._load_transport(f, model, nclnnds, bct, ext_unit_dict)
+            ) = cls._load_transport(f, model, nclnnds, layout, ext_unit_dict)
 
         if hasattr(f, "read"):
             f.close()
@@ -997,18 +1153,20 @@ class MfUsgCln(Package):
 
         return nndcln, clncon, nja_cln, iac_cln, ja_cln, nclnnds
 
-    def _load_transport(f_obj, model, nclnnds, bct, ext_unit_dict):
+    def _load_transport(f_obj, model, nclnnds, layout, ext_unit_dict):
         """Loads cln items 3, or 4,5,6 from filehandle f."""
+        mcomp, _, _, read_icbund, read_disp, read_sptlrct, read_zod, read_fod = layout
+        ntcomp = MfUsgCln._ntcomp(layout)
 
         icbund = None
-        if bct.icbndflg == 0:
+        if read_icbund:
             icbund = Util2d.load(
                 f_obj, model, (nclnnds, 1), np.int32, "icbund", ext_unit_dict
             )
 
         dll = None
         dlm = None
-        if bct.idisp:
+        if read_disp:
             dll = Util2d.load(
                 f_obj, model, (nclnnds, 1), np.float32, "dll", ext_unit_dict
             )
@@ -1016,23 +1174,25 @@ class MfUsgCln(Package):
                 f_obj, model, (nclnnds, 1), np.float32, "dlm", ext_unit_dict
             )
 
-        mcomp = bct.mcomp
-
-        sptlrct = [0] * mcomp
+        sptlrct = [0] * ntcomp
         zodrw = [0] * mcomp
         fodrw = [0] * mcomp
-        conc = [0] * mcomp
+        conc = [0] * ntcomp
 
-        for icomp in range(mcomp):
-            if bct.spatialreact:
-                sptlrct[icomp] = Util2d.load(
-                    f_obj, model, (nclnnds, 1), np.float32, "sptlrct", ext_unit_dict
-                )
-            if bct.izod:
+        for icomp in range(ntcomp):
+            if read_sptlrct:
+                sptlrct[icomp] = [
+                    Util2d.load(
+                        f_obj, model, (nclnnds, 1), np.float32, "sptlrct", ext_unit_dict
+                    )
+                    for _ in range(mcomp)
+                ]
+            # no decay data for the temperature and immobile components
+            if read_zod and icomp < mcomp:
                 zodrw[icomp] = Util2d.load(
                     f_obj, model, (nclnnds, 1), np.float32, "zodrw", ext_unit_dict
                 )
-            if bct.ifod:
+            if read_fod and icomp < mcomp:
                 fodrw[icomp] = Util2d.load(
                     f_obj, model, (nclnnds, 1), np.float32, "fodrw", ext_unit_dict
                 )
