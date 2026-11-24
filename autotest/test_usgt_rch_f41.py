@@ -11,7 +11,8 @@ USG-T 2.8.1 (gwf2rch8u1.f; 2.7.0 runs the same files):
 - RP :264-272 DISU NRCHOP=2: INIRCH is the number of IRCH nodes, < 0 reuses
   IRCH (:338-342).
 - gwt2bndsu1.f :3508, :3521 (:3586, :3599): the transport of a period that
-  reuses IRCH adds no recharge mass, so FloPy does not write that form.
+  reuses IRCH adds no recharge mass; FloPy keeps that form, warns, and
+  inirch_ncpl=True writes the current IRCH there instead.
 - Structured NRCHOP=2 (RP :338-360): INIRCH >= 0 reads IRCH for all the
   NROW*NCOL cells, but transport applies the recharge concentration only to
   the first INIRCH cells (gwt2bndsu1.f :3521), so the INIRCH read is kept,
@@ -20,7 +21,7 @@ USG-T 2.8.1 (gwf2rch8u1.f; 2.7.0 runs the same files):
   recharge of the first INIRCH cells only and none when the period reuses
   IRCH (glo2basu1.f ATS1AJ :3342, :3353), so the flow depends on INIRCH: RTS
   follows the CONC rule (NROW*NCOL by default, warning below it, a period
-  that reuses IRCH is not written).
+  that reuses IRCH is kept with a warning, structured grid and DISU).
   Period 1 must read IRCH (RP :338-342 would reuse an IRCH never read).
 - Structured RTS (AR :103, :107; RP :438-439): IZNRCH has NROW*NCOL
   positions, so the zone of an IRCH cell below layer 1 is never read and
@@ -486,40 +487,6 @@ def test_rch_disu_nrchop2_rejected_before_writing(function_tmpdir, case):
     assert not (function_tmpdir / "out.rch").exists()
 
 
-_H_CONC_REUSE = (
-    "# RCH\n 2 50 CONC\n 5\n 1 0\n 1 5 INCONC\n"
-    + _blk(_R5)
-    + _iblk([1, 2, 3, 4, 5])
-    + _blk(_C5)
-    + " -1 -1\n"
-)
-
-
-@pytest.mark.parametrize("source", ["load", "api"])
-def test_rch_conc_nrchop2_irch_reuse_not_written(function_tmpdir, source):
-    """CONC with a period that reuses IRCH: USG-T adds no recharge mass in
-    that period (gwt2bndsu1.f :3508), so FloPy raises NotImplementedError
-    before opening the file; the file still loads."""
-    ml = _ml(function_tmpdir, nper=2)
-    if source == "load":
-        rch = _load(function_tmpdir, _H_CONC_REUSE, ml)
-    else:
-        rch = MfUsgRch(
-            ml,
-            nrchop=2,
-            ipakcb=50,
-            rech=np.full((1, 5), 1e-3),
-            irch=np.array([[0, 1, 2, 3, 4]]),
-            iconc=1,
-            irchconc=[1, 0],
-            rchconc=1.0,
-        )
-    rch.fn_path = str(function_tmpdir / "out.rch")
-    with pytest.raises(NotImplementedError, match="irch"):
-        rch.write_file(check=False)
-    assert not (function_tmpdir / "out.rch").exists()
-
-
 _H_RTS_LAYER2 = (
     "# RCH\n 2 50 RTS 1\n 10\n 1 5 INRCHZONES 1\n"
     + _blk([0.0] * 5)
@@ -940,36 +907,6 @@ def test_rch_structured_inirch_ncpl_override(function_tmpdir, source):
     assert _reload(function_tmpdir / "out.rch", ml).inirch == {0: 6, 1: 6}
 
 
-_S_CONC_REUSE = (
-    "# RCH\n 2 50 CONC\n 1\n 1 6 INCONC\n"
-    + _blk(_R6)
-    + "CONSTANT 1\n"
-    + _blk(_C6)
-    + " -1 -1\n"
-)
-
-
-@pytest.mark.parametrize("source", ["load", "api"])
-def test_rch_structured_conc_irch_reuse_not_written(function_tmpdir, source):
-    """Structured CONC with a period that reuses IRCH: USG-T adds no
-    recharge mass in that period (gwt2bndsu1.f :3508; probe P7 with both
-    engines), so FloPy raises NotImplementedError before opening the file,
-    also with inirch_ncpl; the file still loads."""
-    ml = _dis(function_tmpdir)
-    if source == "load":
-        rch = _load(function_tmpdir, _S_CONC_REUSE, ml)
-    else:
-        rch = MfUsgRch(ml, nrchop=2, rech=1e-3, irch=0, iconc=1, rchconc=1.0)
-    rch.fn_path = str(function_tmpdir / "out.rch")
-    for override in (False, True):
-        rch.inirch_ncpl = override
-        with pytest.raises(NotImplementedError, match="every stress period"):
-            rch.write_file(check=False)
-        assert not (function_tmpdir / "out.rch").exists()
-    if source == "load":
-        assert rch.inirch == {0: 6, 1: -1}
-
-
 _BAD_INIRCH = {
     "disu": ("disu", {"inirch": {0: 5}}, "structured"),
     "nrchop3": ("dis", {"nrchop": 3, "inirch_ncpl": True}, "structured"),
@@ -1035,16 +972,16 @@ def _s5_text(inirch):
     )
 
 
-def _dis_exe_model(ws):
-    """Probe P2 model: structured 1 x 5, one period of 2 steps, CHD in cell
-    1, MCOMP=1 with IDISP=0; RCH added to the name file as t.rch."""
-    ml = _dis(ws, nper=1, mcomp=1, nrow=1, ncol=5)
+def _dis_exe_model(ws, nper=1):
+    """Probe P2 model: structured 1 x 5, nper periods of 2 steps, CHD in
+    cell 1, MCOMP=1 with IDISP=0; RCH added to the name file as t.rch."""
+    ml = _dis(ws, nper=nper, mcomp=1, nrow=1, ncol=5)
     MfUsgBas(ml, ibound=1, strt=10.0)
     MfUsgLpf(ml, laytyp=0, hk=1.0, vka=1.0, ss=1.0e-3, ipakcb=50)
     MfUsgSms(ml, linmeth=1)
     ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 10.0, 10.0]]})
     act = ["save head", "save budget", "print budget", "save concentration"]
-    MfUsgOc(ml, stress_period_data={(0, s): act for s in range(2)})
+    MfUsgOc(ml, stress_period_data={(k, s): act for k in range(nper) for s in range(2)})
     ml.write_input()
     with open(Path(ws) / "t.nam", "a") as f:
         f.write("RCH               18  t.rch\n")
@@ -1182,7 +1119,6 @@ _ZN6 = "INTERNAL 1 (FREE) -1\n 1 2 1\n 2 1 2\n"
 _C6_ROWS = "INTERNAL 1.0 (FREE) -1\n 5.0 6.0 7.0\n 8.0 9.0 10.0\n"
 _ZN23 = np.array([[1, 2, 1], [2, 1, 2]])
 _LOW_RTS = r"RTS records read during a period.*first INIRCH cells.*:3353.*inirch_ncpl"
-_REUSE_RTS = r"with RTS, USG-T applies none of the RTS records.*every stress period"
 
 
 def _s_rts(n1, n2, conc=False):
@@ -1263,55 +1199,6 @@ def test_rch_rts_structured_inirch_low(function_tmpdir, case):
     assert _inirch_of(_write_quiet(rch, function_tmpdir)) == ["6", "6"]
 
 
-@pytest.mark.parametrize(
-    "case", ["s_load", "s_api", "s_conc_load", "disu_load", "disu_api"]
-)
-def test_rch_rts_irch_reuse_not_written(function_tmpdir, case):
-    """RTS with NRCHOP=2 and a period that reuses IRCH: USG-T applies none
-    of the RTS records read after the start of that period (glo2basu1.f
-    :3342, :3353), so FloPy raises NotImplementedError before opening the
-    file (structured, also with inirch_ncpl, and DISU); the file still
-    loads. With CONC the message gives both causes."""
-    if case.startswith("disu"):
-        ml = _ml(function_tmpdir, nper=2, mcomp=0)
-        if case == "disu_load":
-            text = (
-                "# RCH\n 2 50 RTS 1\n 5\n 0 5 INRCHZONES 1\n"
-                + _blk([0.0] * 5)
-                + _iblk([1, 2, 3, 4, 5])
-                + _iblk([1] * 5)
-                + " -1 -1\n"
-            )
-            rch = _load(function_tmpdir, text, ml)
-        else:
-            rch = MfUsgRch(
-                ml,
-                nrchop=2,
-                ipakcb=50,
-                rech={0: np.zeros((1, 5))},
-                irch={0: np.array([[0, 1, 2, 3, 4]])},
-                mxrtzones=1,
-                iznrch={0: np.ones((1, 5), dtype=int)},
-                iniznrch={0: 1},
-            )
-    else:
-        conc = "conc" in case
-        ml = _dis(function_tmpdir, mcomp=1 if conc else 0)
-        if case.endswith("load"):
-            rch = _load(function_tmpdir, _s_rts(6, -1, conc), ml)
-            assert rch.inirch == {0: 6, 1: -1}
-        else:
-            rch = _rts_api(ml, 0)
-    rch.fn_path = str(function_tmpdir / "out.rch")
-    for override in (False, True) if case.startswith("s_") else (False,):
-        rch.inirch_ncpl = override
-        with pytest.raises(NotImplementedError, match=_REUSE_RTS) as err:
-            rch.write_file(check=False)
-        assert ("with CONC" in str(err.value)) is ("conc" in case)
-        assert "stress period 2 (INIRCH -1)" in str(err.value)
-        assert not (function_tmpdir / "out.rch").exists()
-
-
 _RTS4 = (
     "0.0 4.0 1.0 1.0e-3 2.0e-3\n4.0 10.0 1.0 3.0e-3 1.0e-3\n"
     "10.0 14.0 1.0 2.0e-3 2.0e-3\n14.0 1.0e6 1.0 5.0e-3 4.0e-3\n"
@@ -1329,6 +1216,15 @@ def _rts_exe_model(ws):
     ModflowChd(ml, stress_period_data={0: [[0, 0, 0, 10.0, 10.0]]})
     MfUsgOc(ml, stress_period_data={(0, 0): ["save head"]})
     ml.write_input()
+    with open(Path(ws) / "t.nam", "a") as f:
+        f.write("RCH               18  t.rch\n")
+    _atsa_rts(ws)
+    return ml
+
+
+def _atsa_rts(ws):
+    """OC with ATSA for the two periods of a written model and the RTS file
+    (rech.rts, _RTS4) added to its name file."""
     ws = Path(ws)
     nam = (ws / "t.nam").read_text().splitlines()
     unit = next(ln.split()[1] for ln in nam if ln.split()[-1] == "t.hds")
@@ -1342,8 +1238,7 @@ def _rts_exe_model(ws):
     )
     (ws / "rech.rts").write_text(_RTS4)
     with open(ws / "t.nam", "a") as f:
-        f.write("RCH               18  t.rch\nRTS               40  rech.rts\n")
-    return ml
+        f.write("RTS               40  rech.rts\n")
 
 
 @requires_usgt
@@ -1382,3 +1277,240 @@ def test_usgt_exe_rch_rts_structured_inirch(function_tmpdir, source):
     expected = "hand_1" if source == "load_write_1" else "hand_ncpl"
     assert _inirch_of(text) == (["1", "1"] if expected == "hand_1" else ["6", "6"])
     assert _exe_run(ws) == runs[expected]
+
+
+# ------------------------------- NRCHOP=2: IRCH reused with CONC or RTS
+_REUSE_CONC = (
+    r"With CONC, USG-T adds no recharge mass in a period that reuses IRCH "
+    r"\(gwt2bndsu1\.f :3508\)\."
+)
+_REUSE_RTS = (
+    r"With RTS, USG-T applies none of the RTS records read after the start "
+    r"of a period that reuses IRCH \(glo2basu1\.f :3342, :3353\)\."
+)
+_REUSE_FIX = (
+    r"Set inirch_ncpl=True to write the current IRCH in those periods, or "
+    r"give irch for every stress period\."
+)
+_REUSE_CASES = ["s_conc", "s_rts", "disu_conc", "disu_rts"]
+_IRCH5 = _iblk([1, 2, 3, 4, 5])
+_ZN5 = _iblk([1, 2, 1, 2, 1])
+
+
+def _reuse_text(case, reuse):
+    """(hand file, stress period records) of case: IRCH read in period 1
+    and, in period 2, reused (INIRCH -1) or read again with its full count.
+    RECH is read in both periods (INRECH 1). s_conc: structured 1 x 5,
+    CONC with concentration 1; s_rts: structured 2 x 3, RTS 2; disu_conc:
+    DISU 5 nodes, CONC; disu_rts: DISU 5 nodes, RTS 2."""
+    if case == "s_conc":
+        r = _blk([1.0e-3] * 5)
+        head = "# RCH\n 2 50 CONC\n 1\n 1 5 INCONC\n" + r + "CONSTANT 1\n"
+        head += _blk([1.0] * 5)
+        p1, n, tail = "1 5 INCONC", 5, r + ("" if reuse else "CONSTANT 1\n")
+    elif case == "s_rts":
+        head = "# RCH\n 2 50 RTS 2\n 1 6 INRCHZONES 2\nCONSTANT 0.0\nCONSTANT 1\n"
+        head += _ZN6
+        p1, n = "1 6 INRCHZONES 2", 6
+        tail = "CONSTANT 0.0\n" + ("" if reuse else "CONSTANT 1\n")
+    elif case == "disu_conc":
+        head = "# RCH\n 2 50 CONC\n 5\n 1\n 1 5 INCONC\n" + _blk(_R5) + _IRCH5
+        head += _blk(_C5)
+        p1, n, tail = "1 5 INCONC", 5, _blk(_R5) + ("" if reuse else _IRCH5)
+    else:
+        head = "# RCH\n 2 50 RTS 2\n 5\n 1 5 INRCHZONES 2\nCONSTANT 0.0\n"
+        head += _IRCH5 + _ZN5
+        p1, n = "1 5 INRCHZONES 2", 5
+        tail = "CONSTANT 0.0\n" + ("" if reuse else _IRCH5)
+    p2 = "1 -1" if reuse else f"1 {n}"
+    return head + f" {p2}\n" + tail, [p1.split(), p2.split()]
+
+
+def _reuse_model(ws, case, exe=False):
+    """Model of a _reuse_text case: without packages other than DIS/DISU
+    (and BCT with CONC), or with exe=True the engine model with t.rch (and
+    for RTS the ATSA OC and rech.rts)."""
+    if case == "s_conc":
+        if exe:
+            return _dis_exe_model(ws, nper=2)
+        return _dis(ws, nper=2, mcomp=1, nrow=1, ncol=5)
+    if case == "s_rts":
+        return _rts_exe_model(ws) if exe else _dis(ws, nper=2, mcomp=0)
+    mcomp = 1 if case == "disu_conc" else 0
+    if not exe:
+        return _ml(ws, nper=2, mcomp=mcomp)
+    ml = _exe_model(ws, nper=2, mcomp=mcomp)
+    if case == "disu_rts":
+        _atsa_rts(ws)
+    return ml
+
+
+def _heads(text):
+    """Tokens of the stress period records of a file written by FloPy."""
+    return [
+        ln.split("#")[0].split() for ln in text.splitlines() if "Stress period" in ln
+    ]
+
+
+def _narrays(text):
+    """Number of arrays (INTERNAL or CONSTANT headers) of an RCH file."""
+    return sum(
+        1
+        for ln in text.splitlines()
+        if ln.split()[:1] and ln.split()[0].upper() in ("INTERNAL", "CONSTANT")
+    )
+
+
+def _no_names(text):
+    """Lines of an RCH file without comments: the written array headers
+    carry the name of the period the array comes from (#irch_1 for the
+    current IRCH written again in period 2)."""
+    return [ln.split("#")[0].rstrip() for ln in text.splitlines()]
+
+
+def _write_warns(rch, ws, name="out.rch"):
+    """(written text, messages of the MfUsgRch warnings given)."""
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        out = _write(rch, ws, name)
+    msgs = [str(w.message) for w in record]
+    return out, [m for m in msgs if m.startswith("MfUsgRch")]
+
+
+def _check_reuse_warning(msg, case, periods):
+    """The options of case named, the periods, the consequence of each of
+    them only, and the way out."""
+    conc, rts = "conc" in case, "rts" in case
+    opts = " and ".join(o for o, on in (("CONC", conc), ("RTS", rts)) if on)
+    assert msg.startswith(
+        f"MfUsgRch: {opts} with IRCH reused in stress period {periods}: "
+    )
+    assert bool(re.search(_REUSE_CONC, msg)) is conc
+    assert bool(re.search(_REUSE_RTS, msg)) is rts
+    assert re.search(_REUSE_FIX, msg)
+
+
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_rch_irch_reuse_kept_on_load_write(function_tmpdir, case):
+    """NRCHOP=2 with CONC or RTS and a period that reuses IRCH (structured
+    and DISU): load and write keep the records and arrays of the hand file,
+    with one warning that names the period, the consequence and the way
+    out. inirch_ncpl=True writes the current IRCH with its full count in
+    that period, the same file FloPy writes from the hand file that reads
+    IRCH in both periods, without a warning."""
+    ml = _reuse_model(function_tmpdir, case)
+    text, heads = _reuse_text(case, True)
+    rch = _load(function_tmpdir, text, ml)
+    assert sorted(rch.irch.transient_2ds) == [0]
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert _heads(out) == heads
+    assert _narrays(out) == _narrays(text)
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], case, "2 (INIRCH -1)")
+    again = _reload(function_tmpdir / "out.rch", ml)
+    assert _values(again) == _values(rch)
+    assert sorted(again.irch.transient_2ds) == [0]
+
+    rch.inirch_ncpl = True
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    full_ws = function_tmpdir / "full"
+    full_text, full_heads = _reuse_text(case, False)
+    full = _load(full_ws, full_text, _reuse_model(full_ws, case))
+    assert _heads(out) == full_heads
+    assert _no_names(out) == _no_names(_write(full, full_ws))
+
+
+def _reuse_api(ws, case, irch_all):
+    """New model of 3 stress periods with irch given for period 1 only or
+    for every period (irch_all); s_*: structured 2 x 3, disu_*: DISU 5
+    nodes; with CONC (conc in case) and/or RTS 2 (rts in case), or neither
+    (*_flow)."""
+    nper = 3
+    if case.startswith("s_"):
+        ml = _dis(ws, nper=nper, mcomp=1 if "conc" in case else 0)
+        irch0, rech, zones = 0, 1.0e-3, _ZN23
+    else:
+        ml = _ml(ws, nper=nper, mcomp=1 if "conc" in case else 0)
+        irch0 = np.array([[0, 1, 2, 3, 4]])
+        rech, zones = np.full((1, 5), 1.0e-3), np.array([[1, 2, 1, 2, 1]])
+    kwargs = {}
+    if "conc" in case:
+        kwargs.update(iconc=1, rchconc=1.0)
+    if "rts" in case:
+        kwargs.update(mxrtzones=2, iznrch={0: zones}, iniznrch={0: 2})
+    irch = dict.fromkeys(range(nper), irch0) if irch_all else {0: irch0}
+    return MfUsgRch(ml, nrchop=2, ipakcb=50, rech=rech, irch=irch, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "case", [*_REUSE_CASES, "s_conc_rts", "disu_conc_rts", "s_flow", "disu_flow"]
+)
+def test_rch_irch_reuse_api(function_tmpdir, case):
+    """New model with irch for period 1 only: with CONC, RTS or both,
+    periods 2 and 3 reuse IRCH (INIRCH -1) with one warning that names the
+    two periods and the consequence of each option, and
+    inirch_ncpl=True writes the file of the same model with irch for every
+    period, without a warning. Without CONC and RTS there is no warning and
+    the reuse is written, also with inirch_ncpl."""
+    rch = _reuse_api(function_tmpdir, case, irch_all=False)
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert _inirch_of(out)[1:] == ["-1", "-1"]
+    if "flow" in case:
+        assert msgs == []
+    else:
+        assert len(msgs) == 1
+        _check_reuse_warning(msgs[0], case, "2 (INIRCH -1), 3 (INIRCH -1)")
+
+    rch.inirch_ncpl = True
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    if "flow" in case:
+        n = "6" if case.startswith("s_") else "5"
+        assert _inirch_of(out) == [n, "-1", "-1"]
+    else:
+        full_ws = function_tmpdir / "full"
+        full = _reuse_api(full_ws, case, irch_all=True)
+        assert _no_names(out) == _no_names(_write(full, full_ws))
+        assert len(set(_inirch_of(out))) == 1
+
+
+@requires_usgt
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_usgt_exe_rch_irch_reuse(function_tmpdir, case):
+    """Hand file that reuses IRCH in period 2 against the one that reads it
+    again: with CONC the flow is the same but period 2 adds no recharge
+    mass; with RTS the RTS record read inside period 2 is not applied, so
+    the recharge and the heads differ (structured and DISU). The loaded
+    reuse file written by FloPy (with the warning) runs like the hand reuse
+    file; with inirch_ncpl=True it runs like the file that reads IRCH in
+    both periods."""
+    runs = {}
+    for name, reuse in (("hand_reuse", True), ("hand_full", False)):
+        ws = function_tmpdir / name
+        _reuse_model(ws, case, exe=True)
+        (ws / "t.rch").write_text(_reuse_text(case, reuse)[0])
+        runs[name] = _exe_run(ws)
+    kept, full = runs["hand_reuse"], runs["hand_full"]
+    if "conc" in case:
+        assert kept["hds"] == full["hds"]
+        assert kept["rch"] == full["rch"]
+        # cumulative RCH mass in (IN and OUT lines alternate)
+        mk = [float(m) for m in kept["rch_mass"][0::2]]
+        mf = [float(m) for m in full["rch_mass"][0::2]]
+        end1 = len(mf) // 2 - 1
+        assert len(mk) == len(mf) == 4
+        assert mf[-1] > mf[end1] > 0.0
+        assert mk[-1] == mk[end1] == mf[end1]
+    else:
+        assert kept["rch"] != full["rch"]
+        assert kept["hds"] != full["hds"]
+
+    for name, ncpl in (("flopy_reuse", False), ("flopy_ncpl", True)):
+        ws = function_tmpdir / name
+        ml = _reuse_model(ws, case, exe=True)
+        rch = _load(ws, _reuse_text(case, True)[0], ml)
+        rch.inirch_ncpl = ncpl
+        _, msgs = _write_warns(rch, ws, "t.rch")
+        assert len(msgs) == (0 if ncpl else 1)
+        assert _exe_run(ws) == runs["hand_full" if ncpl else "hand_reuse"]

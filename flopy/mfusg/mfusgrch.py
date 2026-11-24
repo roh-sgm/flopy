@@ -240,34 +240,45 @@ def _conc_mcompt(model, who):
     return model._transport_mcompt(who)
 
 
-def _irch_reuse_error(kper, n, conc, rts):
-    """NotImplementedError for a stress period that reuses IRCH with CONC
-    and/or RTS."""
+def _irch_reuse_warning(reuse, conc, rts):
+    """Warn about the stress periods ([kper, INIRCH]) that reuse IRCH with
+    CONC and/or RTS."""
+    periods = ", ".join(f"{k + 1} (INIRCH {n})" for k, n in reuse)
+    opts = []
     why = []
     if conc:
+        opts.append("CONC")
         why.append(
-            "with CONC, USG-T adds no recharge mass in that period (gwt2bndsu1.f :3508)"
+            "With CONC, USG-T adds no recharge mass in a period that reuses "
+            "IRCH (gwt2bndsu1.f :3508)."
         )
     if rts:
+        opts.append("RTS")
         why.append(
-            "with RTS, USG-T applies none of the RTS records read after the "
-            "start of that period (glo2basu1.f :3342, :3353)"
+            "With RTS, USG-T applies none of the RTS records read after the "
+            "start of a period that reuses IRCH (glo2basu1.f :3342, :3353)."
         )
-    return NotImplementedError(
-        f"irch reuses IRCH in stress period {kper + 1} (INIRCH {n}): "
-        + "; ".join(why)
-        + "; give irch for every stress period"
+    warnings.warn(
+        f"MfUsgRch: {' and '.join(opts)} with IRCH reused in stress period "
+        f"{periods}: "
+        + " ".join(why)
+        + " Set inirch_ncpl=True to write the current IRCH in those periods, "
+        "or give irch for every stress period."
     )
 
 
-def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones):
-    """[INIRCH, IRCH file entry] of every stress period for DISU NRCHOP=2.
+def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_ncpl):
+    """[INIRCH, IRCH file entry] of every stress period for DISU NRCHOP=2,
+    and the [kper, INIRCH] of the periods that reuse IRCH with CONC or RTS.
 
     USG-T RP: INIRCH >= 0 is the number of IRCH nodes and reads IRCH; < 0
     reuses IRCH and its node count (gwf2rch8u1.f :272, :338-342), which also
     sizes RECH and the concentrations of the period (:318, :482). A period
-    without irch data reuses IRCH; period 1 must read it."""
+    without irch data reuses IRCH; with CONC or RTS and inirch_ncpl it
+    writes the current IRCH with its node count instead. Period 1 must read
+    IRCH."""
     plan = []
+    reuse = []
     nirch = None
     for kper in range(nper):
         u2d = irch.transient_2ds.get(kper)
@@ -293,9 +304,11 @@ def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones):
                 "irch has no data for stress period 1: USG-T reads IRCH in "
                 "period 1 (NRCHOP=2)"
             )
+        elif (flags is not None or mxrtzones) and inirch_ncpl:
+            plan.append([nirch, entry])
         else:
             if flags is not None or mxrtzones:
-                raise _irch_reuse_error(kper, -1, flags is not None, mxrtzones)
+                reuse.append([kper, -1])
             plan.append([-1, ""])
         inrech = rech.get_kper_entry(kper)[0]
         if inrech >= 0 and rech[kper].array.size != nirch:
@@ -317,27 +330,30 @@ def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones):
                         f"{kper + 1} has {u3d[icomp].array.size} values; IRCH "
                         f"has {nirch} nodes"
                     )
-    return plan
+    return plan, reuse
 
 
 def _inirch_options(model, nrchop, nper, inirch, inirch_ncpl):
-    """Check inirch and inirch_ncpl (structured grid with NRCHOP=2 only) and
-    return the INIRCH values as {kper: int}."""
+    """Check inirch (structured grid with NRCHOP=2 only) and inirch_ncpl
+    (NRCHOP=2 only) and return the INIRCH values as {kper: int}."""
     if inirch_ncpl not in (False, True):
         raise ValueError(f"inirch_ncpl = {inirch_ncpl!r} must be True or False")
     values = _period_flags(inirch, nper, "inirch")
-    if (inirch is not None or inirch_ncpl) and not (model.structured and nrchop == 2):
+    if inirch is not None and not (model.structured and nrchop == 2):
         raise ValueError(
-            "inirch/inirch_ncpl need nrchop=2 on a structured grid (DISU "
-            "writes the number of irch nodes)"
+            "inirch needs nrchop=2 on a structured grid (DISU writes the "
+            "number of irch nodes)"
         )
+    if inirch_ncpl and nrchop != 2:
+        raise ValueError("inirch_ncpl needs nrchop=2 (structured grid or DISU)")
     return values
 
 
 def _structured_inirch(irch, values, nper, ncpl, conc, inirch_ncpl, mxrtzones):
-    """INIRCH of every stress period for a structured grid with NRCHOP=2,
-    and the [kper, INIRCH] of the periods that read IRCH with CONC or RTS
-    and an INIRCH below NROW*NCOL.
+    """[INIRCH, kper of the irch written] of every stress period for a
+    structured grid with NRCHOP=2, the [kper, INIRCH] of the periods that
+    read IRCH with CONC or RTS and an INIRCH below NROW*NCOL, and the
+    [kper, INIRCH] of the periods that reuse IRCH with CONC or RTS.
 
     USG-T RP: INIRCH >= 0 reads IRCH for the NROW*NCOL cells, < 0 reuses it
     (gwf2rch8u1.f :338-360). Without CONC and RTS the result does not depend
@@ -347,14 +363,18 @@ def _structured_inirch(irch, values, nper, ncpl, conc, inirch_ncpl, mxrtzones):
     the first INIRCH cells only (glo2basu1.f ATS1AJ :3342, :3353), none for
     INIRCH < 0. A period with irch data writes NROW*NCOL with inirch_ncpl,
     else the INIRCH read (values), else NROW*NCOL with CONC or RTS and 1
-    without; a period without data writes the INIRCH read or -1; period 1
+    without; a period without data writes the INIRCH read or -1, or, with
+    CONC or RTS and inirch_ncpl, the current irch with NROW*NCOL; period 1
     must read IRCH."""
     full = conc or bool(mxrtzones)
     plan = []
     low = []
+    reuse = []
+    src = None
     for kper in range(nper):
         n = values.get(kper)
         if kper in irch.transient_2ds:
+            src = kper
             # RTS takes the zone of cell IRCH(NN) from IZNRCH, which has
             # NROW*NCOL positions (gwf2rch8u1.f :103, :107, :356, :438-439)
             layer = irch.transient_2ds[kper].array.max() + 1
@@ -394,10 +414,12 @@ def _structured_inirch(irch, values, nper, ncpl, conc, inirch_ncpl, mxrtzones):
                     f"INIRCH {n} in stress period {kper + 1} needs irch data"
                 )
             n = -1 if n is None else n
-            if full:
-                raise _irch_reuse_error(kper, n, conc, mxrtzones)
-        plan.append(n)
-    return plan, low
+            if full and inirch_ncpl:
+                n = ncpl
+            elif full:
+                reuse.append([kper, n])
+        plan.append([n, src])
+    return plan, low, reuse
 
 
 class MfUsgRch(ModflowRch):
@@ -457,9 +479,10 @@ class MfUsgRch(ModflowRch):
         structured grid IZNRCH has NROW*NCOL positions, so with nrchop=2 an
         irch layer above 1 is not written (NotImplementedError: USG-T adds no
         RTS recharge to that cell). With nrchop=2, a period that reuses irch
-        is not written (NotImplementedError: USG-T applies none of the RTS
+        is written as a reuse with a warning (USG-T applies none of the RTS
         records read after the start of that period, glo2basu1.f :3342,
-        :3353); see inirch for a structured grid.
+        :3353); inirch_ncpl=True writes the current irch there instead; see
+        inirch for a structured grid.
     iconc : int
         1 writes the CONC option: recharge concentrations of the components
         selected by irchconc (needs the component counts of a BCT package, or
@@ -487,9 +510,10 @@ class MfUsgRch(ModflowRch):
         with RTS, the RTS records read during a period update the recharge
         of the first INIRCH cells only (glo2basu1.f :3342, :3353), so the
         flow depends on INIRCH. With CONC or RTS a value below NROW*NCOL
-        gives a warning at write time, and a period that reuses IRCH is not
-        written (NotImplementedError: USG-T adds no recharge mass with CONC,
-        :3508, and applies no RTS record read during the period with RTS).
+        gives a warning at write time, and so does a period that reuses IRCH,
+        which is written as a reuse (USG-T adds no recharge mass in it with
+        CONC, :3508, and applies no RTS record read during it with RTS);
+        inirch_ncpl=True writes the current irch with NROW*NCOL there.
         Period 1 must read irch: without irch data for period 1 (also a
         loaded file with INIRCH < 0 in period 1) write_file raises
         ValueError. A loaded file with RTS, an INIRCH below NROW*NCOL and a
@@ -499,12 +523,16 @@ class MfUsgRch(ModflowRch):
         RTS resets the recharge of the cells the RTS records did not update;
         the INIRCH warning is still given (default is None).
     inirch_ncpl : bool
-        True writes INIRCH = NROW*NCOL in every stress period that reads
-        irch, whatever inirch holds, structured grid with nrchop=2 only. It
-        exists to correct a loaded file whose INIRCH would apply the recharge
-        concentration or the RTS records to part of the cells; it can be set
-        on a loaded package before write_file (default is False: write
-        inirch).
+        nrchop=2 only. On a structured grid, True writes INIRCH = NROW*NCOL
+        in every stress period that reads irch, whatever inirch holds, and,
+        with CONC or RTS, in every period that reuses irch, with the current
+        irch written again. On an unstructured grid, True writes the current
+        irch with its node count in every period that reuses irch with CONC
+        or RTS. It exists to correct a file whose INIRCH would apply the
+        recharge concentration or the RTS records to part of the cells, or
+        to none in a period that reuses irch; it can be set on a loaded
+        package before write_file (default is False: write inirch and the
+        reuse).
 
     Attributes
     ----------
@@ -648,8 +676,9 @@ class MfUsgRch(ModflowRch):
                 )
         flags = _conc_flags(self.iconc, mcompt, self.irchconc, self.rchconc)
         irch_plan = None
+        reuse = []
         if self.nrchop == 2 and not self.parent.structured:
-            irch_plan = _disu_irch_plan(
+            irch_plan, reuse = _disu_irch_plan(
                 self.parent,
                 self.rech,
                 self.irch,
@@ -657,13 +686,14 @@ class MfUsgRch(ModflowRch):
                 flags,
                 nper,
                 self.mxrtzones,
+                self.inirch_ncpl,
             )
         values = _inirch_options(
             self.parent, self.nrchop, nper, self.inirch, self.inirch_ncpl
         )
         inirch_plan = None
         if self.nrchop == 2 and self.parent.structured:
-            inirch_plan, low = _structured_inirch(
+            inirch_plan, low, reuse = _structured_inirch(
                 self.irch,
                 values,
                 nper,
@@ -701,6 +731,8 @@ class MfUsgRch(ModflowRch):
                     + " ".join(why)
                     + " Set inirch_ncpl=True to write INIRCH = NROW*NCOL."
                 )
+        if reuse:
+            _irch_reuse_warning(reuse, flags is not None, self.mxrtzones)
         # allows turning off package checks when writing files at model level
         if check:
             self.check(
@@ -747,8 +779,8 @@ class MfUsgRch(ModflowRch):
             inrech, file_entry_rech = self.rech.get_kper_entry(kper)
             if self.nrchop == 2:
                 if self.parent.structured:
-                    inirch = inirch_plan[kper]
-                    file_entry_irch = irch.get_kper_entry(kper)[1]
+                    inirch, src = inirch_plan[kper]
+                    file_entry_irch = irch.get_kper_entry(src)[1]
                 else:
                     inirch, file_entry_irch = irch_plan[kper]
             else:

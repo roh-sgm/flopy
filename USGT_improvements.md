@@ -46,12 +46,16 @@ upstream flopy. They live here while testing continues.
   or RTS a new model writes NROW*NCOL, a lower value read from a file is kept and
   `write_file` warns with the consequence, and `inirch_ncpl=True` writes NROW*NCOL
   in every period that reads IRCH. Without CONC and RTS nothing changes.
+- NRCHOP=2 with CONC or RTS, structured or unstructured: a period that reuses
+  IRCH is written as read or given, and `write_file` warns with the consequence
+  (with CONC no recharge mass in that period, `gwt2bndsu1.f` :3508; with RTS the
+  RTS records read after the start of the period are not applied, `glo2basu1.f`
+  :3342, :3353); `inirch_ncpl=True` writes the current IRCH there with its full
+  count (NROW*NCOL, or its nodes on DISU). Backed by runs with both engines.
 - Not written, with the equivalent input in the message (`NotImplementedError`,
-  each backed by a run with both engines): a period that reuses IRCH with CONC (no
-  recharge mass in that period) or with RTS (the RTS records after the start of
-  the period are not applied); RTS with an IRCH node above the number of IRCH
-  nodes (unstructured) or below layer 1 (structured), whose zone USG-T looks up in
-  IZNRCH positions it never read.
+  each backed by a run with both engines): RTS with an IRCH node above the number
+  of IRCH nodes (unstructured) or below layer 1 (structured), whose zone USG-T
+  looks up in IZNRCH positions it never read.
 - Rejected before the file is opened (`ValueError`): IRCHCONC other than 0 or 1;
   `irchconc`/`rchconc` without CONC; a flag 1 without concentrations in period 1
   (USG-T allocates RCHCONC without initial values, `gwf2rch8u1.f` :120); no IRCH in
