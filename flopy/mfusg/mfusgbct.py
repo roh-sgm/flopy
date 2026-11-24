@@ -5,10 +5,12 @@ Contains the MfUsgBct class. Note that the user can
 access the MfUsgBct class as `flopy.mfusg.MfUsgBct`.
 """
 
+import warnings
+
 import numpy as np
 
 from ..pakbase import Package
-from ..utils import Util2d, Util3d
+from ..utils import Util2d
 from ..utils.utils_def import (
     get_open_file_object,
     get_util2d_shape_for_layer,
@@ -177,10 +179,37 @@ class MfUsgBct(Package):
     the keyword arguments ``sollim`` and ``solslope`` (one value per mobile
     component) once, before the per-species arrays.
 
+    ``chaindecay=True`` (keyword argument) writes the CHAINDECAY option and,
+    first for each mobile component, NPARENT and, with NPARENT > 0, NPARENT
+    values of JPARENT and of STOTIO (USG-T 2.8.1 glo2btnu1.f, SGWT2BCT1S and
+    SGWT2BCT1G). ``nparent`` (one integer per mobile component, 0 to
+    ``mcomp``) is required; ``jparent[i]`` (parent component numbers, 1 to
+    ``mcomp``) and ``stotio[i]`` hold ``nparent[i]`` values, a scalar counting
+    as one value. With ``spatialreact=True`` STOTIO is not read: for each
+    parent, ``sptlrct[i]`` holds one per-layer value (as for ``prsity``)
+    instead. Parents outside 1 to ``mcomp`` are rejected although the engine
+    dimensions JPARENT with all components (a FloPy limit).
+
+    On a structured grid, writing CHAINDECAY with a component with
+    NPARENT > 0 warns: SGWT2BCT1S reads JPARENT into ITEMP (line 1165), which
+    is only allocated while ICBUND is read (lines 912-923) and is not
+    allocated at that point; compiled with gfortran, USG-T 2.8.1 and 2.7.0
+    stop with a segmentation fault while reading the file. The unstructured
+    reader is not affected. In the structured reader every STOTIO
+    coefficient of a component also takes the last value read (line 1176);
+    this is read in the source and not observed,
+    as the reader stops before.
+
+    ``crootname`` (keyword argument) writes the MULTIFILE option with this
+    root name; USG-T reads the root name in upper case, and so does ``load``.
+
     Rejected with NotImplementedError (guards, not support):
 
     - VARIABLE_SOLUBILITY, on load and on construction
       (``variable_solubility`` or ``solubility=2``).
+    - REACTION1, on load (before any array is read) and on construction
+      (``reaction1``): USG-T 2.8.1 reads the reaction block from the BCT file
+      before the arrays; USG-T 2.7.0 ignores the option.
     - ``iheat=1`` with ``iadsorb=0`` on a structured grid, on load and on
       write: the structured reader of USG-T 2.8.1 reads BULKD only with
       IADSORB but uses it for the heat capacity term.
@@ -259,6 +288,28 @@ class MfUsgBct(Package):
                 "BCT VARIABLE_SOLUBILITY (variable_solubility or solubility=2) "
                 "is not supported"
             )
+        if kwargs.get("reaction1"):
+            raise NotImplementedError(
+                "BCT REACTION1 (reaction1) is not supported: USG-T 2.8.1 reads a "
+                "reaction block from the BCT file (glo2btnu1.f line 431), which "
+                "MfUsgBct does not write or read"
+            )
+        sptlrct_arrays = None
+        if kwargs.get("chaindecay"):
+            MfUsgBct._check_chaindecay(
+                mcomp,
+                kwargs.get("nparent"),
+                kwargs.get("jparent"),
+                kwargs.get("stotio"),
+                kwargs.get("sptlrct"),
+                kwargs.get("spatialreact"),
+            )
+            if kwargs.get("spatialreact"):
+                # built before the model is changed: a per-layer value that
+                # _build_prop_arrays rejects leaves the model as it was
+                sptlrct_arrays = MfUsgBct._sptlrct_arrays(
+                    model, kwargs["nparent"], kwargs.get("sptlrct")
+                )
         if imcomp > 0:
             if "imconc" not in kwargs:
                 raise ValueError(f"BCT imcomp={imcomp} requires imconc")
@@ -336,26 +387,22 @@ class MfUsgBct(Package):
             opts.append(" SPATIALREACT ")
 
         if self.chaindecay:
-            if "nparent" in kwargs and len(kwargs["nparent"]) == mcomp:
-                self.nparent = kwargs["nparent"]
-            jparent = kwargs["jparent"]
-            stotio = kwargs["stotio"]
+            self.nparent = [int(n) for n in kwargs["nparent"]]
+            jparent = kwargs.get("jparent")
+            stotio = kwargs.get("stotio")
             self.jparent = [0] * mcomp
             self.stotio = [0] * mcomp
-            # sptlrct = kwargs["sptlrct"]
-            self.sptlrct = [0] * mcomp
+            self.sptlrct = sptlrct_arrays or [0] * mcomp
             for icomp in range(mcomp):
-                if self.nparent[icomp] > 0:
-                    self.jparent[icomp] = Util2d(
-                        model, (mcomp,), np.int32, jparent[icomp], name="jparent"
+                npar = self.nparent[icomp]
+                if npar > 0:
+                    self.jparent[icomp] = self._chain_array(
+                        model, npar, np.int32, jparent[icomp], "jparent"
                     )
-                    self.stotio[icomp] = Util2d(
-                        model, (mcomp,), np.float32, stotio[icomp], name="stotio"
-                    )
-                    # if self.spatialreact :
-                    # self.sptlrct[icomp] = Util2d(
-                    #     model, (mcomp,), np.float32, sptlrct[icomp], name="sptlrct"
-                    # )
+                    if not self.spatialreact:
+                        self.stotio[icomp] = self._chain_array(
+                            model, npar, np.float32, stotio[icomp], "stotio"
+                        )
 
         self.solubility = None
         if kwargs.get("solubility"):
@@ -533,6 +580,90 @@ class MfUsgBct(Package):
         return ()
 
     @staticmethod
+    def _chain_array(model, npar, dtype, value, name):
+        """JPARENT or STOTIO of one component: npar values (Util2d kept as
+        loaded)."""
+        if isinstance(value, Util2d):
+            return value
+        return Util2d(model, (npar,), dtype, value, name=name)
+
+    @staticmethod
+    def _sptlrct_arrays(model, nparent, sptlrct):
+        """SPTLRCT of each component: one list of per-layer Util2d per parent
+        (0 without parents)."""
+        nlay = model.get_nrow_ncol_nlay_nper()[2]
+        return [
+            [
+                MfUsgBct._build_prop_arrays(
+                    model,
+                    nlay,
+                    np.float32,
+                    value,
+                    f"sptlrct comp {icomp + 1} parent {ipar + 1}",
+                )
+                for ipar, value in enumerate(sptlrct[icomp])
+            ]
+            if int(npar) > 0
+            else 0
+            for icomp, npar in enumerate(nparent)
+        ]
+
+    @staticmethod
+    def _check_chaindecay(mcomp, nparent, jparent, stotio, sptlrct, spatialreact):
+        """Reject CHAINDECAY data that do not match what USG-T 2.8.1 reads for
+        each component (glo2btnu1.f, SGWT2BCT1S 1157-1196, SGWT2BCT1G
+        1743-1781): NPARENT, then NPARENT values of JPARENT and of STOTIO or,
+        with SPATIALREACT, NPARENT per-layer values of SPTLRCT (ValueError)."""
+        if nparent is None:
+            raise ValueError("BCT chaindecay requires nparent")
+        nparent = list(nparent)
+        if len(nparent) != mcomp:
+            raise ValueError(f"BCT nparent has {len(nparent)} values for mcomp={mcomp}")
+        data = [("jparent", jparent)]
+        data.append(("sptlrct", sptlrct) if spatialreact else ("stotio", stotio))
+        for icomp, npar in enumerate(nparent, start=1):
+            if (
+                isinstance(npar, (bool, np.bool_))
+                or not isinstance(npar, (int, np.integer))
+                or not 0 <= npar <= mcomp
+            ):
+                raise ValueError(
+                    f"BCT nparent of component {icomp} must be an integer from 0 "
+                    f"to mcomp={mcomp}, got {npar!r}"
+                )
+            if npar == 0:
+                continue
+            for name, values in data:
+                if values is None or len(values) != mcomp:
+                    raise ValueError(
+                        f"BCT chaindecay requires {name} with one entry per "
+                        f"component (mcomp={mcomp})"
+                    )
+                entry = values[icomp - 1]
+                if name == "sptlrct":
+                    if not isinstance(entry, (list, tuple)) or len(entry) != npar:
+                        raise ValueError(
+                            f"BCT sptlrct of component {icomp} needs a list of "
+                            f"nparent={npar} per-layer values"
+                        )
+                    continue
+                if isinstance(entry, Util2d):
+                    entry = entry.array
+                vals = np.ravel(np.asarray(entry, dtype=float))
+                if vals.size != npar:
+                    raise ValueError(
+                        f"BCT {name} of component {icomp} has {vals.size} values "
+                        f"for nparent={npar}"
+                    )
+                if name == "jparent" and not np.all(
+                    (vals == np.round(vals)) & (vals >= 1) & (vals <= mcomp)
+                ):
+                    raise ValueError(
+                        f"BCT jparent of component {icomp} must hold component "
+                        f"numbers from 1 to mcomp={mcomp}, got {vals.tolist()}"
+                    )
+
+    @staticmethod
     def _check_structured_heat(structured, iheat, iadsorb):
         """Reject IHEAT=1 with IADSORB=0 on a structured grid: SGWT2BCT1S reads
         BULKD only with IADSORB /= 0 but uses it for the heat capacity term."""
@@ -615,6 +746,15 @@ class MfUsgBct(Package):
             getattr(self, "ikawi_fn", None),
         )
         self._check_structured_heat(self.parent.structured, self.iheat, self.iadsorb)
+        if self.chaindecay:
+            self._check_chaindecay(
+                self.mcomp,
+                getattr(self, "nparent", None),
+                getattr(self, "jparent", None),
+                getattr(self, "stotio", None),
+                getattr(self, "sptlrct", None),
+                self.spatialreact,
+            )
         zod = self._decay_arrays(self.izod, self.iadsorb, self.aw_adsorb)
         fod = self._decay_arrays(self.ifod, self.iadsorb, self.aw_adsorb)
         needed = ["zod" + k for k in zod] + ["fod" + k for k in fod]
@@ -729,6 +869,17 @@ class MfUsgBct(Package):
         """
         # checked before the file is opened (opening truncates it)
         self._check_write()
+        if self.parent.structured and self.chaindecay and any(self.nparent):
+            warnings.warn(
+                "BCT CHAINDECAY with NPARENT > 0 on a structured grid: USG-T 2.8.1 "
+                "reads JPARENT into ITEMP (glo2btnu1.f line 1165), which is only "
+                "allocated while ICBUND is read (lines 912-923) and is not allocated "
+                "at that point; compiled with gfortran, USG-T 2.8.1 and "
+                "2.7.0 stop with a segmentation fault while reading this file; "
+                "unstructured (DISU) grids are not affected",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Open file for writing
         close_on_exit = f is None
@@ -835,9 +986,11 @@ class MfUsgBct(Package):
                 f_obj.write(f"{self.nparent[icomp]:9d}\n")
                 if self.nparent[icomp] > 0:
                     f_obj.write(self.jparent[icomp].get_file_entry())
-                    f_obj.write(self.stotio[icomp].get_file_entry())
                     if self.spatialreact:
-                        f_obj.write(self.sptlrct[icomp].get_file_entry())
+                        for arr in self.sptlrct[icomp]:
+                            self._write_array(f_obj, arr)
+                    else:
+                        f_obj.write(self.stotio[icomp].get_file_entry())
 
             # Item A6-A7: ALANGAW, BLANGAW
             if self.aw_adsorb and self.iarea_fn in {1, 2, 3}:
@@ -1053,6 +1206,12 @@ class MfUsgBct(Package):
         try:
             if "VARIABLE_SOLUBILITY" in t:
                 raise NotImplementedError("BCT VARIABLE_SOLUBILITY is not supported")
+            if "REACTION1" in t:
+                raise NotImplementedError(
+                    "BCT REACTION1 is not supported: USG-T 2.8.1 reads a reaction "
+                    "block from the BCT file (glo2btnu1.f line 431), which MfUsgBct "
+                    "does not write or read"
+                )
             cls._check_structured_heat(
                 model.structured, kwargs["iheat"], kwargs["iadsorb"]
             )
@@ -1233,19 +1392,24 @@ class MfUsgBct(Package):
                 t = f_obj.readline().split()
                 # print(t)
                 nparent[icomp] = int(t[0].strip())
-                if nparent[icomp] > 0:
+                npar = nparent[icomp]
+                if npar > 0:
                     jparent[icomp] = Util2d.load(
-                        f_obj, model, (mcomp,), np.int32, "jparent", ext_unit_dict
+                        f_obj, model, (npar,), np.int32, "jparent", ext_unit_dict
                     )
-                    stotio[icomp] = Util2d.load(
-                        f_obj, model, (mcomp,), np.float32, "stotio", ext_unit_dict
-                    )
-                    # item C4 if SPATIALREACT option is on - Not tested
+                    # item C4 if SPATIALREACT option is on: instead of STOTIO
                     if kwargs["spatialreact"] == 1:
                         if model.verbose:
                             print("   loading SPATIALREACT...")
-                        sptlrct[icomp] = Util3d.load(
-                            f_obj, model, (nlay,), np.float32, "sptlrct", ext_unit_dict
+                        sptlrct[icomp] = [
+                            cls._load_prop_arrays(
+                                f_obj, model, nlay, np.float32, "sptlrct", ext_unit_dict
+                            )
+                            for _ in range(npar)
+                        ]
+                    else:
+                        stotio[icomp] = Util2d.load(
+                            f_obj, model, (npar,), np.float32, "stotio", ext_unit_dict
                         )
 
             # item A6  - A8 if AW_ADSORB option is on
