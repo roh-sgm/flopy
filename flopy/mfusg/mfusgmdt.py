@@ -5,6 +5,8 @@ Contains the MfUsgMdt class. Note that the user can
 access the MfUsgMdt class as `flopy.mfusg.MfUsgMdt`.
 """
 
+import re
+
 import numpy as np
 
 from ..pakbase import Package
@@ -92,6 +94,23 @@ class MfUsgMdt(Package):
     for each of the NTCOMP components). The counts are those of the model,
     set by the BCT package. Immobile components (IMCOMP > 0) are not
     supported with MDT (``NotImplementedError``).
+
+    In a fixed-format model (BAS6 without FREE) USG-T reads IMDTCB and IMDTCF
+    with I10 from two records and skips no comment line (gwt2mdtu1.for
+    2.8.1:76-78, 85), so the file is written and loaded that way, without a
+    heading. On load, blanks in an I10 field are ignored and a blank field
+    is 0, as USG-T 2.8.1 and 2.7.0 compiled with gfortran read it; any other
+    text raises ``ValueError``. The options are read only in free format:
+    setting one in a fixed-format model raises ``ValueError``. The
+    free-format header fails in a fixed-format model with a runtime error in
+    USG-T 2.8.1 and 2.7.0 compiled with gfortran (not observed with the
+    official Windows executable).
+    The format is taken from the model, so MfUsg.load must read BAS6 before
+    MDT: if the name file lists MDT before BAS6, a fixed-format MDT file is
+    read as free format and the load fails with an IndexError without a
+    clear message, or can misread a first record that holds two integers.
+    With IDPF != 0 the fixed format is checked by reading and writing only,
+    not with the engine.
 
     Examples
     --------
@@ -186,6 +205,7 @@ class MfUsgMdt(Package):
                 "MDT MULTIFILE_MD (crootname) requires imdtcf>0 for the AI1/AI2 "
                 "output files."
             )
+        self._check_fixed_options()
 
         nrow, ncol, nlay, nper = self.parent.nrow_ncol_nlay_nper
 
@@ -307,8 +327,28 @@ class MfUsgMdt(Package):
         temperature when IHEAT is 1 (NTCOMP without immobile components)."""
         return counts[0] + (1 if counts[1] == 1 else 0)
 
+    def _check_fixed_options(self):
+        """ValueError if a header option is set in a fixed-format model."""
+        if self.parent.free_format_input:
+            return
+        if (
+            self.frahk
+            or self.fradarcy
+            or self.tshiftmd > MDT_TSHIFT_THRESHOLD
+            or self.iunitAI2 > 0
+            or self.crootname is not None
+        ):
+            raise ValueError(
+                "MDT header options (FRAHK/FRADARCY/TSHIFTMD/SEPARATE_AI2/"
+                "MULTIFILE_MD) cannot be used in a fixed format model (BAS6 "
+                "without FREE): USG-T reads only IMDTCB and IMDTCF with I10 "
+                "there and parses the options in free format only "
+                "(gwt2mdtu1.for 2.8.1:76-85, 100)."
+            )
+
     def _check_write(self):
         """Number of components to write, checked on the current model."""
+        self._check_fixed_options()
         counts = self._context_counts(self.parent)
         if counts != self._built_counts:
             raise ValueError(
@@ -352,8 +392,13 @@ class MfUsgMdt(Package):
         opened = f is None
         f_obj = open(self.fn_path, "w") if opened else f
 
-        f_obj.write(f"{self.heading}\n")
-        f_obj.write(f"{self.ipakcb:9d} {self.imdtcf:9d}")
+        if not self.parent.free_format_input:
+            # fixed format: one I10 record each, no heading (gwt2mdtu1.for
+            # 2.8.1:77, 85); the newline below ends the IMDTCF record
+            f_obj.write(f"{self.ipakcb:10d}\n{self.imdtcf:10d}")
+        else:
+            f_obj.write(f"{self.heading}\n")
+            f_obj.write(f"{self.ipakcb:9d} {self.imdtcf:9d}")
 
         # Options
         if self.frahk:
@@ -464,11 +509,31 @@ class MfUsgMdt(Package):
 
         # item 0 + item 1a header. Keep the original case for the rootname;
         # compare keywords case-insensitively.
-        line = f_obj.readline()
-        while line.startswith("#"):
+        if not model.free_format_input:
+            # fixed format: IMDTCB and IMDTCF are the I10 fields (columns
+            # 1-10) of two records; comments are not skipped and the rest of
+            # each record is not read (gwt2mdtu1.for 2.8.1:76-78, 85)
+            traw = []
+            for _ in range(2):
+                rec = f_obj.readline()
+                # as USG-T 2.8.1 and 2.7.0 compiled with gfortran read it,
+                # blanks in the field are ignored and a blank field (or an
+                # empty record) is 0; text is an error
+                tok = rec.rstrip("\r\n")[:10].replace(" ", "") or "0"
+                if not rec or not re.fullmatch(r"[+-]?[0-9]+", tok):
+                    got = repr(rec) if rec else "the end of the file"
+                    raise ValueError(
+                        "MDT in a fixed format model (BAS6 without FREE): "
+                        "USG-T reads IMDTCB and IMDTCF with I10 from the first "
+                        "two records and skips no comment (gwt2mdtu1.for "
+                        f"2.8.1:77, 85); got {got}."
+                    )
+                traw.append(tok)
+        else:
             line = f_obj.readline()
-
-        traw = line.split()
+            while line.startswith("#"):
+                line = f_obj.readline()
+            traw = line.split()
         t = [tok.upper() for tok in traw]
         kwargs = {}
         kwargs["ipakcb"] = int(t[0])
