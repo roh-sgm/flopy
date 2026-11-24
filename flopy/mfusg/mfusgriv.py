@@ -257,7 +257,9 @@ class MfUsgRiv(ModflowRiv):
         MfUsgRiv
         """
         if model.structured:
-            return ModflowRiv.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+            return ModflowRiv.load(
+                f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check
+            )
 
         if model.verbose:
             print("loading mfusg riv package file...")

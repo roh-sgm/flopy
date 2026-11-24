@@ -19,12 +19,12 @@ one for the *end* of each stress period):
 2.  NTVMHK  NTVMVKA  NTVMSS  NTVMSY  NTVMDDFTR  [NTVMPOR]
     — 6 values with transport, 5 without.
 
-3.  ITVMHK  HKNEW        (× NTVMHK)
-4.  ITVMVKA  VKANEW       (× NTVMVKA)
-5.  ITVMSS  SSNEW         (× NTVMSS)
-6.  ITVMSY  SYNEW         (× NTVMSY)
-7.  ITVMDDFTR  DDFTRNEW   (× NTVMDDFTR)
-8.  ITVMPOR  PORNEW        (× NTVMPOR, transport only)
+3.  ITVMHK  HKNEW        (x NTVMHK)
+4.  ITVMVKA  VKANEW       (x NTVMVKA)
+5.  ITVMSS  SSNEW         (x NTVMSS)
+6.  ITVMSY  SYNEW         (x NTVMSY)
+7.  ITVMDDFTR  DDFTRNEW   (x NTVMDDFTR)
+8.  ITVMPOR  PORNEW        (x NTVMPOR, transport only)
 
 All node numbers in the file are 1-based; FloPy stores them 0-based.
 """

@@ -4012,7 +4012,9 @@ def _make_usgt_lst_old_format():
     # Flow section
     lines.append(" IN FLOW TIME STEP    1   STRESS PERIOD    1\n")
     lines.append("\n")
-    lines.append(budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=100.0))
+    lines.append(
+        budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=100.0)
+    )
     lines.append("\n")
     lines.append(time_block)
     lines.append("\n")
@@ -4021,7 +4023,9 @@ def _make_usgt_lst_old_format():
     lines.append(" TRANSPORT SOLUTION COMPLETE FOR ALL SPECIES\n")
     for sp_num, val in [(1, 0.1), (2, 0.2)]:
         lines.append(f" TRANSPORT OUTPUT FOR COMPONENT SPECIES NUMBER  {sp_num:4d}\n")
-        lines.append(budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=val))
+        lines.append(
+            budget_block.format(bkey="VOLUMETRIC BUDGET FOR ENTIRE MODEL", val=val)
+        )
         lines.append("\n")
         lines.append(time_block)
         lines.append("\n")
@@ -4033,7 +4037,8 @@ def _make_usgt_lst_new_format():
     """Return a minimal valid USG-T listing file (new format: MASS BUDGET for
     transport) with 1 SP and 2 transport species."""
     flow_budget_block = (
-        " VOLUMETRIC BUDGET FOR ENTIRE MODEL AT END OF TIME STEP    1 STRESS PERIOD   1\n"
+        " VOLUMETRIC BUDGET FOR ENTIRE MODEL AT END OF TIME STEP    1"
+        " STRESS PERIOD   1\n"
         " IN:\n"
         " WELLS =    1.000000E+02     WELLS =    1.000000E+02\n"
         " -------------------------------------------------------\n"
@@ -4425,7 +4430,8 @@ def test_mfusggsf_to_grid(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
     gsf = MfUsgGsf.load(str(gsf_in), ml, ext_unit_dict={})
 
-    # Point fn_path to the input file so to_grid() reads it without needing write_file first
+    # Point fn_path to the input file so to_grid() reads it without needing
+    # write_file first
     gsf.fn_path = str(gsf_in)
 
     grid = gsf.to_grid()
@@ -5018,7 +5024,7 @@ def test_gridgen_to_gsf_validation(function_tmpdir):
     with pytest.raises(TypeError, match="source"):
         gridgen_to_gsf(_gg_model(function_tmpdir), 12345)
 
-    with pytest.raises(ValueError, match="vertices.*cell2d|cell2d"):
+    with pytest.raises(ValueError, match=r"vertices.*cell2d|cell2d"):
         gridgen_to_gsf(_gg_model(function_tmpdir), {"vertices": []})
 
     # degenerate cell: raises by default, dropped + renumbered with the flag
@@ -11814,7 +11820,7 @@ def test_mfusgmdt_tshiftmd_threshold(function_tmpdir):
     """
     from flopy.mfusg import MfUsgMdt
 
-    base = dict(kdmd=0.01, decaymd=1e-6, yieldmd=1.0, diffmd=1e-9)
+    base = {"kdmd": 0.01, "decaymd": 1e-6, "yieldmd": 1.0, "diffmd": 1e-9}
 
     def n_blocks(text):
         up = text.upper()

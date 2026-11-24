@@ -182,7 +182,9 @@ class MfUsgGhb(ModflowGhb):
         MfUsgGhb
         """
         if model.structured:
-            return ModflowGhb.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+            return ModflowGhb.load(
+                f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check
+            )
 
         if model.verbose:
             print("loading mfusg ghb package file...")

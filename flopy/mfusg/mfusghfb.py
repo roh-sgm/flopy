@@ -258,7 +258,8 @@ class MfUsgHfb(ModflowHfb):
                 if len(sp_data) != self.nhfbnp:
                     raise ValueError(
                         "Transient HFB stress_period_data entries must contain "
-                        f"NHFBNP={self.nhfbnp} rows; got {len(sp_data)} for kper {kper}."
+                        f"NHFBNP={self.nhfbnp} rows; got {len(sp_data)} "
+                        f"for kper {kper}."
                     )
                 f.write("1\n")
                 self._write_hfb_rows(f, sp_data, structured)

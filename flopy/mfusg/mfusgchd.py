@@ -175,7 +175,9 @@ class MfUsgChd(ModflowChd):
         MfUsgChd
         """
         if model.structured:
-            return ModflowChd.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+            return ModflowChd.load(
+                f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check
+            )
 
         if model.verbose:
             print("loading mfusg chd package file...")

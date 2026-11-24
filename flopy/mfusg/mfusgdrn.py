@@ -182,7 +182,9 @@ class MfUsgDrn(ModflowDrn):
         MfUsgDrn
         """
         if model.structured:
-            return ModflowDrn.load(f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check)
+            return ModflowDrn.load(
+                f, model, nper=nper, ext_unit_dict=ext_unit_dict, check=check
+            )
 
         if model.verbose:
             print("loading mfusg drn package file...")

@@ -1392,7 +1392,9 @@ class UnstructuredGrid(Grid):
             )
 
     @classmethod
-    def from_gridspec(cls, file_path: Union[str, PathLike], split_vertices: bool = False):
+    def from_gridspec(
+        cls, file_path: Union[str, PathLike], split_vertices: bool = False
+    ):
         """
         Create an UnstructuredGrid from a grid specification file.
 

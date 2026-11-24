@@ -203,7 +203,9 @@ def parsenamefile(namfilename, packages, verbose=True):
                 key = packages[ftype_lower]._reservedunit()
             else:
                 key = ftype
-        ext_unit_dict[key] = NamData(ftype, str(fname), filehandle, packages, replace=replace)
+        ext_unit_dict[key] = NamData(
+            ftype, str(fname), filehandle, packages, replace=replace
+        )
     return ext_unit_dict
 
 

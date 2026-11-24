@@ -19,9 +19,9 @@ import pytest
 
 import flopy
 from flopy.mf6 import (
-    MFSimulation,
     Mf6Tid,
     Mf6TidRunner,
+    MFSimulation,
     ModflowGwf,
     ModflowGwfchd,
     ModflowGwfdis,
@@ -58,7 +58,7 @@ RUNNER_NSTP = 10
 
 
 def _make_dis_sim(ws, name="gwf", center_inactive_in_dis=False):
-    """3×3×1 steady-state DIS model with CHD on col=0 and col=2, 10 SPs.
+    """3x3x1 steady-state DIS model with CHD on col=0 and col=2, 10 SPs.
 
     center_inactive_in_dis : set DIS idomain=0 for center cell.
         Used only in Mf6Tid unit tests (no runner).
@@ -103,7 +103,7 @@ def _make_dis_sim(ws, name="gwf", center_inactive_in_dis=False):
 # DISV model helper  (1 layer, 4-cell quad mesh)
 # ---------------------------------------------------------------------------
 
-# 2×2 structured-equivalent DISV: 4 cells, 9 vertices
+# 2x2 structured-equivalent DISV: 4 cells, 9 vertices
 _DISV_NLAY = 1
 _DISV_NCPL = 4
 _DISV_VERTICES = [
@@ -305,10 +305,10 @@ def test_runner_dis_budget(tmp_path):
     DIS idomain=1 everywhere (runner requirement).
     TID schedule controls active cells via GWF/IBOUND:
 
-      kper=0–1: center (0,1,1) deactivated → head stays at IC (1.0)
-      kper=2–4: activate  → head converges to ~0.5  [criterion 2]
-      kper=5–6: deactivate again → head no longer 0.5
-      kper=7–9: re-activate → head recovers to ~0.5  [criterion 3]
+      kper=0-1: center (0,1,1) deactivated → head stays at IC (1.0)
+      kper=2-4: activate  → head converges to ~0.5  [criterion 2]
+      kper=5-6: deactivate again → head no longer 0.5
+      kper=7-9: re-activate → head recovers to ~0.5  [criterion 3]
     """
     from flopy.utils import HeadFile
 
@@ -340,7 +340,7 @@ def test_runner_dis_budget(tmp_path):
             f"got {heads[k, center]}"
         )
 
-    # kper=2–4: active → symmetric steady-state, head ≈ 0.5  [criterion 2]
+    # kper=2-4: active → symmetric steady-state, head ≈ 0.5  [criterion 2]
     for k in [2, 3, 4]:
         assert heads[k, center] == pytest.approx(0.5, abs=0.01), (
             f"kper={k}: active center should converge to 0.5, got {heads[k, center]}"
@@ -357,7 +357,7 @@ def test_runner_dis_budget(tmp_path):
         "kper=6: deactivated center head should remain frozen"
     )
 
-    # kper=7–9: re-activated → head re-solved, recovers to ~0.5  [criterion 3]
+    # kper=7-9: re-activated → head re-solved, recovers to ~0.5  [criterion 3]
     for k in [7, 8, 9]:
         assert heads[k, center] == pytest.approx(0.5, abs=0.01), (
             f"kper={k}: re-activated center should recover to ~0.5, "

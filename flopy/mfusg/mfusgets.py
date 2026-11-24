@@ -11,14 +11,14 @@ differences from EVT:
 
   * NAM file type token is "ETS" (not "EVT").
   * Header format (item 2a): NETSOP IETSCB NPETS NETSEG IESFACTOR
-      NETSEG    – number of piecewise-linear segments (>1 adds PXDP/PETM arrays)
-      NPETS     – number of named ETS parameters
-      IESFACTOR – transport solute removal flag
+      NETSEG    - number of piecewise-linear segments (>1 adds PXDP/PETM arrays)
+      NPETS     - number of named ETS parameters
+      IESFACTOR - transport solute removal flag
   * Per-stress-period header (item 5a, when NETSOP==2 or NETSEG>1):
         INETSS INETSR INETSX [INIETS [INSGDF]]
   * Per stress period, (NETSEG-1) pairs of segment arrays are read:
-        PXDP – proportional extinction depth at segment intersection
-        PETM – ET rate multiplier at segment intersection
+        PXDP - proportional extinction depth at segment intersection
+        PETM - ET rate multiplier at segment intersection
 
 References
 ----------
@@ -403,7 +403,7 @@ class MfUsgEts(Package):
         if f is None:
             f = open(self.fn_path, "w")
 
-        # Item 1 – heading
+        # Item 1 - heading
         f.write(f"{self.heading}\n")
 
         # Item 2a - NETSOP IETSCB NPETS NETSEG [IESFACTOR with BCT]
@@ -412,7 +412,7 @@ class MfUsgEts(Package):
             f.write(f"{self.iesfactor:10d}")
         f.write("\n")
 
-        # Item 2b – MXNDETS (unstructured + NETSOP==2 only)
+        # Item 2b - MXNDETS (unstructured + NETSOP==2 only)
         if not self.parent.structured and self.netsop == 2:
             mxndets = max(u2d.array.size for _, u2d in self.ievt.transient_2ds.items())
             f.write(f"{mxndets:10d}\n")
@@ -640,7 +640,7 @@ class MfUsgEts(Package):
                 else:
                     u2d_shape = (1, ncol[0])
 
-            # Item 6 / 13 – ETSS
+            # Item 6 / 13 - ETSS
             if insurf >= 0:
                 if model.verbose:
                     print(f"   loading surf stress period {iper + 1:3d}...")
@@ -649,7 +649,7 @@ class MfUsgEts(Package):
                 )
             surf_d[iper] = cur_surf
 
-            # Item 7 / 14 – ETSR
+            # Item 7 / 14 - ETSR
             if inevtr >= 0:
                 if pak_parms is None or npets == 0:
                     if model.verbose:
@@ -669,7 +669,7 @@ class MfUsgEts(Package):
                     )
             evtr_d[iper] = cur_evtr
 
-            # Item 9 / 16 – ETSX
+            # Item 9 / 16 - ETSX
             if inexdp >= 0:
                 if model.verbose:
                     print(f"   loading exdp stress period {iper + 1:3d}...")
@@ -678,7 +678,7 @@ class MfUsgEts(Package):
                 )
             exdp_d[iper] = cur_exdp
 
-            # Item 10 / 17 – IETS (NETSOP==2 only)
+            # Item 10 / 17 - IETS (NETSOP==2 only)
             if netsop == 2 and inievt >= 0:
                 if model.verbose:
                     print(f"   loading ievt stress period {iper + 1:3d}...")
@@ -689,7 +689,7 @@ class MfUsgEts(Package):
             if netsop == 2:
                 ievt_d[iper] = cur_ievt
 
-            # Items 11-12 / 18-19 – PXDP + PETM for each segment intersection
+            # Items 11-12 / 18-19 - PXDP + PETM for each segment intersection
             if nseg_int > 0 and insgdf >= 0:
                 for i in range(nseg_int):
                     if model.verbose:

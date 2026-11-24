@@ -388,17 +388,27 @@ class MfUsgBct(Package):
             self.htcondw = kwargs["htcondw"]
             self.rhow = kwargs["rhow"]
             self.htcapw = kwargs["htcapw"]
-            self.htcaps = self._build_prop_arrays(model, nlay, np.float32, kwargs["htcaps"], "htcaps")
-            self.htconds = self._build_prop_arrays(model, nlay, np.float32, kwargs["htconds"], "htconds")
-            self.heat = self._build_prop_arrays(model, nlay, np.float32, kwargs["heat"], "heat")
+            self.htcaps = self._build_prop_arrays(
+                model, nlay, np.float32, kwargs["htcaps"], "htcaps"
+            )
+            self.htconds = self._build_prop_arrays(
+                model, nlay, np.float32, kwargs["htconds"], "htconds"
+            )
+            self.heat = self._build_prop_arrays(
+                model, nlay, np.float32, kwargs["heat"], "heat"
+            )
 
         if self.icbndflg == 0:
-            self.icbund = self._build_prop_arrays(model, nlay, np.int32, icbund, "icbund")
+            self.icbund = self._build_prop_arrays(
+                model, nlay, np.int32, icbund, "icbund"
+            )
 
         self.prsity = self._build_prop_arrays(model, nlay, np.float32, prsity, "prsity")
 
         if self.iadsorb or self.iheat:
-            self.bulkd = self._build_prop_arrays(model, nlay, np.float32, bulkd, "bulkd")
+            self.bulkd = self._build_prop_arrays(
+                model, nlay, np.float32, bulkd, "bulkd"
+            )
 
         if not structured and self.idisp:
             njag = self.parent.get_package("DISU").njag
@@ -468,10 +478,14 @@ class MfUsgBct(Package):
             )
 
         if self.aw_adsorb and self.iarea_fn == 1:
-            self.awamax = self._build_prop_arrays(model, nlay, np.float32, kwargs["awamax"], "awamax")
+            self.awamax = self._build_prop_arrays(
+                model, nlay, np.float32, kwargs["awamax"], "awamax"
+            )
 
         if self.aw_adsorb and self.iarea_fn == 2:
-            self.grain_dia = self._build_prop_arrays(model, nlay, np.float32, kwargs["grain_dia"], "grain_dia")
+            self.grain_dia = self._build_prop_arrays(
+                model, nlay, np.float32, kwargs["grain_dia"], "grain_dia"
+            )
 
         if self.aw_adsorb and self.iarea_fn in {1, 2, 3}:
             alangaw = kwargs["alangaw"]
