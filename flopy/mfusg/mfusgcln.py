@@ -158,8 +158,9 @@ class MfUsgCln(Package):
       components. An entry that is a scalar, an array, a Util2d or a flat
       list of values is one array (constant or per node) used for the mcomp
       parent positions of that component; a list whose items are arrays
-      (lists, arrays or Util2d) gives one array per parent position (the
-      factor of the 1st, 2nd... parent) and must have exactly mcomp items.
+      (lists, tuples, arrays of one or more dimensions or Util2d) gives one
+      array per parent position (the factor of the 1st, 2nd... parent) and
+      must have exactly mcomp items.
 
     A scalar is used for all entries. A shorter list of components or species
     raises ValueError; extra components or species are not written. After
@@ -798,19 +799,24 @@ class MfUsgCln(Package):
         """The mcomp SPTLRCT arrays of one component.
 
         A list or tuple whose items include arrays (lists, tuples, ndarrays
-        or Util2d) gives one array per parent position and must have exactly
-        mcomp items; any other entry (scalar, ndarray, Util2d or a flat list
-        of values) is one array, used for all mcomp parent positions."""
-        arrays = (list, tuple, np.ndarray, Util2d)
-        if isinstance(entry, (list, tuple)) and any(
-            isinstance(item, arrays) for item in entry
-        ):
+        of one or more dimensions or Util2d) gives one array per parent
+        position and must have exactly mcomp items; any other entry (scalar,
+        ndarray, Util2d or a flat list of values, 0-d ndarrays included) is
+        one array, used for all mcomp parent positions."""
+
+        def is_array(item):
+            if isinstance(item, np.ndarray):
+                return item.ndim > 0  # a 0-d ndarray is one value
+            return isinstance(item, (list, tuple, Util2d))
+
+        if isinstance(entry, (list, tuple)) and any(is_array(i) for i in entry):
             if len(entry) != mcomp:
                 raise ValueError(
                     f"MfUsgCln: {name} has {len(entry)} arrays, one per parent "
                     f"position; USG-T reads {mcomp} (mcomp)."
                 )
-            return list(entry)
+            # Util2d does not take a tuple
+            return [list(i) if isinstance(i, tuple) else i for i in entry]
         if isinstance(entry, tuple):
             entry = list(entry)  # Util2d does not take a tuple
         return [entry] * mcomp

@@ -350,6 +350,31 @@ def test_cln_sptlrct_one_array_per_parent(function_tmpdir):
     )
 
 
+@pytest.mark.parametrize(
+    "bct", [{"spatialreact": True}, SPR2], ids=["mcomp1", "mcomp2"]
+)
+def test_cln_sptlrct_zero_dim_arrays_are_values(function_tmpdir, bct):
+    """A list of 0-d ndarrays is a flat list: one array per node."""
+    ml = _model(function_tmpdir, bct=bct, chain=True)
+    mcomp = bct.get("mcomp", 1)
+    entry = [np.array(0.5), np.array(0.25)]
+    got = _written(_cln(ml, sptlrct=[entry] * mcomp, conc=[5.0] * mcomp))
+    block = [("sptlrct", [0.5, 0.25])] * mcomp + [("conc", 5.0)]
+    assert got == _expect(DISP + block * mcomp)
+
+
+def test_cln_sptlrct_tuple_per_parent(function_tmpdir):
+    ml = _model(function_tmpdir, bct=SPR2, chain=True)
+    sptlrct = [0.0, [(0.1, 0.2), (0.3, 0.4)]]
+    got = _written(_cln(ml, sptlrct=sptlrct, conc=[5.0, 6.0]))
+    assert got == _expect(
+        DISP
+        + [("sptlrct", 0.0)] * 2
+        + [("conc", 5.0)]
+        + [("sptlrct", [0.1, 0.2]), ("sptlrct", [0.3, 0.4]), ("conc", 6.0)]
+    )
+
+
 @pytest.mark.parametrize("nparents", [1, 3], ids=["fewer", "more"])
 def test_cln_sptlrct_parent_count_must_be_mcomp(function_tmpdir, nparents):
     ml = _model(function_tmpdir, bct=SPR2, chain=True)
