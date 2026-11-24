@@ -1,4 +1,3 @@
-import os
 import warnings
 from io import StringIO
 from struct import pack
@@ -208,8 +207,20 @@ def _model(ws, external_path=None):
     return Modflow(model_ws=str(ws), external_path=external_path)
 
 
-def _open_fds():
-    return len(os.listdir("/dev/fd"))
+def _track_open(monkeypatch):
+    """Record the files opened with builtins.open; call stop() to restore it."""
+    import builtins
+
+    opened = []
+    real_open = builtins.open
+
+    def tracking_open(*args, **kwargs):
+        fh = real_open(*args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(builtins, "open", tracking_open)
+    return opened, lambda: monkeypatch.setattr(builtins, "open", real_open)
 
 
 def _bin_record(values, double=True, ilay=1):
@@ -352,16 +363,18 @@ def test_load_bin_double_header_and_shared_cursor(function_tmpdir):
 
 
 @pytest.mark.parametrize("cut", [8, 40])
-def test_load_bin_double_truncated(function_tmpdir, cut):
+def test_load_bin_double_truncated(function_tmpdir, cut, monkeypatch):
     """cut=8 truncates the data, cut=40 the header; own files are closed."""
     path = function_tmpdir / "short.bin"
     path.write_bytes(_bin_record(DOUBLES[0])[: -cut if cut == 8 else 52 - cut])
-    before = _open_fds()
+    opened, stop = _track_open(monkeypatch)
     with pytest.raises(ValueError, match=r"truncated|expected array size"):
         Util2d.load_bin(
             (1, 3), str(path), np.float64, "Head", header_precision="double"
         )
-    assert _open_fds() == before
+    stop()
+    own = [fh for fh in opened if str(fh.name).endswith("short.bin")]
+    assert own and all(fh.closed for fh in opened)
     with open(path, "rb") as f:
         with pytest.raises(ValueError):
             Util2d.load_bin((1, 3), f, np.float64, "Head", header_precision="double")
@@ -446,7 +459,9 @@ def test_util2d_load_binary_multiplier_default_and_1d(function_tmpdir, double):
     assert u1d.dtype == dtype
 
 
-def test_util2d_load_binary_needs_negative_unit_only_when_asked(function_tmpdir):
+def test_util2d_load_binary_needs_negative_unit_only_when_asked(
+    function_tmpdir, monkeypatch
+):
     data = _bin_record([1.0, 2.0, 3.0])
     u2d = _load_ext(function_tmpdir, "EXTERNAL 50 1.0 (BINARY) -1", data, np.float64)
     np.testing.assert_array_equal(u2d.array, [[1.0, 2.0, 3.0]])
@@ -462,13 +477,16 @@ def test_util2d_load_binary_needs_negative_unit_only_when_asked(function_tmpdir)
     rec = StringIO("OPEN/CLOSE oc.bin 1.0 (BINARY) -1\n")
     rec.name = "rec.txt"
     m = _model(function_tmpdir)
+    opened, stop = _track_open(monkeypatch)
     u2d = Util2d.load(rec, m, (1, 3), np.float64, "h")
     np.testing.assert_array_equal(u2d.array, [[1.0, 2.0, 3.0]])
+    oc_files = [fh for fh in opened if str(fh.name).endswith("oc.bin")]
+    assert oc_files and all(fh.closed for fh in oc_files)
     rec.seek(0)
-    before = _open_fds()
     with pytest.raises(ValueError, match="OPEN/CLOSE"):
         Util2d.load(rec, m, (1, 3), np.float64, "h", binary_negative_unit_only=True)
-    assert _open_fds() == before
+    stop()
+    assert all(fh.closed for fh in opened)
 
 
 def test_util2d_load_constant_float64_is_real(function_tmpdir):

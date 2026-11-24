@@ -3694,12 +3694,24 @@ def test_mfusgdpf_direct_load_reads_bas_options_and_keeps_cursor(function_tmpdir
     np.testing.assert_array_equal(dpf.hnewim.array.reshape(2, 3), _D7_HNEWIM)
 
 
-def test_mfusgdpf_load_closes_own_file_on_error(function_tmpdir):
+def test_mfusgdpf_load_closes_own_file_on_error(function_tmpdir, monkeypatch):
+    import builtins
+
     _d7_manual_dpf(function_tmpdir / "bad.dpf", _d7_text_records()[:3])
-    before = len(os.listdir("/dev/fd"))
+    opened = []
+    real_open = builtins.open
+
+    def tracking_open(*args, **kwargs):
+        fh = real_open(*args, **kwargs)
+        opened.append(fh)
+        return fh
+
+    monkeypatch.setattr(builtins, "open", tracking_open)
     with pytest.raises(Exception):
         _d7_load(function_tmpdir / "l", function_tmpdir / "bad.dpf")
-    assert len(os.listdir("/dev/fd")) == before
+    monkeypatch.setattr(builtins, "open", real_open)
+    dpf_files = [fh for fh in opened if str(fh.name).endswith("bad.dpf")]
+    assert dpf_files and all(fh.closed for fh in opened)
 
 
 def test_mfusgdpf_write_file_leaves_caller_handle_open(function_tmpdir):
