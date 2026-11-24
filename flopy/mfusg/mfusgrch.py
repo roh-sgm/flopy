@@ -240,6 +240,16 @@ def _conc_mcompt(model, who):
     return model._transport_mcompt(who)
 
 
+# with RTS, RP applies the current RTS record to every IRCH cell when it
+# reads RECH, and load keeps RECH as data of every period (as upstream)
+_RTS_RECH_NOTE = (
+    "RECH is written as data in every period that has it (load keeps it in "
+    "every period), so a file that reused RECH (INRECH < 0) in those periods "
+    "gets another RTS recharge when written again: USG-T applies the current "
+    "RTS record to every IRCH cell when it reads RECH (gwf2rch8u1.f :429-442)."
+)
+
+
 def _irch_reuse_warning(reuse, conc, rts):
     """Warn about the stress periods ([kper, INIRCH]) that reuse IRCH with
     CONC and/or RTS."""
@@ -258,6 +268,7 @@ def _irch_reuse_warning(reuse, conc, rts):
             "With RTS, USG-T applies none of the RTS records read after the "
             "start of a period that reuses IRCH (glo2basu1.f :3342, :3353)."
         )
+        why.append(_RTS_RECH_NOTE)
     warnings.warn(
         f"MfUsgRch: {' and '.join(opts)} with IRCH reused in stress period "
         f"{periods}: "
@@ -481,8 +492,10 @@ class MfUsgRch(ModflowRch):
         RTS recharge to that cell). With nrchop=2, a period that reuses irch
         is written as a reuse with a warning (USG-T applies none of the RTS
         records read after the start of that period, glo2basu1.f :3342,
-        :3353); inirch_ncpl=True writes the current irch there instead; see
-        inirch for a structured grid.
+        :3353); inirch_ncpl=True writes the current irch there instead. A
+        loaded file that also reuses RECH (INRECH < 0) in that period does
+        not keep its result when written again (see inirch). See inirch for
+        a structured grid.
     iconc : int
         1 writes the CONC option: recharge concentrations of the components
         selected by irchconc (needs the component counts of a BCT package, or
@@ -516,12 +529,15 @@ class MfUsgRch(ModflowRch):
         inirch_ncpl=True writes the current irch with NROW*NCOL there.
         Period 1 must read irch: without irch data for period 1 (also a
         loaded file with INIRCH < 0 in period 1) write_file raises
-        ValueError. A loaded file with RTS, an INIRCH below NROW*NCOL and a
-        stress period that reuses RECH (INRECH < 0) does not keep its result
-        when written again: like upstream FloPy, load keeps RECH as data of
-        every period and write_file reads it again in each one, which with
-        RTS resets the recharge of the cells the RTS records did not update;
-        the INIRCH warning is still given (default is None).
+        ValueError. A loaded file with RTS and a stress period that reuses
+        RECH (INRECH < 0) with an INIRCH below NROW*NCOL, or that reuses
+        IRCH (INIRCH < 0, also on an unstructured grid), does not keep its
+        result when written again: like upstream FloPy, load keeps RECH as
+        data of every period and write_file reads it again in each one
+        (INRECH 1), so USG-T applies the current RTS record to every IRCH
+        cell at the start of that period (gwf2rch8u1.f :429-442) and resets
+        the recharge of the cells the RTS records did not update; the
+        warnings say so (default is None).
     inirch_ncpl : bool
         nrchop=2 only. On a structured grid, True writes INIRCH = NROW*NCOL
         in every stress period that reads irch, whatever inirch holds, and,
@@ -532,7 +548,8 @@ class MfUsgRch(ModflowRch):
         recharge concentration or the RTS records to part of the cells, or
         to none in a period that reuses irch; it can be set on a loaded
         package before write_file (default is False: write inirch and the
-        reuse).
+        reuse). With RTS, a loaded file that reused RECH in those periods
+        still does not keep its result (see inirch).
 
     Attributes
     ----------
@@ -725,6 +742,7 @@ class MfUsgRch(ModflowRch):
                         "previous recharge and the flow is not the one of "
                         "INIRCH = NROW*NCOL."
                     )
+                    why.append(_RTS_RECH_NOTE)
                 warnings.warn(
                     f"MfUsgRch: {' and '.join(opts)} with INIRCH below NROW*NCOL "
                     f"= {nrow * ncol} in stress period {periods}: "

@@ -47,11 +47,12 @@ upstream flopy. They live here while testing continues.
   `write_file` warns with the consequence, and `inirch_ncpl=True` writes NROW*NCOL
   in every period that reads IRCH. Without CONC and RTS nothing changes.
 - NRCHOP=2 with CONC or RTS, structured or unstructured: a period that reuses
-  IRCH is written as read or given, and `write_file` warns with the consequence
-  (with CONC no recharge mass in that period, `gwt2bndsu1.f` :3508; with RTS the
-  RTS records read after the start of the period are not applied, `glo2basu1.f`
-  :3342, :3353); `inirch_ncpl=True` writes the current IRCH there with its full
-  count (NROW*NCOL, or its nodes on DISU). Backed by runs with both engines.
+  IRCH keeps its INIRCH < 0 as read or given, and `write_file` warns with the
+  consequence (with CONC no recharge mass in that period, `gwt2bndsu1.f` :3508;
+  with RTS the RTS records read after the start of the period are not applied,
+  `glo2basu1.f` :3342, :3353); `inirch_ncpl=True` writes the current IRCH there
+  with its full count (NROW*NCOL, or its nodes on DISU). Backed by runs with both
+  engines.
 - Not written, with the equivalent input in the message (`NotImplementedError`,
   each backed by a run with both engines): RTS with an IRCH node above the number
   of IRCH nodes (unstructured) or below layer 1 (structured), whose zone USG-T
@@ -61,9 +62,11 @@ upstream flopy. They live here while testing continues.
   (USG-T allocates RCHCONC without initial values, `gwf2rch8u1.f` :120); no IRCH in
   period 1.
 - Limits: with RTS and NRCHOP=2 USG-T takes the zone by node number, not by the
-  position of the entry; a loaded file with RTS, a low INIRCH and a period that
-  reuses RECH is not reproduced on rewrite (RECH is written in every period, as
-  upstream FloPy does); the RTS file contents are not read; fixed format.
+  position of the entry; a loaded file with RTS and a period that reuses RECH
+  with a low INIRCH or a reused IRCH (also DISU) is not reproduced on rewrite (RECH
+  is written in every period, as upstream FloPy does, and USG-T applies the RTS
+  record again to every IRCH cell when it reads RECH, `gwf2rch8u1.f` :429-442; the
+  warnings say so); the RTS file contents are not read; fixed format.
 - Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_rch_f41.py`): FloPy file =
   hand-written file for IRCHCONC `1 0`, for IRCH that changes and that is reused,
   and for INIRCH 1 and NROW*NCOL, with the recharge mass and the RTS rates read

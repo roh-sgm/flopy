@@ -838,6 +838,7 @@ def test_rch_structured_inirch_kept_on_load_write(function_tmpdir, case):
         with pytest.warns(UserWarning, match=_LOW) as record:
             out = _write(rch, function_tmpdir)
         assert periods in str(record[0].message)
+        assert not re.search(_RTS_RECH, str(record[0].message))
     else:
         out = _write_quiet(rch, function_tmpdir)
     assert _inirch_of(out) == inirch
@@ -915,6 +916,11 @@ _BAD_INIRCH = {
     "negative_with_irch": ("dis", {"inirch": {0: -1}}, "does not read it"),
     "positive_without_irch": ("dis", {"inirch": {1: 3}}, "needs irch data"),
     "above_ncpl": ("dis", {"inirch": {0: 7, 1: 6}}, "above NROW"),
+    "disu_nrchop3": (
+        "disu",
+        {"nrchop": 3, "inirch_ncpl": True},
+        r"inirch_ncpl needs nrchop=2 \(structured grid or DISU\)",
+    ),
 }
 
 
@@ -972,10 +978,11 @@ def _s5_text(inirch):
     )
 
 
-def _dis_exe_model(ws, nper=1):
-    """Probe P2 model: structured 1 x 5, nper periods of 2 steps, CHD in
-    cell 1, MCOMP=1 with IDISP=0; RCH added to the name file as t.rch."""
-    ml = _dis(ws, nper=nper, mcomp=1, nrow=1, ncol=5)
+def _dis_exe_model(ws, nper=1, nlay=1):
+    """Probe P2 model: structured nlay x 1 x 5, nper periods of 2 steps,
+    CHD in cell 1, MCOMP=1 with IDISP=0; RCH added to the name file as
+    t.rch."""
+    ml = _dis(ws, nper=nper, mcomp=1, nrow=1, ncol=5, nlay=nlay)
     MfUsgBas(ml, ibound=1, strt=10.0)
     MfUsgLpf(ml, laytyp=0, hk=1.0, vka=1.0, ss=1.0e-3, ipakcb=50)
     MfUsgSms(ml, linmeth=1)
@@ -1119,6 +1126,15 @@ _ZN6 = "INTERNAL 1 (FREE) -1\n 1 2 1\n 2 1 2\n"
 _C6_ROWS = "INTERNAL 1.0 (FREE) -1\n 5.0 6.0 7.0\n 8.0 9.0 10.0\n"
 _ZN23 = np.array([[1, 2, 1], [2, 1, 2]])
 _LOW_RTS = r"RTS records read during a period.*first INIRCH cells.*:3353.*inirch_ncpl"
+# with RTS, both warnings say that a RECH reused in those periods is written
+# as data and gives another RTS recharge
+_RTS_RECH = (
+    r"RECH is written as data in every period that has it \(load keeps it in "
+    r"every period\), so a file that reused RECH \(INRECH < 0\) in those "
+    r"periods gets another RTS recharge when written again: USG-T applies the "
+    r"current RTS record to every IRCH cell when it reads RECH \(gwf2rch8u1\.f "
+    r":429-442\)\."
+)
 
 
 def _s_rts(n1, n2, conc=False):
@@ -1192,6 +1208,7 @@ def test_rch_rts_structured_inirch_low(function_tmpdir, case):
     assert head in msgs[0]
     assert "1 (INIRCH 1), 2 (INIRCH 3)" in msgs[0]
     assert re.search(_LOW_RTS, msgs[0])
+    assert re.search(_RTS_RECH, msgs[0])
     assert bool(re.search(_LOW, msgs[0])) is conc
     assert _inirch_of(out) == ["1", "3"]
     assert _reload(function_tmpdir / "out.rch", ml).inirch == {0: 1, 1: 3}
@@ -1205,11 +1222,11 @@ _RTS4 = (
 )
 
 
-def _rts_exe_model(ws):
-    """Structured 2 x 3, one layer, two periods with ATSA, CHD in cell
+def _rts_exe_model(ws, nper=2):
+    """Structured 2 x 3, one layer, nper periods with ATSA, CHD in cell
     (1, 1), flow only; RCH (t.rch) and RTS (rech.rts, 4 records, two of
     them read inside the periods) added to the name file."""
-    ml = _dis(ws, nper=2, mcomp=0)
+    ml = _dis(ws, nper=nper, mcomp=0)
     MfUsgBas(ml, ibound=1, strt=10.0)
     MfUsgLpf(ml, laytyp=0, hk=1.0, vka=1.0, ss=1.0e-3, ipakcb=50)
     MfUsgSms(ml, linmeth=1)
@@ -1218,12 +1235,12 @@ def _rts_exe_model(ws):
     ml.write_input()
     with open(Path(ws) / "t.nam", "a") as f:
         f.write("RCH               18  t.rch\n")
-    _atsa_rts(ws)
+    _atsa_rts(ws, nper)
     return ml
 
 
-def _atsa_rts(ws):
-    """OC with ATSA for the two periods of a written model and the RTS file
+def _atsa_rts(ws, nper=2):
+    """OC with ATSA for the nper periods of a written model and the RTS file
     (rech.rts, _RTS4) added to its name file."""
     ws = Path(ws)
     nam = (ws / "t.nam").read_text().splitlines()
@@ -1233,7 +1250,7 @@ def _atsa_rts(ws):
         "DRAWDOWN PRINT FORMAT   0\nCOMPACT BUDGET AUX\n"
         + "".join(
             f"period {k} step 1\n  save head\n  save budget\n  print budget\n"
-            for k in (1, 2)
+            for k in range(1, nper + 1)
         )
     )
     (ws / "rech.rts").write_text(_RTS4)
@@ -1387,6 +1404,7 @@ def _check_reuse_warning(msg, case, periods):
     )
     assert bool(re.search(_REUSE_CONC, msg)) is conc
     assert bool(re.search(_REUSE_RTS, msg)) is rts
+    assert bool(re.search(_RTS_RECH, msg)) is rts
     assert re.search(_REUSE_FIX, msg)
 
 
@@ -1514,3 +1532,144 @@ def test_usgt_exe_rch_irch_reuse(function_tmpdir, case):
         _, msgs = _write_warns(rch, ws, "t.rch")
         assert len(msgs) == (0 if ncpl else 1)
         assert _exe_run(ws) == runs["hand_full" if ncpl else "hand_reuse"]
+
+
+def _rech_reused(text, n=1):
+    """The RTS _reuse_text file (n periods that reuse IRCH) with RECH also
+    reused in those periods (-1 -1)."""
+    old = " 1 -1\nCONSTANT 0.0\n"
+    assert text.count(old) == n
+    return text.replace(old, " -1 -1\n")
+
+
+@pytest.mark.parametrize("case", ["s_rts", "disu_rts"])
+def test_rch_rts_rech_reuse_rewrite_warns(function_tmpdir, case):
+    """Declared limit: a loaded RTS file whose period 2 reuses IRCH and RECH
+    (-1 -1) is written with RECH as data (1 -1), like upstream FloPy, and
+    the reuse warning says that the RTS recharge changes then."""
+    ml = _reuse_model(function_tmpdir, case)
+    text, heads = _reuse_text(case, True)
+    rch = _load(function_tmpdir, _rech_reused(text), ml)
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert _heads(out) == heads
+    assert heads[1] == ["1", "-1"]
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], case, "2 (INIRCH -1)")
+
+
+@requires_usgt
+@pytest.mark.parametrize("case", ["s_rts", "disu_rts"])
+def test_usgt_exe_rch_rts_rech_reuse_rewrite(function_tmpdir, case):
+    """Declared limit, with the engine, three periods (IRCH and RECH reused
+    in periods 2 and 3): the RTS record read inside period 2 is not applied
+    (INIRCH < 0); reading RECH at the start of period 3 (1 -1) applies it to
+    every IRCH cell (gwf2rch8u1.f :429-442) and -1 -1 does not, so the two
+    hand files give different recharge. The -1 -1 file loaded and written by
+    FloPy (with the warning) runs like the 1 -1 file, not like the
+    original."""
+    hand = _reuse_text(case, True)[0] + " 1 -1\nCONSTANT 0.0\n"
+    orig = _rech_reused(hand, n=2)
+    runs = {}
+    for name, text in (("orig", orig), ("hand_1", hand)):
+        ws = function_tmpdir / name
+        _rts3_model(ws, case)
+        (ws / "t.rch").write_text(text)
+        runs[name] = _exe_run(ws)
+    assert runs["orig"]["rch"] != runs["hand_1"]["rch"]
+    assert runs["orig"]["hds"] != runs["hand_1"]["hds"]
+
+    ws = function_tmpdir / "flopy"
+    rch = _load(ws, orig, _rts3_model(ws, case))
+    out, msgs = _write_warns(rch, ws, "t.rch")
+    assert _heads(out)[1:] == [["1", "-1"], ["1", "-1"]]
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], case, "2 (INIRCH -1), 3 (INIRCH -1)")
+    assert _exe_run(ws) == runs["hand_1"]
+
+
+def _rts3_model(ws, case):
+    """Engine model of three periods for s_rts (structured 2 x 3) or
+    disu_rts (DISU 5 nodes), with the ATSA OC and rech.rts."""
+    if case == "s_rts":
+        return _rts_exe_model(ws, nper=3)
+    ml = _exe_model(ws, nper=3, mcomp=0)
+    _atsa_rts(ws, nper=3)
+    return ml
+
+
+# structured 1 x 5, 2 layers, CONC (concentration 1), 3 periods; IRCH A and
+# B put the recharge on different layers
+_SRC_R = _blk([1.0e-3] * 5)
+_SRC_A = _iblk([1, 2, 2, 1, 1])
+_SRC_B = _iblk([2, 1, 1, 2, 2])
+_SRC_LAYERS = {"A": [0, 1, 1, 0, 0], "B": [1, 0, 0, 1, 1]}
+
+
+def _src_text(irch):
+    """Hand file with IRCH of periods 1-3 given by irch ("A", "B" or "x" for
+    a reuse, INIRCH -1); RECH is read in every period."""
+    out = "# RCH\n 2 50 CONC\n 1\n 1 5 INCONC\n" + _SRC_R + _SRC_A + _blk([1.0] * 5)
+    for key in irch[1:]:
+        if key == "x":
+            out += " 1 -1\n" + _SRC_R
+        else:
+            out += " 1 5\n" + _SRC_R + (_SRC_A if key == "A" else _SRC_B)
+    return out
+
+
+# loaded file -> hand file that inirch_ncpl=True must reproduce
+_SRC_CASES = {"ABx": "ABB", "AxB": "AAB"}
+
+
+def _src_model(ws, exe=False):
+    if exe:
+        return _dis_exe_model(ws, nper=3, nlay=2)
+    return _dis(ws, nper=3, mcomp=1, nrow=1, ncol=5, nlay=2)
+
+
+@pytest.mark.parametrize("case", list(_SRC_CASES))
+def test_rch_structured_irch_reuse_ncpl_writes_current(function_tmpdir, case):
+    """Structured CONC with IRCH that changes and a period that reuses it
+    (A, B, reuse and A, reuse, B): inirch_ncpl=True writes in the reused
+    period the IRCH of the last period with data (B, or A), and the file is
+    the one FloPy writes from the hand file A, B, B (or A, A, B)."""
+    ml = _src_model(function_tmpdir)
+    rch = _load(function_tmpdir, _src_text(case), ml)
+    rch.inirch_ncpl = True
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    assert _inirch_of(out) == ["5", "5", "5"]
+    again = _reload(function_tmpdir / "out.rch", ml)
+    layers = {
+        k: u2d.array.ravel().tolist() for k, u2d in again.irch.transient_2ds.items()
+    }
+    assert layers == {k: _SRC_LAYERS[key] for k, key in enumerate(_SRC_CASES[case])}
+    full_ws = function_tmpdir / "full"
+    full = _load(full_ws, _src_text(_SRC_CASES[case]), _src_model(full_ws))
+    assert _no_names(out) == _no_names(_write(full, full_ws))
+
+
+@requires_usgt
+@pytest.mark.parametrize("case", list(_SRC_CASES))
+def test_usgt_exe_rch_structured_irch_reuse_ncpl_current(function_tmpdir, case):
+    """With the engine: the file A, B, reuse (A, reuse, B) loaded and written
+    with inirch_ncpl=True runs like the hand file A, B, B (A, A, B), which
+    differs from the file that writes the IRCH of period 1 in place of B
+    (A, B, A; A, A, A) and from the reuse kept."""
+    runs = {}
+    wrong = {"ABx": "ABA", "AxB": "AAA"}[case]
+    for name in (_SRC_CASES[case], wrong, case):
+        ws = function_tmpdir / f"hand_{name}"
+        _src_model(ws, exe=True)
+        (ws / "t.rch").write_text(_src_text(name))
+        runs[name] = _exe_run(ws)
+    expected = runs[_SRC_CASES[case]]
+    assert expected["hds"] != runs[wrong]["hds"]
+    assert expected["rch_mass"] != runs[case]["rch_mass"]
+
+    ws = function_tmpdir / "flopy"
+    rch = _load(ws, _src_text(case), _src_model(ws, exe=True))
+    rch.inirch_ncpl = True
+    _, msgs = _write_warns(rch, ws, "t.rch")
+    assert msgs == []
+    assert _exe_run(ws) == expected
