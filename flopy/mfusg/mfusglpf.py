@@ -491,9 +491,7 @@ class MfUsgLpf(ModflowLpf):
                 f" {self.ikcflag:9d} {opts:s}\n"
             )
         else:
-            f_obj.write(
-                f" {self.ipakcb:9d} {self.hdry:9.5G} {self.nplpf:9d} {opts}\n"
-            )
+            f_obj.write(f" {self.ipakcb:9d} {self.hdry:9.5G} {self.nplpf:9d} {opts}\n")
 
         # Items 1c/1d: TABRICH zone map and retention curves (before LAYTYP).
         # Fail explicitly rather than write an incomplete TABRICH file.

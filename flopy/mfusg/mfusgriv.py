@@ -130,12 +130,14 @@ class MfUsgRiv(ModflowRiv):
     def get_default_dtype(structured=True):
         if structured:
             return ModflowRiv.get_default_dtype(structured=True)
-        return np.dtype([
-            ("node", int),
-            ("stage", np.float64),
-            ("cond", np.float32),
-            ("rbot", np.float32),
-        ])
+        return np.dtype(
+            [
+                ("node", int),
+                ("stage", np.float64),
+                ("cond", np.float32),
+                ("rbot", np.float32),
+            ]
+        )
 
     @staticmethod
     def get_empty(ncells=0, aux_names=None, structured=True):
@@ -225,10 +227,12 @@ class MfUsgRiv(ModflowRiv):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node']) + 1}"
-                               f"  {float(rec['stage']):.6f}"
-                               f"  {float(rec['cond']):.6e}"
-                               f"  {float(rec['rbot']):.6f}")
+                        row = (
+                            f" {int(rec['node']) + 1}"
+                            f"  {float(rec['stage']):.6f}"
+                            f"  {float(rec['cond']):.6e}"
+                            f"  {float(rec['rbot']):.6f}"
+                        )
                         for name in aux_fields:
                             row += f" {float(rec[name]):.6e}"
                         f.write(row + "\n")

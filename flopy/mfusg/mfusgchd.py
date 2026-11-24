@@ -93,11 +93,13 @@ class MfUsgChd(ModflowChd):
     def get_default_dtype(structured=True):
         if structured:
             return ModflowChd.get_default_dtype(structured=True)
-        return np.dtype([
-            ("node", int),
-            ("shead", np.float64),
-            ("ehead", np.float64),
-        ])
+        return np.dtype(
+            [
+                ("node", int),
+                ("shead", np.float64),
+                ("ehead", np.float64),
+            ]
+        )
 
     @staticmethod
     def get_empty(ncells=0, aux_names=None, structured=True):
@@ -144,9 +146,11 @@ class MfUsgChd(ModflowChd):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)}    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node']) + 1}"
-                               f"   {float(rec['shead']):.6f}"
-                               f"  {float(rec['ehead']):.6f}")
+                        row = (
+                            f" {int(rec['node']) + 1}"
+                            f"   {float(rec['shead']):.6f}"
+                            f"  {float(rec['ehead']):.6f}"
+                        )
                         for name in self.dtype.names[n_base:]:
                             row += f" {float(rec[name]):.6e}"
                         f.write(row + "\n")

@@ -630,9 +630,7 @@ class MfUsgCln(Package):
         if self.nrectyp > 0:
             f_cln.write(f" RECTANGULAR {self.nrectyp:d}")
         if self.ngenshptyp > 0:
-            f_cln.write(
-                f" GENERAL_SEC {self.ngenshptyp:d} {self.ngentabrows:d}"
-            )
+            f_cln.write(f" GENERAL_SEC {self.ngenshptyp:d} {self.ngentabrows:d}")
         if self.bhe:
             f_cln.write(" BHEDETAIL ")
         if self.iclncn != 0:
@@ -1104,8 +1102,7 @@ class MfUsgCln(Package):
             f_cln.write(f" {type_id:9d} {conduitk:16.9G}\n")
             for row in table:
                 f_cln.write(
-                    f" {row[0]:16.9G} {row[1]:16.9G}"
-                    f" {row[2]:16.9G} {row[3]:16.9G}\n"
+                    f" {row[0]:16.9G} {row[1]:16.9G} {row[2]:16.9G} {row[3]:16.9G}\n"
                 )
 
     @classmethod

@@ -192,9 +192,7 @@ class MfUsgTvm(Package):
             if isinstance(data, np.recarray):
                 out[prop] = data
             else:
-                out[prop] = np.array(list(data), dtype=cls._DTYPE).view(
-                    np.recarray
-                )
+                out[prop] = np.array(list(data), dtype=cls._DTYPE).view(np.recarray)
         return out
 
     def _has_transport(self) -> bool:

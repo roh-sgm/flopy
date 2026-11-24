@@ -100,11 +100,13 @@ class MfUsgDrn(ModflowDrn):
     def get_default_dtype(structured=True):
         if structured:
             return ModflowDrn.get_default_dtype(structured=True)
-        return np.dtype([
-            ("node", int),
-            ("elev", np.float32),
-            ("cond", np.float32),
-        ])
+        return np.dtype(
+            [
+                ("node", int),
+                ("elev", np.float32),
+                ("cond", np.float32),
+            ]
+        )
 
     @staticmethod
     def get_empty(ncells=0, aux_names=None, structured=True):
@@ -151,9 +153,11 @@ class MfUsgDrn(ModflowDrn):
                     kdata = self.stress_period_data[kper]
                     f.write(f" {len(kdata)} 0    Stress Period {kper + 1}\n")
                     for rec in kdata:
-                        row = (f" {int(rec['node']) + 1}"
-                               f"  {float(rec['elev']):.6f}"
-                               f"  {float(rec['cond']):.6e}")
+                        row = (
+                            f" {int(rec['node']) + 1}"
+                            f"  {float(rec['elev']):.6f}"
+                            f"  {float(rec['cond']):.6e}"
+                        )
                         for name in self.dtype.names[n_base:]:
                             row += f" {float(rec[name]):.6e}"
                         f.write(row + "\n")

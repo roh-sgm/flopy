@@ -164,9 +164,7 @@ class MfUsgDpf(Package):
                 locat=self.unit_number[0],
             )
 
-        self.iboundim = Util3d(
-            model, shape, np.int32, iboundim, name="iboundim"
-        )
+        self.iboundim = Util3d(model, shape, np.int32, iboundim, name="iboundim")
 
         # HNEWIM is read with U1DREL8 (REAL*8) when BAS DPIN/DPIO is active
         # (GWF2DPFU1AR); the precision is fixed here and checked on write
@@ -199,9 +197,7 @@ class MfUsgDpf(Package):
         self.sc2im = Util3d(model, shape, np.float32, sc2im, name="sc2im")
 
         if np.any(self._richards_layers) and not self._tabrich:
-            self.alphaim = Util3d(
-                model, shape, np.float32, alphaim, name="alphaim"
-            )
+            self.alphaim = Util3d(model, shape, np.float32, alphaim, name="alphaim")
             self.betaim = Util3d(model, shape, np.float32, betaim, name="betaim")
             self.srim = Util3d(model, shape, np.float32, srim, name="srim")
             self.brookim = Util3d(model, shape, np.float32, brookim, name="brookim")

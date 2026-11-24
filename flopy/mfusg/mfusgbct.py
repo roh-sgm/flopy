@@ -1006,7 +1006,7 @@ class MfUsgBct(Package):
         for i, (v, c) in enumerate(vars.items()):
             kwargs[v] = c(t[i].strip())
 
-        ibctcb = kwargs.pop("ibctcb")   # extract raw, rename to match constructor
+        ibctcb = kwargs.pop("ibctcb")  # extract raw, rename to match constructor
         kwargs["ipakcb"] = ibctcb
 
         vars = {

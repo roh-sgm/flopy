@@ -319,7 +319,7 @@ def test_runner_dis_budget(tmp_path):
     IC_HEAD = 1.0
 
     tid = Mf6Tid(gwf)
-    tid.add(kper=0, deactivate=[(0, 1, 1)])   # inactive from the start
+    tid.add(kper=0, deactivate=[(0, 1, 1)])  # inactive from the start
     tid.add(kper=2, activate=[(0, 1, 1)])
     tid.add(kper=5, deactivate=[(0, 1, 1)])
     tid.add(kper=7, activate=[(0, 1, 1)])

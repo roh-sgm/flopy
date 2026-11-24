@@ -86,9 +86,7 @@ def read_tabrich(f_obj, model, nuzones, nutabrows, ext_unit_dict=None):
         curves.
     """
     nodes = node_count(model)
-    iuzontab = Util2d.load(
-        f_obj, model, (nodes,), np.int32, "iuzontab", ext_unit_dict
-    )
+    iuzontab = Util2d.load(f_obj, model, (nodes,), np.int32, "iuzontab", ext_unit_dict)
     nuzones = int(nuzones)
     nutabrows = int(nutabrows)
     retcrvs = np.empty((nuzones, nutabrows, 3), dtype=np.float64)

@@ -1039,9 +1039,7 @@ def test_mfusgtib_authoring_transport_from_scratch(function_tmpdir):
 
     text = Path(tib.fn_path).read_text()
     lines = [
-        ln
-        for ln in text.splitlines()
-        if ln.strip() and not ln.lstrip().startswith("#")
+        ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
     ]
     # 6-int header because the model has a BCT package
     assert lines[0].split() == ["1", "1", "0", "1", "2", "1"]
@@ -1059,11 +1057,7 @@ def test_mfusgtib_semantic_load_nontransport(function_tmpdir):
 
     src = function_tmpdir / "load.tib"
     src.write_text(
-        "# minimal TIB\n"
-        " 2 1 0\n"
-        "INTERNAL 1 (FREE) -1\n"
-        " 11 12\n"
-        " 21 HEAD 4.0\n"
+        "# minimal TIB\n 2 1 0\nINTERNAL 1 (FREE) -1\n 11 12\n 21 HEAD 4.0\n"
     )
     ml = MfUsg(model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=30, nper=1)
@@ -4159,6 +4153,7 @@ def test_mfusg_transport_list_budget_species_isolation(function_tmpdir):
 # MfUsgGhb tests
 # ---------------------------------------------------------------------------
 
+
 def test_mfusgghb_roundtrip(function_tmpdir):
     """Basic GHB: load → inspect → write → reload preserves data."""
     from flopy.modflow import ModflowDis
@@ -4236,6 +4231,7 @@ def test_mfusgghb_aux_roundtrip(function_tmpdir):
 # MfUsgDrn tests
 # ---------------------------------------------------------------------------
 
+
 def test_mfusgdrn_roundtrip(function_tmpdir):
     """Basic DRN: load → inspect → write → reload preserves data."""
     from flopy.modflow import ModflowDis
@@ -4302,6 +4298,7 @@ def test_mfusgdrn_aux_roundtrip(function_tmpdir):
 # ---------------------------------------------------------------------------
 # MfUsgTvm tests
 # ---------------------------------------------------------------------------
+
 
 def test_mfusgtvm_roundtrip(function_tmpdir):
     """TVM semantic load/write preserves global controls and SP boundaries."""
@@ -4372,8 +4369,8 @@ def test_mfusgtvm_missing_sp_gets_zeros(function_tmpdir):
 #   NODENO XC YC ZC LAY NVERTS V1 V2 ...  (for each node, 1-based vertex indices)
 _MINIMAL_GSF_LINES = [
     "UNSTRUCTURED\n",
-    "1 1 1 1\n",       # nnodes=1 (only first token used)
-    "3\n",             # 3 vertices
+    "1 1 1 1\n",  # nnodes=1 (only first token used)
+    "3\n",  # 3 vertices
     "0.0 0.0 10.0\n",  # vertex 1
     "1.0 0.0 10.0\n",  # vertex 2
     "0.5 1.0 10.0\n",  # vertex 3
@@ -4436,7 +4433,7 @@ def test_mfusggsf_to_grid(function_tmpdir):
 
     grid = gsf.to_grid()
     assert isinstance(grid, UnstructuredGrid)
-    assert len(grid.xcellcenters) == 1          # 1 node
+    assert len(grid.xcellcenters) == 1  # 1 node
     assert np.isclose(grid.xcellcenters[0], 0.5, atol=1e-6)
     assert np.isclose(grid.ycellcenters[0], 0.333, atol=1e-3)
 
@@ -4476,15 +4473,11 @@ def test_mfusggsf_authoring_from_scratch(function_tmpdir):
 
     ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
-    gsf = MfUsgGsf(
-        ml, vertices=_MINIMAL_GSF_VERTICES, node_data=_MINIMAL_GSF_NODES
-    )
+    gsf = MfUsgGsf(ml, vertices=_MINIMAL_GSF_VERTICES, node_data=_MINIMAL_GSF_NODES)
     gsf.fn_path = str(function_tmpdir / "scratch.gsf")
     gsf.write_file()
 
-    lines = [
-        ln for ln in Path(gsf.fn_path).read_text().splitlines() if ln.strip()
-    ]
+    lines = [ln for ln in Path(gsf.fn_path).read_text().splitlines() if ln.strip()]
     assert lines[0].upper().startswith("UNSTRUCTURED")
     assert lines[1].split()[:2] == ["1", "1"]  # nnodes nlay
     assert lines[2].split()[0] == "3"  # nverts
@@ -4599,9 +4592,7 @@ def test_mfusggsf_unstructured_gwf_header(function_tmpdir):
     src.write_text(text)
 
     # The grid parser itself must accept the two-token header.
-    assert isinstance(
-        UnstructuredGrid.from_gridspec(str(src)), UnstructuredGrid
-    )
+    assert isinstance(UnstructuredGrid.from_gridspec(str(src)), UnstructuredGrid)
 
     ml = MfUsg(structured=False, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
@@ -4688,6 +4679,7 @@ def test_mfusggsf_from_disv_gridprops(function_tmpdir):
             [1, 1.5, 0.5, 3, 1, 4, 5],  # triangle, 3 unique verts
         ],
     }
+
     def ml():
         m = MfUsg(structured=False, model_ws=str(function_tmpdir))
         ModflowDis(m, nlay=1, nrow=1, ncol=1, nper=1)
@@ -4754,9 +4746,7 @@ def test_mfusggsf_vertex_modes(function_tmpdir):
         ml(), disv, top=10.0, botm=0.0, vertex_mode="parsimonious"
     )
     assert len(shared.vertices) == 12  # 2 * 6 shared
-    common = set(shared.node_data[0]["vertices"]) & set(
-        shared.node_data[1]["vertices"]
-    )
+    common = set(shared.node_data[0]["vertices"]) & set(shared.node_data[1]["vertices"])
     assert common  # ids are shared between neighbours
 
     # non-parsimonious / cell: no shared ids, 8 unique vertices per quad
@@ -4764,9 +4754,7 @@ def test_mfusggsf_vertex_modes(function_tmpdir):
         ml(), disv, top=10.0, botm=0.0, vertex_mode="nonparsimonious"
     )
     assert len(cell.vertices) == 2 * 8  # 8 unique per quad cell
-    assert not (
-        set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"])
-    )
+    assert not (set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"]))
     v0 = cell.node_data[0]["vertices"]
     assert len(v0) == 8  # quad -> 8 vertices
     # top half then bottom half (split_vertices convention)
@@ -4838,9 +4826,7 @@ def test_mfusggsf_parse_header_strict(function_tmpdir):
         == "semantic"
     )
     assert (
-        _gsf_parse_mode(
-            function_tmpdir, "UNSTRUCTURED GWF\n1 1 1 1\n" + _GSF_BODY, "b"
-        )
+        _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED GWF\n1 1 1 1\n" + _GSF_BODY, "b")
         == "semantic"
     )
     # extra token between UNSTRUCTURED and GWF is rejected -> raw round-trip
@@ -4866,10 +4852,9 @@ def test_mfusggsf_iz_ic_flags(function_tmpdir):
 
     # authoring: omitted (assumed) and explicit (1,1) are accepted
     assert MfUsgGsf(ml(), vertices=v, node_data=nd).extra_header == (1, 1)
-    assert (
-        MfUsgGsf(ml(), vertices=v, node_data=nd, extra_header=(1, 1)).extra_header
-        == (1, 1)
-    )
+    assert MfUsgGsf(
+        ml(), vertices=v, node_data=nd, extra_header=(1, 1)
+    ).extra_header == (1, 1)
     # authoring: anything other than (1, 1), or a bad length, is rejected
     for bad in ((0, 1), (1, 0), (1, 1, 9)):
         with pytest.raises(ValueError, match="IZ IC"):
@@ -4910,11 +4895,7 @@ def test_mfusggsf_inode_validation(function_tmpdir):
             MfUsgGsf(ml(), vertices=v, node_data=[rec(i) for i in ids])
 
     # parse: node numbers out of order (2 then 1) -> raw fallback
-    body = (
-        "3\n0 0 10\n1 0 10\n0.5 1 10\n"
-        "2 0.5 0.3 5 1 3 1 2 3\n"
-        "1 0.6 0.3 5 1 3 1 2 3\n"
-    )
+    body = "3\n0 0 10\n1 0 10\n0.5 1 10\n2 0.5 0.3 5 1 3 1 2 3\n1 0.6 0.3 5 1 3 1 2 3\n"
     assert (
         _gsf_parse_mode(function_tmpdir, "UNSTRUCTURED\n2 1 1 1\n" + body, "ord")
         == "raw"
@@ -4976,9 +4957,7 @@ def test_gridgen_to_gsf_disv_modes(function_tmpdir):
         vertex_mode="nonparsimonious",
     )
     assert len(cell.vertices) == 2 * 8  # unique per quad
-    assert not (
-        set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"])
-    )
+    assert not (set(cell.node_data[0]["vertices"]) & set(cell.node_data[1]["vertices"]))
     assert len(cell.node_data[0]["vertices"]) == 8  # quad -> 8 vertices
 
     # both reconstruct top/botm through to_grid (split_vertices)
@@ -5134,6 +5113,7 @@ def test_gridgen_to_gsf_skip_degenerate_compacts(function_tmpdir):
 # ---------------------------------------------------------------------------
 # MfUsgSgb tests (Specified Gradient Boundary, glo2sgbu1.f)
 # ---------------------------------------------------------------------------
+
 
 def test_mfusgsgb_roundtrip(function_tmpdir):
     """SGB: load → inspect → write → reload preserves data and -1 reuse."""
@@ -5396,10 +5376,18 @@ def test_mfusgsgb_parameter_mxs_zero_auto_computes(function_tmpdir):
     previously this raised). Two params of nlst 1 -> PARAMETER 2 2."""
     dtype = MfUsgSgb.get_default_dtype()
     params = {
-        "p1": {"partyp": "SGB", "parval": "1.0", "nlst": 1,
-               "data": np.array([(0, 0.01)], dtype=dtype).view(np.recarray)},
-        "p2": {"partyp": "SGB", "parval": "1.0", "nlst": 1,
-               "data": np.array([(1, 0.02)], dtype=dtype).view(np.recarray)},
+        "p1": {
+            "partyp": "SGB",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": np.array([(0, 0.01)], dtype=dtype).view(np.recarray),
+        },
+        "p2": {
+            "partyp": "SGB",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": np.array([(1, 0.02)], dtype=dtype).view(np.recarray),
+        },
     }
     sgb = MfUsgSgb(_sgb_model(function_tmpdir, "mz"), parameters=params, mxs=0)
     out = function_tmpdir / "mz.sgb"
@@ -5479,8 +5467,9 @@ def test_mfusgsgb_parameter_authoring_from_scratch(function_tmpdir):
     assert "\n 5  1.000000e-02" in text  # node 4 -> 5 (1-based)
     assert " 0 0    Stress Period 1" in text  # NP=0, zero non-param rows
 
-    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "auth2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgSgb.load(
+        str(out), _sgb_model(function_tmpdir, "auth2"), nper=1, ext_unit_dict={}
+    )
     pd = re.parameters["gp"]
     assert pd["partyp"].upper() == "SGB" and pd["nlst"] == 2
     assert list(pd["data"]["node"]) == [4, 9]  # back to 0-based
@@ -5500,8 +5489,9 @@ def test_mfusgsgb_parameter_authoring_with_aux(function_tmpdir):
     sgb.write_file()
     assert "AUX C01" in out.read_text()
 
-    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "ax2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgSgb.load(
+        str(out), _sgb_model(function_tmpdir, "ax2"), nper=1, ext_unit_dict={}
+    )
     assert np.isclose(re.parameters["gp"]["data"]["C01"][0], 0.15)
 
 
@@ -5509,12 +5499,13 @@ def test_mfusgsgb_parameter_authoring_mixed_with_nonparam(function_tmpdir):
     """Parameter definitions coexist with non-parametric stress-period rows;
     NP=0 is written every period (no activations)."""
     ml = _sgb_model(function_tmpdir, "mix")
-    spd = {0: np.array([(2, 0.03)], dtype=MfUsgSgb.get_default_dtype()).view(
-        np.recarray
-    )}
+    spd = {
+        0: np.array([(2, 0.03)], dtype=MfUsgSgb.get_default_dtype()).view(np.recarray)
+    }
     sgb = MfUsgSgb(
-        ml, stress_period_data=spd, parameters={"gp": {"parval": "1.0",
-                                                       "data": [(4, 0.01)]}}
+        ml,
+        stress_period_data=spd,
+        parameters={"gp": {"parval": "1.0", "data": [(4, 0.01)]}},
     )
     out = function_tmpdir / "mix.sgb"
     sgb.fn_path = str(out)
@@ -5523,8 +5514,9 @@ def test_mfusgsgb_parameter_authoring_mixed_with_nonparam(function_tmpdir):
     assert "PARAMETER 1 1" in text
     assert " 1 0    Stress Period 1" in text  # 1 non-param row, NP=0
 
-    re = MfUsgSgb.load(str(out), _sgb_model(function_tmpdir, "mix2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgSgb.load(
+        str(out), _sgb_model(function_tmpdir, "mix2"), nper=1, ext_unit_dict={}
+    )
     assert list(re.stress_period_data[0]["node"]) == [2]
     assert set(re.parameters) == {"gp"}
 
@@ -5619,6 +5611,7 @@ def test_mfusgsgb_parameter_authoring_negative_node_fails(function_tmpdir):
 # MfUsgQrt tests (Sink with Return Flow, gwf2QRT8u.f)
 # ---------------------------------------------------------------------------
 
+
 def test_mfusgqrt_minimal_authoring(function_tmpdir):
     """Minimal QRT authored from scratch: 0-based API, 1-based file, reload."""
     from flopy.modflow import ModflowDis
@@ -5659,14 +5652,10 @@ def test_mfusgqrt_returnflow_concentration(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
 
     opts = ["RETURNFLOW", "CHANGEC", "AUX C01"]
-    dtype = MfUsgQrt.get_default_dtype(
-        returnflow=True, changec=True, aux_names=["C01"]
-    )
+    dtype = MfUsgQrt.get_default_dtype(returnflow=True, changec=True, aux_names=["C01"])
     spd = {0: np.array([(3, -25.0, 0.5, 2, 0.15)], dtype=dtype).view(np.recarray)}
     recips = {0: [[7]]}
-    qrt = MfUsgQrt(
-        ml, stress_period_data=spd, recipient_nodes=recips, options=opts
-    )
+    qrt = MfUsgQrt(ml, stress_period_data=spd, recipient_nodes=recips, options=opts)
     qrt.fn_path = str(function_tmpdir / "conc.qrt")
     qrt.write_file()
     text = qrt.fn_path
@@ -5694,9 +5683,7 @@ def test_mfusgqrt_multi_recipient_and_pure_sink(function_tmpdir):
 
     dtype = MfUsgQrt.get_default_dtype(returnflow=True)
     spd = {
-        0: np.array(
-            [(0, -200.0, 0.9), (4, -30.0, 0.0)], dtype=dtype
-        ).view(np.recarray)
+        0: np.array([(0, -200.0, 0.9), (4, -30.0, 0.0)], dtype=dtype).view(np.recarray)
     }
     recips = {0: [[10, 11, 12], []]}
     qrt = MfUsgQrt(
@@ -5941,10 +5928,20 @@ def test_mfusgqrt_parameter_mxl_too_small_fails(function_tmpdir):
     dtype = MfUsgQrt.get_default_dtype(returnflow=False)
     rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
     params = {
-        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
-               "recipient_nodes": [[]]},
-        "p2": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
-               "recipient_nodes": [[]]},
+        "p1": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
+        },
+        "p2": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
+        },
     }
     qrt = MfUsgQrt(_qrt_model(function_tmpdir, "mx"), parameters=params, mxl=1)
     out = function_tmpdir / "mx.qrt"
@@ -5960,8 +5957,13 @@ def test_mfusgqrt_parameter_inconsistent_fails(function_tmpdir):
     dtype = MfUsgQrt.get_default_dtype(returnflow=False)
     rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
     params = {
-        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 2, "data": rows,
-               "recipient_nodes": [[]]},  # nlst 2 but 1 row
+        "p1": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 2,
+            "data": rows,
+            "recipient_nodes": [[]],
+        },  # nlst 2 but 1 row
     }
     qrt = MfUsgQrt(_qrt_model(function_tmpdir, "ic"), parameters=params, mxl=5)
     out = function_tmpdir / "ic.qrt"
@@ -5971,8 +5973,13 @@ def test_mfusgqrt_parameter_inconsistent_fails(function_tmpdir):
     assert not out.exists()
 
     params2 = {
-        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
-               "recipient_nodes": []},  # recipient lists != nlst
+        "p1": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [],
+        },  # recipient lists != nlst
     }
     qrt2 = MfUsgQrt(_qrt_model(function_tmpdir, "ic2"), parameters=params2, mxl=5)
     out2 = function_tmpdir / "ic2.qrt"
@@ -5987,8 +5994,13 @@ def test_mfusgqrt_parameter_active_undefined_fails(function_tmpdir):
     dtype = MfUsgQrt.get_default_dtype(returnflow=False)
     rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
     params = {
-        "p1": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
-               "recipient_nodes": [[]]},
+        "p1": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
+        },
     }
     qrt = MfUsgQrt(
         _qrt_model(function_tmpdir, "ud"),
@@ -6032,8 +6044,13 @@ def test_mfusgqrt_parameter_duplicate_active_fails(function_tmpdir):
     dtype = MfUsgQrt.get_default_dtype(returnflow=False)
     rows = np.array([(0, -10.0)], dtype=dtype).view(np.recarray)
     params = {
-        "qp": {"partyp": "QRT", "parval": "1.0", "nlst": 1, "data": rows,
-               "recipient_nodes": [[]]},
+        "qp": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
+        },
     }
     qrt = MfUsgQrt(
         _qrt_model(function_tmpdir, "dup"),
@@ -6249,8 +6266,13 @@ def test_mfusgqrt_parameter_authoring_negative_node_or_recipient_fails(function_
     qrt = MfUsgQrt(
         _qrt_model(function_tmpdir, "nr"),
         options=["RETURNFLOW"],
-        parameters={"qp": {"parval": "1.0", "data": [(0, -10.0, 0.5)],
-                           "recipient_nodes": [[-1]]}},
+        parameters={
+            "qp": {
+                "parval": "1.0",
+                "data": [(0, -10.0, 0.5)],
+                "recipient_nodes": [[-1]],
+            }
+        },
         active_params={0: ["qp"]},
     )
     out = function_tmpdir / "nr.qrt"
@@ -6304,9 +6326,9 @@ def test_mfusgqrt_transientq_roundtrip(function_tmpdir):
     """load -> write -> reload preserves the TRANSIENTQ block and the per-SP
     sink data; the written text is stable across the cycle."""
     dtype = MfUsgQrt.get_default_dtype(returnflow=True)
-    spd = {0: np.array([(0, -100.0, 0.75), (4, -30.0, 0.0)], dtype=dtype).view(
-        np.recarray
-    )}
+    spd = {
+        0: np.array([(0, -100.0, 0.75), (4, -30.0, 0.0)], dtype=dtype).view(np.recarray)
+    }
     recips = {0: [[9, 10], []]}
     qrt = MfUsgQrt(
         _qrt_model(function_tmpdir, "tqr"),
@@ -6394,9 +6416,13 @@ def test_mfusgqrt_transientq_with_params_fails(function_tmpdir):
     dtype = MfUsgQrt.get_default_dtype(returnflow=False)
     spd = {0: np.array([(0, -10.0)], dtype=dtype).view(np.recarray)}
     params = {
-        "qp": {"partyp": "QRT", "parval": "1.0", "nlst": 1,
-               "data": np.array([(0, -10.0)], dtype=dtype).view(np.recarray),
-               "recipient_nodes": [[]]},
+        "qp": {
+            "partyp": "QRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": np.array([(0, -10.0)], dtype=dtype).view(np.recarray),
+            "recipient_nodes": [[]],
+        },
     }
     qrt = MfUsgQrt(
         _qrt_model(function_tmpdir, "tqp"),
@@ -6542,6 +6568,7 @@ def test_mfusgqrt_transientq_multipliers_roundtrip(function_tmpdir):
 # MfUsgDrt tests (Drain Return DRT8, gwf2drt8u.f)
 # ---------------------------------------------------------------------------
 
+
 def test_mfusgdrt_inline_single_recipient(function_tmpdir):
     """DRT with a single inline recipient (NR>0): 0-based API, 1-based file."""
     from flopy.modflow import ModflowDis
@@ -6581,14 +6608,10 @@ def test_mfusgdrt_changec_concentration(function_tmpdir):
     ModflowDis(ml, nlay=1, nrow=1, ncol=1, nper=1)
 
     opts = ["RETURNFLOW", "CHANGEC", "AUX C01"]
-    dtype = MfUsgDrt.get_usg_dtype(
-        returnflow=True, changec=True, aux_names=["C01"]
-    )
+    dtype = MfUsgDrt.get_usg_dtype(returnflow=True, changec=True, aux_names=["C01"])
     spd = {0: np.array([(2, 6.0, 75.0, 0.4, 3, 0.2)], dtype=dtype).view(np.recarray)}
     recips = {0: [[5]]}
-    drt = MfUsgDrt(
-        ml, stress_period_data=spd, recipient_nodes=recips, options=opts
-    )
+    drt = MfUsgDrt(ml, stress_period_data=spd, recipient_nodes=recips, options=opts)
     drt.fn_path = str(function_tmpdir / "conc.drt")
     drt.write_file()
     assert "RETURNFLOW CHANGEC AUX C01" in Path(drt.fn_path).read_text()
@@ -6814,9 +6837,7 @@ def test_mfusgdrt_parameter_mixed_and_active(function_tmpdir):
     out = function_tmpdir / "mix_out.drt"
     drt.fn_path = str(out)
     drt.write_file()
-    sp_line = next(
-        ln for ln in out.read_text().splitlines() if "Stress Period 1" in ln
-    )
+    sp_line = next(ln for ln in out.read_text().splitlines() if "Stress Period 1" in ln)
     assert sp_line.split()[:2] == ["2", "1"]  # ITMP NP
 
     re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "mx2"), nper=1)
@@ -6908,12 +6929,18 @@ def test_mfusgdrt_parameter_mxl_too_small_fails(function_tmpdir):
     rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
     params = {
         "p1": {
-            "partyp": "DRT", "parval": "1.0", "nlst": 1,
-            "data": rows, "recipient_nodes": [[]],
+            "partyp": "DRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
         },
         "p2": {
-            "partyp": "DRT", "parval": "1.0", "nlst": 1,
-            "data": rows, "recipient_nodes": [[]],
+            "partyp": "DRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
         },
     }
     drt = MfUsgDrt(
@@ -6935,8 +6962,11 @@ def test_mfusgdrt_parameter_inconsistent_fails(function_tmpdir):
     rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
     params = {
         "p1": {
-            "partyp": "DRT", "parval": "1.0", "nlst": 2,  # declares 2, has 1
-            "data": rows, "recipient_nodes": [[]],
+            "partyp": "DRT",
+            "parval": "1.0",
+            "nlst": 2,  # declares 2, has 1
+            "data": rows,
+            "recipient_nodes": [[]],
         }
     }
     drt = MfUsgDrt(
@@ -6958,8 +6988,11 @@ def test_mfusgdrt_parameter_active_undefined_fails(function_tmpdir):
     rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
     params = {
         "p1": {
-            "partyp": "DRT", "parval": "1.0", "nlst": 1,
-            "data": rows, "recipient_nodes": [[]],
+            "partyp": "DRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
         }
     }
     drt = MfUsgDrt(
@@ -7006,8 +7039,11 @@ def test_mfusgdrt_parameter_duplicate_active_fails(function_tmpdir):
     rows = np.array([(0, 5.0, 10.0, 0.0)], dtype=dtype).view(np.recarray)
     params = {
         "dp": {
-            "partyp": "DRT", "parval": "1.0", "nlst": 1,
-            "data": rows, "recipient_nodes": [[]],
+            "partyp": "DRT",
+            "parval": "1.0",
+            "nlst": 1,
+            "data": rows,
+            "recipient_nodes": [[]],
         }
     }
     drt = MfUsgDrt(
@@ -7050,8 +7086,9 @@ def test_mfusgdrt_parameter_authoring_from_scratch(function_tmpdir):
     assert "dp DRT 2.0 1" in text  # UPARLSTRP header
     assert "\n 5  5.000000e+00  1.000000e+01  0\n" in text  # node 4 -> 5 (1-based)
 
-    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "auth2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgDrt.load(
+        str(out), _drt_model(function_tmpdir, "auth2"), nper=1, ext_unit_dict={}
+    )
     pd = re.parameters["dp"]
     assert pd["partyp"].upper() == "DRT" and pd["nlst"] == 1
     assert abs(float(pd["parval"]) - 2.0) < 1e-9
@@ -7080,8 +7117,9 @@ def test_mfusgdrt_parameter_authoring_returnflow_changec_aux(function_tmpdir):
     drt.fn_path = str(out)
     drt.write_file()
 
-    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "rfa2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgDrt.load(
+        str(out), _drt_model(function_tmpdir, "rfa2"), nper=1, ext_unit_dict={}
+    )
     pd = re.parameters["dp"]
     assert pd["nlst"] == 2
     assert pd["recipient_nodes"][0] == [8, 9] and pd["recipient_nodes"][1] == [7]
@@ -7111,8 +7149,9 @@ def test_mfusgdrt_parameter_authoring_mixed_nonparam_active(function_tmpdir):
     ).split()
     assert item1[0] == "2"  # MXADRT = 1 non-param + 1 active param row
 
-    re = MfUsgDrt.load(str(out), _drt_model(function_tmpdir, "mix2"), nper=1,
-                       ext_unit_dict={})
+    re = MfUsgDrt.load(
+        str(out), _drt_model(function_tmpdir, "mix2"), nper=1, ext_unit_dict={}
+    )
     assert list(re.stress_period_data[0]["node"]) == [2]
     assert re.active_params == {0: ["dp"]}
 
@@ -7141,8 +7180,9 @@ def test_mfusgdrt_parameter_authoring_partyp_invalid_fails(function_tmpdir):
     drt = MfUsgDrt(
         _drt_model(function_tmpdir, "pt"),
         options=["RETURNFLOW"],
-        parameters={"dp": {"partyp": "GHB", "parval": "1.0",
-                           "data": [(0, 5.0, 10.0, 0.0)]}},
+        parameters={
+            "dp": {"partyp": "GHB", "parval": "1.0", "data": [(0, 5.0, 10.0, 0.0)]}
+        },
         active_params={0: ["dp"]},
     )
     out = function_tmpdir / "pt.drt"
@@ -7175,8 +7215,9 @@ def test_mfusgdrt_parameter_authoring_recipients_without_returnflow_fails(
     drt = MfUsgDrt(
         _drt_model(function_tmpdir, "rw"),
         options=[],  # no RETURNFLOW
-        parameters={"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0)],
-                           "recipient_nodes": [[7]]}},
+        parameters={
+            "dp": {"parval": "1.0", "data": [(0, 5.0, 10.0)], "recipient_nodes": [[7]]}
+        },
         active_params={0: ["dp"]},
     )
     out = function_tmpdir / "rw.drt"
@@ -7272,8 +7313,13 @@ def test_mfusgdrt_parameter_authoring_negative_recipient_fails(function_tmpdir):
     drt = MfUsgDrt(
         _drt_model(function_tmpdir, "nr"),
         options=["RETURNFLOW"],
-        parameters={"dp": {"parval": "1.0", "data": [(0, 5.0, 10.0, 0.7)],
-                           "recipient_nodes": [[-1]]}},
+        parameters={
+            "dp": {
+                "parval": "1.0",
+                "data": [(0, 5.0, 10.0, 0.7)],
+                "recipient_nodes": [[-1]],
+            }
+        },
         active_params={0: ["dp"]},
     )
     out = function_tmpdir / "nr.drt"
@@ -8568,6 +8614,7 @@ def test_tabrich_retcrvs_shape_validation(function_tmpdir):
 # Priority-2 closeout: BAS niche options, ETS NETSOP=2/IESFACTOR, HFB params
 # ---------------------------------------------------------------------------
 
+
 def test_mfusgbas_richards_hp_and_ihm_roundtrip(function_tmpdir):
     """BAS RICHARDS_HP and IHM [IUIHM] options author and round-trip."""
     from flopy.modflow import ModflowDis
@@ -8579,8 +8626,9 @@ def test_mfusgbas_richards_hp_and_ihm_roundtrip(function_tmpdir):
     assert bas.richards is True
     bas.fn_path = str(function_tmpdir / "rhp.bas")
     bas.write_file(check=False)
-    opt_line = next(ln for ln in Path(bas.fn_path).read_text().splitlines()
-                    if "RICHARDS" in ln)
+    opt_line = next(
+        ln for ln in Path(bas.fn_path).read_text().splitlines() if "RICHARDS" in ln
+    )
     assert "RICHARDS_HP" in opt_line
     assert "IHM 44" in opt_line
 
@@ -8623,9 +8671,7 @@ def test_mfusgets_iesfactor_authoring(function_tmpdir):
     # Emulate an active transport simulation (BCT would set these).
     ml.itrnsp = 1
     ml.mcomp = 1
-    ets = MfUsgEts(
-        ml, netsop=1, evtr=1.2e-4, netseg=1, iesfactor=1, esfactor=[2.5]
-    )
+    ets = MfUsgEts(ml, netsop=1, evtr=1.2e-4, netseg=1, iesfactor=1, esfactor=[2.5])
     ets.fn_path = str(function_tmpdir / "ies.ets")
     ets.write_file()
     content = Path(ets.fn_path).read_text()
@@ -8900,7 +8946,7 @@ def test_mfusghfb_open_close(function_tmpdir):
     (function_tmpdir / "hfb rows.dat").write_text(" 5 6 0.9\n")
     pq = function_tmpdir / "ocq.hfb"
     pq.write_text(
-        '# hfb open/close quoted\n         0         0         1\n'
+        "# hfb open/close quoted\n         0         0         1\n"
         ' OPEN/CLOSE "hfb rows.dat"\n'
     )
     hfbq = MfUsgHfb.load(str(pq), _hfb_model(function_tmpdir, "oc2"), nper=1)
@@ -8916,9 +8962,7 @@ def test_mfusghfb_external_via_ext_unit_dict(function_tmpdir):
     (function_tmpdir / "hfb_ext.dat").write_text(" 7 8 0.11\n")
     p = function_tmpdir / "ext.hfb"
     p.write_text("# hfb external\n         0         0         1\n EXTERNAL 88\n")
-    ext_unit_dict = {
-        88: types.SimpleNamespace(filename="hfb_ext.dat", filetype="DATA")
-    }
+    ext_unit_dict = {88: types.SimpleNamespace(filename="hfb_ext.dat", filetype="DATA")}
     hfb = MfUsgHfb.load(
         str(p), _hfb_model(function_tmpdir, "ex1"), nper=1, ext_unit_dict=ext_unit_dict
     )
@@ -8962,9 +9006,9 @@ def _hfb_param_def(nlst, hydchr=0.5):
     from flopy.mfusg import MfUsgHfb
 
     dt = MfUsgHfb.get_default_dtype(structured=False)
-    return np.array(
-        [(i, i + 1, hydchr) for i in range(nlst)], dtype=dt
-    ).view(np.recarray)
+    return np.array([(i, i + 1, hydchr) for i in range(nlst)], dtype=dt).view(
+        np.recarray
+    )
 
 
 def test_mfusghfb_param_write_empty_dict_fails(function_tmpdir):
@@ -9465,8 +9509,14 @@ def test_mfusgdpt_aw_adsorbim_validation_hardening(function_tmpdir):
 
     # per-species Langmuir arrays of the wrong length / None
     with pytest.raises(ValueError, match="needs one per species"):
-        build("h1", mcomp=2, iarea_fnim=1, ikawi_fnim=1,
-              alangawim=[1.0], blangawim=[2.0, 3.0])
+        build(
+            "h1",
+            mcomp=2,
+            iarea_fnim=1,
+            ikawi_fnim=1,
+            alangawim=[1.0],
+            blangawim=[2.0, 3.0],
+        )
     with pytest.raises(ValueError, match="is required"):
         build("h2", iarea_fnim=1, ikawi_fnim=1, alangawim=None)
     with pytest.raises(ValueError, match="is required"):
@@ -9496,6 +9546,7 @@ def test_mfusgdpt_aw_adsorbim_validation_hardening(function_tmpdir):
 # (previously only exercised via real-model round-trips)
 # ---------------------------------------------------------------------------
 
+
 def _minimal_transport_model(ws, nrow=2, ncol=2):
     """A minimal structured MfUsg + DIS + BAS for BCT/DDF authoring tests."""
     from flopy.modflow import ModflowDis
@@ -9523,8 +9574,17 @@ def test_mfusgbct_idisp2_authoring_roundtrip(function_tmpdir):
     """BCT IDISP=2 (full dispersion tensor DLX/DLY/DLZ/DTXY/DTYZ/DTXZ) authoring."""
     ml = _minimal_transport_model(function_tmpdir)
     bct = MfUsgBct(
-        ml, mcomp=1, idisp=2, prsity=0.2,
-        dlx=1.0, dly=1.0, dlz=0.1, dtxy=0.1, dtyz=0.1, dtxz=0.1, conc=0.0,
+        ml,
+        mcomp=1,
+        idisp=2,
+        prsity=0.2,
+        dlx=1.0,
+        dly=1.0,
+        dlz=0.1,
+        dtxy=0.1,
+        dtyz=0.1,
+        dtxz=0.1,
+        conc=0.0,
     )
     bct.fn_path = str(function_tmpdir / "idisp2.bct")
     bct.write_file()
@@ -9819,8 +9879,14 @@ def test_mfusgddf_nonlinear_table_authoring_roundtrip(function_tmpdir):
     """DDF NONLINEAR density table authored from scratch, written, reloaded."""
     ml = _minimal_transport_model(function_tmpdir)
     table = [(0.0, 1000.0), (17.5, 1012.5), (35.0, 1025.0)]
-    ddf = MfUsgDdf(ml, rhofresh=1000.0, rhostd=1025.0, cstd=35.0,
-                   nonlinear=True, density_table=table)
+    ddf = MfUsgDdf(
+        ml,
+        rhofresh=1000.0,
+        rhostd=1025.0,
+        cstd=35.0,
+        nonlinear=True,
+        density_table=table,
+    )
     ddf.fn_path = str(function_tmpdir / "nl.ddf")
     ddf.write_file()
     content = Path(ddf.fn_path).read_text()
@@ -9839,6 +9905,7 @@ def test_mfusgddf_nonlinear_table_authoring_roundtrip(function_tmpdir):
 
 # --- P0: MfUsgDrt structured authoring contract ---------------------------
 
+
 def test_mfusgdrt_structured_construction_raises(function_tmpdir):
     """MfUsgDrt is unstructured-only; structured construction fails clearly."""
     from flopy.modflow import ModflowDis
@@ -9856,8 +9923,11 @@ def test_modflowdrt_structured_authoring_from_scratch(function_tmpdir):
     ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
     dtype = ModflowDrt.get_default_dtype(structured=True)
-    spd = {0: np.array([(0, 0, 0, 5.0, 100.0, 0, 0, 0, 0.0)],
-                       dtype=dtype).view(np.recarray)}
+    spd = {
+        0: np.array([(0, 0, 0, 5.0, 100.0, 0, 0, 0, 0.0)], dtype=dtype).view(
+            np.recarray
+        )
+    }
     drt = ModflowDrt(ml, stress_period_data=spd)
     drt.fn_path = str(function_tmpdir / "classic.drt")
     drt.write_file()
@@ -9885,6 +9955,7 @@ def test_mfusgdrt_load_structured_delegates_to_base(function_tmpdir):
 
 # --- P0: SGB/QRT/DRT main-list controls (SFAC / OPEN-CLOSE / EXTERNAL) ------
 
+
 def _usgt_unstructured_model(ws, nper=1):
     from flopy.modflow import ModflowDis
 
@@ -9900,8 +9971,12 @@ def test_mfusgsgb_sfac_and_open_close(function_tmpdir):
     sfac_file.write_text(
         "# sgb sfac\n         1 0\n 1 0    SP1\n SFAC 5.0\n 101   1.000000e-02\n"
     )
-    sgb = MfUsgSgb.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    sgb = MfUsgSgb.load(
+        str(sfac_file),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict={},
+    )
     assert np.isclose(sgb.stress_period_data[0]["gradient"][0], 0.01)
 
     # OPEN/CLOSE: rows live in a separate file resolved against model_ws.
@@ -9912,8 +9987,12 @@ def test_mfusgsgb_sfac_and_open_close(function_tmpdir):
     oc_file.write_text(
         "# sgb open/close\n         2 0\n 2 0    SP1\n OPEN/CLOSE sgb_rows.dat\n"
     )
-    sgb2 = MfUsgSgb.load(str(oc_file), _usgt_unstructured_model(function_tmpdir),
-                         nper=1, ext_unit_dict={})
+    sgb2 = MfUsgSgb.load(
+        str(oc_file),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict={},
+    )
     assert list(sgb2.stress_period_data[0]["node"]) == [200, 201]
 
 
@@ -9924,8 +10003,12 @@ def test_mfusgqrt_sfac_with_recipients_expanded_write(function_tmpdir):
         "# qrt sfac\n        1         1 0 0 0 RETURNFLOW\n 1    SP1\n"
         " SFAC 2.0\n 5  -5.000000e+01  1  8.000000e-01\nINTERNAL  1  (FREE)  -1\n 10\n"
     )
-    qrt = MfUsgQrt.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    qrt = MfUsgQrt.load(
+        str(sfac_file),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict={},
+    )
     rec = qrt.stress_period_data[0]
     assert np.isclose(rec["q"][0], -100.0)  # -50 * SFAC 2.0
     assert qrt.recipient_nodes[0][0] == [9]
@@ -9935,8 +10018,9 @@ def test_mfusgqrt_sfac_with_recipients_expanded_write(function_tmpdir):
     qrt.write_file()
     text = out.read_text()
     assert "SFAC" not in text  # expanded valid write
-    qrt2 = MfUsgQrt.load(str(out), _usgt_unstructured_model(function_tmpdir),
-                         nper=1, ext_unit_dict={})
+    qrt2 = MfUsgQrt.load(
+        str(out), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert np.isclose(qrt2.stress_period_data[0]["q"][0], -100.0)
     assert qrt2.recipient_nodes[0][0] == [9]
 
@@ -9950,13 +10034,17 @@ def test_mfusgdrt_sfac_single_and_spread(function_tmpdir):
         " 2  4.000000e+00  2.000000e+01  -2  5.000000e-01\n"
         "INTERNAL  1  (FREE)  -1\n 11 12\n"
     )
-    drt = MfUsgDrt.load(str(sfac_file), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    drt = MfUsgDrt.load(
+        str(sfac_file),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict={},
+    )
     rec = drt.stress_period_data[0]
     assert np.isclose(rec["cond"][0], 30.0)  # 10 * 3.0
     assert np.isclose(rec["cond"][1], 60.0)  # 20 * 3.0
-    assert drt.recipient_nodes[0][0] == [8]        # inline single (NR=9 -> 8)
-    assert drt.recipient_nodes[0][1] == [10, 11]   # spreading (NR=-2 -> nodes 11,12)
+    assert drt.recipient_nodes[0][0] == [8]  # inline single (NR=9 -> 8)
+    assert drt.recipient_nodes[0][1] == [10, 11]  # spreading (NR=-2 -> nodes 11,12)
 
 
 def test_usgt_list_external_without_dict_fails(function_tmpdir):
@@ -9964,19 +10052,27 @@ def test_usgt_list_external_without_dict_fails(function_tmpdir):
     unit cannot be resolved, for each list-package family."""
     cases = [
         (MfUsgSgb, "ext.sgb", "# sgb\n         1 0\n 1 0    SP1\n EXTERNAL 77\n"),
-        (MfUsgQrt, "ext.qrt",
-         "# qrt\n        1         0 0 0 0\n 1    SP1\n EXTERNAL 77\n"),
+        (
+            MfUsgQrt,
+            "ext.qrt",
+            "# qrt\n        1         0 0 0 0\n 1    SP1\n EXTERNAL 77\n",
+        ),
         (MfUsgDrt, "ext.drt", "# drt\n         1 0 0 0\n 1    SP1\n EXTERNAL 77\n"),
     ]
     for cls, name, text in cases:
         p = function_tmpdir / name
         p.write_text(text)
         with pytest.raises(NotImplementedError, match="EXTERNAL"):
-            cls.load(str(p), _usgt_unstructured_model(function_tmpdir),
-                     nper=1, ext_unit_dict={})
+            cls.load(
+                str(p),
+                _usgt_unstructured_model(function_tmpdir),
+                nper=1,
+                ext_unit_dict={},
+            )
 
 
 # --- P1: BAS IHM optional integer parsing ---------------------------------
+
 
 def test_mfusgbas_ihm_optional_unit_parsing(function_tmpdir):
     """BAS IHM loads with or without the optional IUIHM unit (no IndexError)."""
@@ -10000,13 +10096,15 @@ def test_mfusgbas_ihm_optional_unit_parsing(function_tmpdir):
     assert b.ihm is True and b.iuihm == 0
 
     # IHM <int> -> iuihm=int
-    b = MfUsgBas.load(str(_write_bas("FREE IHM 123", "unit.bas")), _model(),
-                      check=False)
+    b = MfUsgBas.load(
+        str(_write_bas("FREE IHM 123", "unit.bas")), _model(), check=False
+    )
     assert b.ihm is True and b.iuihm == 123
 
     # IHM followed by another option -> iuihm=0, the other option still parsed
-    b = MfUsgBas.load(str(_write_bas("FREE IHM SY-ALL", "opt.bas")), _model(),
-                      check=False)
+    b = MfUsgBas.load(
+        str(_write_bas("FREE IHM SY-ALL", "opt.bas")), _model(), check=False
+    )
     assert b.ihm is True and b.iuihm == 0 and b.sy_all is True
 
     # programmatic write normalizes to "IHM <iuihm>" and round-trips
@@ -10022,23 +10120,29 @@ def test_mfusgbas_ihm_optional_unit_parsing(function_tmpdir):
 
 # --- P1: QRT/DRT recipient_nodes validation -------------------------------
 
+
 def test_mfusgqrt_recipient_count_mismatch_fails(function_tmpdir):
     """QRT recipient_nodes shorter/longer than the sink list fails on write."""
     ml = _usgt_unstructured_model(function_tmpdir)
     dtype = MfUsgQrt.get_default_dtype(returnflow=True)
-    spd = {0: np.array([(0, -100.0, 0.5), (4, -50.0, 0.5)],
-                       dtype=dtype).view(np.recarray)}
+    spd = {
+        0: np.array([(0, -100.0, 0.5), (4, -50.0, 0.5)], dtype=dtype).view(np.recarray)
+    }
 
-    too_short = MfUsgQrt(ml, stress_period_data=spd,
-                         recipient_nodes={0: [[9]]}, options=["RETURNFLOW"])
+    too_short = MfUsgQrt(
+        ml, stress_period_data=spd, recipient_nodes={0: [[9]]}, options=["RETURNFLOW"]
+    )
     too_short.fn_path = str(function_tmpdir / "short.qrt")
     with pytest.raises(ValueError, match="recipient_nodes"):
         too_short.write_file()
 
     ml2 = _usgt_unstructured_model(function_tmpdir)
-    too_long = MfUsgQrt(ml2, stress_period_data=spd,
-                        recipient_nodes={0: [[9], [10], [11]]},
-                        options=["RETURNFLOW"])
+    too_long = MfUsgQrt(
+        ml2,
+        stress_period_data=spd,
+        recipient_nodes={0: [[9], [10], [11]]},
+        options=["RETURNFLOW"],
+    )
     too_long.fn_path = str(function_tmpdir / "long.qrt")
     with pytest.raises(ValueError, match="recipient_nodes"):
         too_long.write_file()
@@ -10048,19 +10152,26 @@ def test_mfusgdrt_recipient_count_mismatch_fails(function_tmpdir):
     """DRT recipient_nodes shorter/longer than the drain list fails on write."""
     ml = _usgt_unstructured_model(function_tmpdir)
     dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
-    spd = {0: np.array([(0, 5.0, 100.0, 0.5), (4, 4.0, 50.0, 0.5)],
-                       dtype=dtype).view(np.recarray)}
+    spd = {
+        0: np.array([(0, 5.0, 100.0, 0.5), (4, 4.0, 50.0, 0.5)], dtype=dtype).view(
+            np.recarray
+        )
+    }
 
-    too_short = MfUsgDrt(ml, stress_period_data=spd,
-                         recipient_nodes={0: [[9]]}, options=["RETURNFLOW"])
+    too_short = MfUsgDrt(
+        ml, stress_period_data=spd, recipient_nodes={0: [[9]]}, options=["RETURNFLOW"]
+    )
     too_short.fn_path = str(function_tmpdir / "short.drt")
     with pytest.raises(ValueError, match="recipient_nodes"):
         too_short.write_file()
 
     ml2 = _usgt_unstructured_model(function_tmpdir)
-    too_long = MfUsgDrt(ml2, stress_period_data=spd,
-                        recipient_nodes={0: [[9], [10], [11]]},
-                        options=["RETURNFLOW"])
+    too_long = MfUsgDrt(
+        ml2,
+        stress_period_data=spd,
+        recipient_nodes={0: [[9], [10], [11]]},
+        options=["RETURNFLOW"],
+    )
     too_long.fn_path = str(function_tmpdir / "long.drt")
     with pytest.raises(ValueError, match="recipient_nodes"):
         too_long.write_file()
@@ -10070,18 +10181,21 @@ def test_mfusgqrt_zero_recipients_when_omitted(function_tmpdir):
     """QRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
     ml = _usgt_unstructured_model(function_tmpdir)
     dtype = MfUsgQrt.get_default_dtype(returnflow=True)
-    spd = {0: np.array([(0, -100.0, 0.0), (4, -50.0, 0.0)],
-                       dtype=dtype).view(np.recarray)}
+    spd = {
+        0: np.array([(0, -100.0, 0.0), (4, -50.0, 0.0)], dtype=dtype).view(np.recarray)
+    }
     qrt = MfUsgQrt(ml, stress_period_data=spd, options=["RETURNFLOW"])
     qrt.fn_path = str(function_tmpdir / "zero.qrt")
     qrt.write_file()  # must not raise
 
-    qrt2 = MfUsgQrt.load(qrt.fn_path, _usgt_unstructured_model(function_tmpdir),
-                         nper=1, ext_unit_dict={})
+    qrt2 = MfUsgQrt.load(
+        qrt.fn_path, _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert qrt2.recipient_nodes[0] == [[], []]
 
 
 # --- P2: TABRICH node-count contract --------------------------------------
+
 
 def test_tabrich_node_count_contract(function_tmpdir):
     """_tabrich.node_count: structured product, DISU nodes, DIS fallback, error."""
@@ -10109,14 +10223,16 @@ def test_tabrich_node_count_contract(function_tmpdir):
 # Phase 2 polish pass (USGT_PHASE2_REREVIEW.md)
 # ===========================================================================
 
+
 def test_usgt_list_open_close_quoted_filenames(function_tmpdir):
     """OPEN/CLOSE accepts single/double quotes and single-quoted names w/ spaces."""
     # SGB: single-quoted name
     (function_tmpdir / "rows.dat").write_text(" 201   2.000000e-02\n")
     p = function_tmpdir / "q.sgb"
     p.write_text("# sgb\n         1 0\n 1 0 SP1\n OPEN/CLOSE 'rows.dat'\n")
-    sgb = MfUsgSgb.load(str(p), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    sgb = MfUsgSgb.load(
+        str(p), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert list(sgb.stress_period_data[0]["node"]) == [200]
     # expanded write emits inline rows; it must not preserve OPEN/CLOSE
     out = function_tmpdir / "out.sgb"
@@ -10135,16 +10251,18 @@ def test_usgt_list_open_close_quoted_filenames(function_tmpdir):
         "# drt\n         1 0 0 0 RETURNFLOW\n 1 SP1\n"
         " OPEN/CLOSE 'rows with spaces.dat'\n"
     )
-    drt = MfUsgDrt.load(str(p2), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    drt = MfUsgDrt.load(
+        str(p2), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert list(drt.stress_period_data[0]["node"]) == [0]
     assert drt.recipient_nodes[0][0] == [8]
 
     # SGB: double-quoted name
     p3 = function_tmpdir / "dq.sgb"
     p3.write_text('# sgb\n         1 0\n 1 0 SP1\n OPEN/CLOSE "rows.dat"\n')
-    sgb3 = MfUsgSgb.load(str(p3), _usgt_unstructured_model(function_tmpdir),
-                         nper=1, ext_unit_dict={})
+    sgb3 = MfUsgSgb.load(
+        str(p3), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert list(sgb3.stress_period_data[0]["node"]) == [200]
 
 
@@ -10160,20 +10278,27 @@ def test_usgt_list_external_positive_with_ext_unit_dict(function_tmpdir):
     (function_tmpdir / "s_ext.dat").write_text(" SFAC 5.0\n 101   1.000000e-02\n")
     p = function_tmpdir / "e.sgb"
     p.write_text("# sgb\n         1 0\n 1 0 SP1\n EXTERNAL 77\n")
-    sgb = MfUsgSgb.load(str(p), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict=eud(77, "s_ext.dat"))
+    sgb = MfUsgSgb.load(
+        str(p),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict=eud(77, "s_ext.dat"),
+    )
     assert list(sgb.stress_period_data[0]["node"]) == [100]
     assert np.isclose(sgb.stress_period_data[0]["gradient"][0], 0.01)
 
     # QRT: external file begins with SFAC (scales Q: -50 * 2 = -100) + recipients.
     (function_tmpdir / "q_ext.dat").write_text(
-        " SFAC 2.0\n 5  -5.000000e+01  1  8.000000e-01\n"
-        "INTERNAL  1  (FREE)  -1\n 10\n"
+        " SFAC 2.0\n 5  -5.000000e+01  1  8.000000e-01\nINTERNAL  1  (FREE)  -1\n 10\n"
     )
     p = function_tmpdir / "e.qrt"
     p.write_text("# qrt\n        1         1 0 0 0 RETURNFLOW\n 1 SP1\n EXTERNAL 78\n")
-    qrt = MfUsgQrt.load(str(p), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict=eud(78, "q_ext.dat"))
+    qrt = MfUsgQrt.load(
+        str(p),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict=eud(78, "q_ext.dat"),
+    )
     assert np.isclose(qrt.stress_period_data[0]["q"][0], -100.0)
     assert qrt.recipient_nodes[0][0] == [9]
 
@@ -10184,8 +10309,12 @@ def test_usgt_list_external_positive_with_ext_unit_dict(function_tmpdir):
     )
     p = function_tmpdir / "e.drt"
     p.write_text("# drt\n         1 0 0 0 RETURNFLOW\n 1 SP1\n EXTERNAL 79\n")
-    drt = MfUsgDrt.load(str(p), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict=eud(79, "d_ext.dat"))
+    drt = MfUsgDrt.load(
+        str(p),
+        _usgt_unstructured_model(function_tmpdir),
+        nper=1,
+        ext_unit_dict=eud(79, "d_ext.dat"),
+    )
     assert drt.recipient_nodes[0][0] == [10, 11]
 
 
@@ -10398,18 +10527,23 @@ def test_mfusgdrt_zero_recipients_when_omitted(function_tmpdir):
     """DRT with RETURNFLOW but omitted recipient_nodes => all-zero recipients."""
     ml = _usgt_unstructured_model(function_tmpdir)
     dtype = MfUsgDrt.get_usg_dtype(returnflow=True)
-    spd = {0: np.array([(0, 5.0, 100.0, 0.0), (4, 4.0, 50.0, 0.0)],
-                       dtype=dtype).view(np.recarray)}
+    spd = {
+        0: np.array([(0, 5.0, 100.0, 0.0), (4, 4.0, 50.0, 0.0)], dtype=dtype).view(
+            np.recarray
+        )
+    }
     drt = MfUsgDrt(ml, stress_period_data=spd, options=["RETURNFLOW"])
     drt.fn_path = str(function_tmpdir / "zero.drt")
     drt.write_file()  # must not raise
 
-    drt2 = MfUsgDrt.load(drt.fn_path, _usgt_unstructured_model(function_tmpdir),
-                         nper=1, ext_unit_dict={})
+    drt2 = MfUsgDrt.load(
+        drt.fn_path, _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert drt2.recipient_nodes[0] == [[], []]
 
 
 # --- Stage 3 Card 2: parameter strategy (Expanded valid write for ETS) ----
+
 
 def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
     """Opt-in `expand_parameters=True` keeps the legacy Expanded-valid-write path.
@@ -10428,13 +10562,13 @@ def test_mfusgets_parameterized_load_expands_to_npets0(function_tmpdir):
     param_ets.write_text(
         "# parameterized ETS (NPETS=1)\n"
         "PARAMETER 1\n"
-        "1 0 1 1 0\n"            # NETSOP IETSCB NPETS NETSEG IESFACTOR
+        "1 0 1 1 0\n"  # NETSOP IETSCB NPETS NETSEG IESFACTOR
         "etsrate ets 5.0E-4 1\n"  # param: name type value nclu
-        "NONE ALL\n"             # cluster: no multiplier, all cells
-        "0 1 0\n"                 # SP1: INSURF INETSR INEXDP (INETSR=1 param)
-        "CONSTANT 10.0\n"        # ETSS surface
-        "etsrate\n"              # ETSR via parameter "etsrate"
-        "CONSTANT 5.0\n"         # ETSX extinction depth
+        "NONE ALL\n"  # cluster: no multiplier, all cells
+        "0 1 0\n"  # SP1: INSURF INETSR INEXDP (INETSR=1 param)
+        "CONSTANT 10.0\n"  # ETSS surface
+        "etsrate\n"  # ETSR via parameter "etsrate"
+        "CONSTANT 5.0\n"  # ETSX extinction depth
     )
     ets = MfUsgEts.load(str(param_ets), ml, nper=1, expand_parameters=True)
     # Parameter expanded on load -> NPETS reset to 0, ETSR filled with parval.
@@ -10465,13 +10599,13 @@ def _param_ets_model(function_tmpdir, name):
 # PARAMETER line). ETSR is parameterized; ETSS/ETSX are plain arrays.
 _PARAM_ETS_TEXT = (
     "# parameterized ETS (NPETS=1)\n"
-    "1 0 1 1 0\n"              # NETSOP IETSCB NPETS NETSEG IESFACTOR
-    "etsrate ets 5.0E-4 1\n"   # param: name type value nclu
-    "NONE ALL\n"               # cluster: no multiplier, all cells
-    "0 1 0\n"                  # SP1: INSURF INETSR INEXDP (INETSR=1 param)
-    "CONSTANT 10.0\n"          # ETSS surface
-    "etsrate\n"                # ETSR via parameter "etsrate"
-    "CONSTANT 5.0\n"           # ETSX extinction depth
+    "1 0 1 1 0\n"  # NETSOP IETSCB NPETS NETSEG IESFACTOR
+    "etsrate ets 5.0E-4 1\n"  # param: name type value nclu
+    "NONE ALL\n"  # cluster: no multiplier, all cells
+    "0 1 0\n"  # SP1: INSURF INETSR INEXDP (INETSR=1 param)
+    "CONSTANT 10.0\n"  # ETSS surface
+    "etsrate\n"  # ETSR via parameter "etsrate"
+    "CONSTANT 5.0\n"  # ETSX extinction depth
 )
 
 
@@ -10580,8 +10714,13 @@ def test_mfusgets_parameter_authoring_from_scratch_static(function_tmpdir):
     PARAMETER line), definition + cluster, per-SP active record, reload."""
     from flopy.mfusg import MfUsgEts
 
-    params = {"etsrate": {"partyp": "ets", "parval": "5e-4",
-                          "clusters": [("NONE", "ALL", [])]}}
+    params = {
+        "etsrate": {
+            "partyp": "ets",
+            "parval": "5e-4",
+            "clusters": [("NONE", "ALL", [])],
+        }
+    }
     ets = MfUsgEts(
         _param_ets_model(function_tmpdir, "as"),
         netsop=1,
@@ -10611,8 +10750,10 @@ def test_mfusgets_parameter_authoring_instances(function_tmpdir):
     params = {
         "etsrate": {
             "parval": "5e-4",
-            "instances": {"spring": [("NONE", "ALL", [])],
-                          "fall": [("NONE", "ALL", [])]},
+            "instances": {
+                "spring": [("NONE", "ALL", [])],
+                "fall": [("NONE", "ALL", [])],
+            },
         }
     }
     ets = MfUsgEts(
@@ -10716,47 +10857,98 @@ def test_mfusgets_parameter_authoring_negatives(function_tmpdir):
     """The from-scratch ETS authoring validations all fire before any write."""
     sp = {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
     inst = {"parval": "5e-4", "instances": {"s": [("NONE", "ALL", [])]}}
-    _ets_neg(function_tmpdir, "e_nodefs",
-             {"evtr_parm": {0: [("p1", None)]}}, "none are defined")
-    _ets_neg(function_tmpdir, "e_first",
-             {"parameters": {"etsrate": sp}, "evtr_parm": {}}, "first stress period")
-    _ets_neg(function_tmpdir, "e_undef",
-             {"parameters": {"etsrate": sp}, "evtr_parm": {0: [("px", None)]}},
-             "not defined")
-    _ets_neg(function_tmpdir, "e_dupdef",
-             {"parameters": {"r1": sp, "R1": dict(sp)},
-              "evtr_parm": {0: [("r1", None)]}}, "duplicate parameter definition")
-    _ets_neg(function_tmpdir, "e_badname",
-             {"parameters": {"r 1": sp}, "evtr_parm": {0: [("r 1", None)]}},
-             "single non-empty")
-    _ets_neg(function_tmpdir, "e_badparval",
-             {"parameters": {"r1": {"parval": "1 2", "clusters": [("NONE", "ALL")]}},
-              "evtr_parm": {0: [("r1", None)]}}, "single token")
-    _ets_neg(function_tmpdir, "e_emptyclu",
-             {"parameters": {"r1": {"parval": "5e-4", "clusters": []}},
-              "evtr_parm": {0: [("r1", None)]}}, "cluster")
-    _ets_neg(function_tmpdir, "e_badzone",
-             {"parameters": {"r1": {"parval": "5e-4", "clusters": [("m1", "z1", [0])]}},
-              "evtr_parm": {0: [("r1", None)]}}, "positive integer")
-    _ets_neg(function_tmpdir, "e_instreq",
-             {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", None)]}},
-             "must name an instance")
-    _ets_neg(function_tmpdir, "e_instunknown",
-             {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", "x")]}},
-             "no instance")
-    _ets_neg(function_tmpdir, "e_staticinst",
-             {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", "spring")]}},
-             "static")
-    _ets_neg(function_tmpdir, "e_dupactive",
-             {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", None), ("R1", None)]}},
-             "more than once")
-    _ets_neg(function_tmpdir, "e_npets",
-             {"parameters": {"r1": sp}, "npets": 2, "evtr_parm": {0: [("r1", None)]}},
-             "NPETS")
+    _ets_neg(
+        function_tmpdir,
+        "e_nodefs",
+        {"evtr_parm": {0: [("p1", None)]}},
+        "none are defined",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_first",
+        {"parameters": {"etsrate": sp}, "evtr_parm": {}},
+        "first stress period",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_undef",
+        {"parameters": {"etsrate": sp}, "evtr_parm": {0: [("px", None)]}},
+        "not defined",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_dupdef",
+        {"parameters": {"r1": sp, "R1": dict(sp)}, "evtr_parm": {0: [("r1", None)]}},
+        "duplicate parameter definition",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_badname",
+        {"parameters": {"r 1": sp}, "evtr_parm": {0: [("r 1", None)]}},
+        "single non-empty",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_badparval",
+        {
+            "parameters": {"r1": {"parval": "1 2", "clusters": [("NONE", "ALL")]}},
+            "evtr_parm": {0: [("r1", None)]},
+        },
+        "single token",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_emptyclu",
+        {
+            "parameters": {"r1": {"parval": "5e-4", "clusters": []}},
+            "evtr_parm": {0: [("r1", None)]},
+        },
+        "cluster",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_badzone",
+        {
+            "parameters": {"r1": {"parval": "5e-4", "clusters": [("m1", "z1", [0])]}},
+            "evtr_parm": {0: [("r1", None)]},
+        },
+        "positive integer",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_instreq",
+        {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", None)]}},
+        "must name an instance",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_instunknown",
+        {"parameters": {"r1": inst}, "evtr_parm": {0: [("r1", "x")]}},
+        "no instance",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_staticinst",
+        {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", "spring")]}},
+        "static",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_dupactive",
+        {"parameters": {"r1": sp}, "evtr_parm": {0: [("r1", None), ("R1", None)]}},
+        "more than once",
+    )
+    _ets_neg(
+        function_tmpdir,
+        "e_npets",
+        {"parameters": {"r1": sp}, "npets": 2, "evtr_parm": {0: [("r1", None)]}},
+        "NPETS",
+    )
 
 
 # --- recipient-node U1DINT controls (INTERNAL/CONSTANT; EXTERNAL/OPEN-CLOSE
 # --- added in Stage 4.5B, see the dedicated recipient tests above) ----------
+
 
 def test_mfusgdrt_recipient_constant_u1dint(function_tmpdir):
     """A spreading recipient list written as CONSTANT expands to that node."""
@@ -10767,8 +10959,9 @@ def test_mfusgdrt_recipient_constant_u1dint(function_tmpdir):
         " 1  5.000000e+00  1.000000e+01  -3  7.000000e-01\n"
         "CONSTANT 5\n"  # 3 recipients, all node 5 (1-based) -> node 4 (0-based)
     )
-    drt = MfUsgDrt.load(str(drt_in), _usgt_unstructured_model(function_tmpdir),
-                        nper=1, ext_unit_dict={})
+    drt = MfUsgDrt.load(
+        str(drt_in), _usgt_unstructured_model(function_tmpdir), nper=1, ext_unit_dict={}
+    )
     assert drt.recipient_nodes[0][0] == [4, 4, 4]
 
 
@@ -10788,11 +10981,16 @@ def test_mfusg_recipient_external_u1dint_unresolved_fails(function_tmpdir):
         "EXTERNAL 88\n"
     )
     with pytest.raises(NotImplementedError, match="recipient"):
-        MfUsgDrt.load(str(drt_ext), _usgt_unstructured_model(function_tmpdir),
-                      nper=1, ext_unit_dict={})
+        MfUsgDrt.load(
+            str(drt_ext),
+            _usgt_unstructured_model(function_tmpdir),
+            nper=1,
+            ext_unit_dict={},
+        )
 
 
 # --- Stage 3 Card 8: plain-checkmark hardening (PCB, EVT transport) --------
+
 
 def test_mfusgpcb_authoring_roundtrip(function_tmpdir):
     """PCB (Prescribed Concentration Boundary) authored from scratch: 0-based
@@ -10822,7 +11020,7 @@ def test_mfusgevt_transport_etfactor_authoring(function_tmpdir):
 
     ml = MfUsg(structured=True, model_ws=str(function_tmpdir))
     ModflowDis(ml, nlay=1, nrow=2, ncol=2, nper=1)
-    ml.itrnsp = 1   # emulate active transport (BCT would set this)
+    ml.itrnsp = 1  # emulate active transport (BCT would set this)
     ml.mcomp = 1
     evt = MfUsgEvt(ml, nevtop=1, evtr=1.0e-4, ietfactor=1, etfactor=[2.5])
     evt.fn_path = str(function_tmpdir / "transport.evt")
@@ -11080,9 +11278,7 @@ def test_mfusgevt_npevt_authoring_and_roundtrip(function_tmpdir):
         nevtop=1,
         surf=10.0,
         exdp=1.0,
-        parameters={
-            "evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
-        },
+        parameters={"evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}},
         evtr_parm={0: [("evtrate", None)]},
     )
     evt.fn_path = str(function_tmpdir / "pe.evt")
@@ -11133,9 +11329,7 @@ def test_mfusgevt_npevt_instances_roundtrip(function_tmpdir):
     )
     evt.fn_path = str(function_tmpdir / "pi.evt")
     evt.write_file()
-    re = MfUsgEvt.load(
-        evt.fn_path, _evt_struct_model(function_tmpdir, "pib", nper=2)
-    )
+    re = MfUsgEvt.load(evt.fn_path, _evt_struct_model(function_tmpdir, "pib", nper=2))
     assert re.npevt == 1
     assert re.evtr_parm[0][0][1] == "spring"
     assert re.evtr_parm[1][0][1] == "fall"
@@ -11151,9 +11345,7 @@ def test_mfusgevt_npevt_expand_parameters(function_tmpdir):
         nevtop=1,
         surf=10.0,
         exdp=1.0,
-        parameters={
-            "evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}
-        },
+        parameters={"evtrate": {"parval": "5e-4", "clusters": [("NONE", "ALL", [])]}},
         evtr_parm={0: [("evtrate", None)]},
     )
     evt.fn_path = str(function_tmpdir / "px.evt")
@@ -11316,8 +11508,7 @@ def test_mfusgevt_ets_zonal_deferred(function_tmpdir):
     # load: a per-SP 'INEVTZONES' flag fails explicitly
     f2 = function_tmpdir / "inz.evt"
     f2.write_text(
-        "# x\n         1         0\n"
-        "INEVTZONES 1         0         1         1\n"
+        "# x\n         1         0\nINEVTZONES 1         0         1         1\n"
     )
     with pytest.raises(NotImplementedError, match="INEVTZONES"):
         MfUsgEvt.load(str(f2), _evt_struct_model(function_tmpdir, "z3"))
@@ -11529,9 +11720,7 @@ def _oc_check_warnings(function_tmpdir, name, actions):
     """Build an OC with `actions` and return its check() warning descriptions."""
     from flopy.mfusg import MfUsgOc
 
-    oc = MfUsgOc(
-        _oc_model(function_tmpdir, name), stress_period_data={(0, 0): actions}
-    )
+    oc = MfUsgOc(_oc_model(function_tmpdir, name), stress_period_data={(0, 0): actions})
     chk = oc.check(verbose=False)
     return [str(d) for d in chk.summary_array["desc"]]
 
@@ -11566,12 +11755,10 @@ def test_mfusgoc_check_accepts_usgt_actions(function_tmpdir):
 
 def test_mfusgoc_check_warns_save_ibound(function_tmpdir):
     """check() warns that SAVE IBOUND is preserved by FloPy but USG-T rejects it."""
-    descs = _oc_check_warnings(
-        function_tmpdir, "ibwarn", ["save head", "save ibound"]
+    descs = _oc_check_warnings(function_tmpdir, "ibwarn", ["save head", "save ibound"])
+    assert any("SAVE IBOUND" in d and "rejected by USG-T 2.7" in d for d in descs), (
+        descs
     )
-    assert any(
-        "SAVE IBOUND" in d and "rejected by USG-T 2.7" in d for d in descs
-    ), descs
 
 
 def test_mfusgoc_check_warns_param_without_value(function_tmpdir):
@@ -11602,9 +11789,10 @@ def test_mfusgoc_check_warns_param_without_value(function_tmpdir):
         "mxiter",
     ):
         descs = _oc_check_warnings(function_tmpdir, f"nv_{kw}", ["save head", kw])
-        assert any(
-            kw.upper() in d and "requires a value" in d for d in descs
-        ), (kw, descs)
+        assert any(kw.upper() in d and "requires a value" in d for d in descs), (
+            kw,
+            descs,
+        )
 
     # single-word USG-T actions remain valid (no value needed)
     assert (
@@ -11758,9 +11946,7 @@ def test_mfusgmdt_idpf_skips_volfracmd(function_tmpdir):
     from flopy.mfusg import MfUsgMdt
 
     def blocks(model, name):
-        mdt = MfUsgMdt(
-            model, kdmd=0.01, decaymd=1e-6, yieldmd=1.0, diffmd=1e-9
-        )
+        mdt = MfUsgMdt(model, kdmd=0.01, decaymd=1e-6, yieldmd=1.0, diffmd=1e-9)
         mdt.fn_path = str(function_tmpdir / f"{name}.mdt")
         mdt.write_file()
         text = Path(mdt.fn_path).read_text().upper()
@@ -11853,9 +12039,7 @@ def test_mfusgmdt_tshiftmd_threshold(function_tmpdir):
     small.fn_path = str(function_tmpdir / "sm.mdt")
     small.write_file()
     ts_line = next(
-        ln
-        for ln in Path(small.fn_path).read_text().splitlines()
-        if "TSHIFTMD" in ln
+        ln for ln in Path(small.fn_path).read_text().splitlines() if "TSHIFTMD" in ln
     )
     assert float(ts_line.split("TSHIFTMD")[1].split()[0]) > 1e-10  # not rounded to 0
     re = MfUsgMdt.load(small.fn_path, _mdt_model(function_tmpdir, "sm2"))
@@ -12195,9 +12379,7 @@ def test_mfusglak_multilake_sill_authoring_roundtrip(function_tmpdir):
     text = Path(lak.fn_path).read_text()
     # dataset 7 (NSLMS=1) written once, dataset 8a is "IC lake1 lake2" 1-based
     assert sum("Data set 7" in ln for ln in text.splitlines()) == 1
-    assert any(
-        ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines()
-    )
+    assert any(ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines())
 
     re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "mlb"))
     assert re.nlakes == 2
@@ -12250,9 +12432,7 @@ def test_mfusglak_sill_rejects_invalid(function_tmpdir):
             model = MfUsg(
                 structured=True, model_ws=str(function_tmpdir), modelname=name
             )
-            ModflowDis(
-                model, nlay=1, nrow=3, ncol=3, nper=nper, nstp=1, steady=False
-            )
+            ModflowDis(model, nlay=1, nrow=3, ncol=3, nper=nper, nstp=1, steady=False)
         kw = {
             "nlakes": 2,
             "stages": [100.0, 100.0],
@@ -12318,9 +12498,7 @@ def test_mfusglak_sill_normalizes_numeric_input(function_tmpdir):
     lak.fn_path = str(function_tmpdir / "norm.lak")
     lak.write_file()
     text = Path(lak.fn_path).read_text()
-    assert any(
-        ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines()
-    )
+    assert any(ln.split("#")[0].split() == ["2", "1", "2"] for ln in text.splitlines())
 
     re = MfUsgLak.load(lak.fn_path, _lak_model(function_tmpdir, "normb"))
     assert re.sill_data[0][0][0] == [2, 1, 2]
