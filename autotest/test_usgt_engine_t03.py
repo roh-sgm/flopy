@@ -31,7 +31,7 @@ PARTS = ("no_dispersion", "dispersion")
 
 
 @pytest.fixture
-def ue(monkeypatch):
+def engine_mod(monkeypatch):
     spec = importlib.util.spec_from_file_location("usgt_engine_t03", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -132,8 +132,8 @@ def make_install(tmp_path, monkeypatch, env=True):
 class Case:
     """runs folder, snapshot, run folders, notebook, install and report."""
 
-    def __init__(self, ue, tmp_path, monkeypatch, runs_name="Notebooks"):
-        self.ue, self.tmp, self.mp = ue, tmp_path, monkeypatch
+    def __init__(self, engine_mod, tmp_path, monkeypatch, runs_name="Notebooks"):
+        self.engine_mod, self.tmp, self.mp = engine_mod, tmp_path, monkeypatch
         self.runs = tmp_path / runs_name
         self.runs.mkdir()
         self.out = tmp_path / "usgt-engine"
@@ -141,7 +141,7 @@ class Case:
         self.export = tmp_path / "usgt-t03-evidence"
 
     def snapshot(self):
-        rc = self.ue.main(
+        rc = self.engine_mod.main(
             ["snapshot-t03", "--runs", str(self.runs), "--out", str(self.out)]
         )
         self.snap = json.loads((self.out / "snapshot-t03.json").read_text())
@@ -158,7 +158,7 @@ class Case:
         argv += ["--install", str(self.install)]
         if export:
             argv += ["--export", str(self.export)]
-        rc = self.ue.main(argv)
+        rc = self.engine_mod.main(argv)
         self.rec = json.loads((self.out / "report-t03.json").read_text())
         return rc
 
@@ -170,8 +170,8 @@ class Case:
 
 
 @pytest.fixture
-def case(ue, tmp_path, monkeypatch):
-    c = Case(ue, tmp_path, monkeypatch)
+def case(engine_mod, tmp_path, monkeypatch):
+    c = Case(engine_mod, tmp_path, monkeypatch)
     assert c.snapshot() == 0
     return c
 
@@ -218,8 +218,8 @@ def test_t01_valid_run(case):
 
 
 # T02: the notebook names a run folder that existed before the snapshot
-def test_t02_old_root_named(ue, tmp_path, monkeypatch):
-    c = Case(ue, tmp_path, monkeypatch)
+def test_t02_old_root_named(engine_mod, tmp_path, monkeypatch):
+    c = Case(engine_mod, tmp_path, monkeypatch)
     root = make_root(c.runs)
     c.snapshot()
     nb = write_notebook(c.runs, lines_for(root.resolve()))
@@ -271,8 +271,8 @@ def test_t05_no_substitution(case):
 
 # T06: notebook missing, older than the snapshot, unchanged since it
 @pytest.mark.parametrize("kind", ["missing", "older", "unchanged"])
-def test_t06_notebook_provenance(ue, tmp_path, monkeypatch, kind):
-    c = Case(ue, tmp_path, monkeypatch)
+def test_t06_notebook_provenance(engine_mod, tmp_path, monkeypatch, kind):
+    c = Case(engine_mod, tmp_path, monkeypatch)
     root = make_root(c.runs)
     if kind == "unchanged":
         nb = write_notebook(c.runs, lines_for(root.resolve()))
@@ -477,17 +477,17 @@ def test_t16_non_finite(case, value):
     assert "non-finite values at the last time step" in errors_text(case.rec)
 
 
-def test_con_structured_dims_checked_before_reading(ue, tmp_path):
+def test_con_structured_dims_checked_before_reading(engine_mod, tmp_path):
     missing = tmp_path / "not_there.con"
     for dims in [(0, 2, 3), (2, -1, 3), (2, 2, 3.0)]:
         with pytest.raises(ValueError, match="invalid dimensions"):
-            ue.con_structured(missing, *dims, CALENDAR)
+            engine_mod.con_structured(missing, *dims, CALENDAR)
     with pytest.raises(ValueError, match="empty calendar"):
-        ue.con_structured(missing, 2, 2, 3, ())
+        engine_mod.con_structured(missing, 2, 2, 3, ())
 
 
 # T17: Windows paths, checked as strings (not on a Windows file system)
-def test_t17_windows_path_strings(ue):
+def test_t17_windows_path_strings(engine_mod):
     root = r"D:\a\flopy\flopy\flopy\.docs\Notebooks\Ex3_CLN_Conduit_dhw4ciib"
     head = f"USG-Transport version 2.8.1; {NORMAL};"
     lines = [
@@ -495,19 +495,19 @@ def test_t17_windows_path_strings(ue):
         (1, 1, f"no_dispersion: {head} {root}\\no_dispersion"),
         (2, 1, f"dispersion: {head} {root.upper()}\\dispersion"),
     ]
-    rec, errors = ue.t03_stdout(lines, ntpath)
+    rec, errors = engine_mod.t03_stdout(lines, ntpath)
     assert errors == [] and rec["root"] == root
     lines[2] = (
         2,
         1,
         f"dispersion: USG-Transport version 2.8.1; {NORMAL}; {root}x\\dispersion",
     )
-    assert "dispersion: workspace" in "".join(ue.t03_stdout(lines, ntpath)[1])
+    assert "dispersion: workspace" in "".join(engine_mod.t03_stdout(lines, ntpath)[1])
 
 
 # T18: paths with spaces, on the file system
-def test_t18_paths_with_spaces(ue, tmp_path, monkeypatch):
-    c = Case(ue, tmp_path, monkeypatch, runs_name="Note books")
+def test_t18_paths_with_spaces(engine_mod, tmp_path, monkeypatch):
+    c = Case(engine_mod, tmp_path, monkeypatch, runs_name="Note books")
     c.snapshot()
     root, _ = c.valid("Ex3_CLN_Conduit_a b c d")
     assert c.report() == 0, c.rec["errors"]
@@ -651,9 +651,9 @@ def test_t21_snapshot(case, kind):
     assert msg in errors_text(case.rec)
 
 
-def test_snapshot_t03_failure_writes_json(ue, tmp_path):
+def test_snapshot_t03_failure_writes_json(engine_mod, tmp_path):
     out = tmp_path / "out"
-    rc = ue.main(
+    rc = engine_mod.main(
         ["snapshot-t03", "--runs", str(tmp_path / "nowhere"), "--out", str(out)]
     )
     rec = json.loads((out / "snapshot-t03.json").read_text())
@@ -661,7 +661,7 @@ def test_snapshot_t03_failure_writes_json(ue, tmp_path):
 
 
 # stdout fragments, several outputs per cell, other streams and cell limits
-def test_stdout_fragments_and_cells(ue):
+def test_stdout_fragments_and_cells(engine_mod):
     def out(text, name="stdout"):
         return {"output_type": "stream", "name": name, "text": text}
 
@@ -679,7 +679,7 @@ def test_stdout_fragments_and_cells(ue):
             {"cell_type": "markdown"},
         ]
     }
-    assert ue.notebook_stdout_lines(nb) == [
+    assert engine_mod.notebook_stdout_lines(nb) == [
         (0, 1, "Model output files are written in /r/Ex3_CLN_Conduit_x"),
         (1, 1, "dispersion: "),
         (2, 1, "USG-Transport version"),
@@ -770,10 +770,10 @@ def make_stallman(runs, name="Ex6_Stallman_abc12345"):
     return root
 
 
-def test_t22_t23_stallman_regression(ue, tmp_path):
+def test_t22_t23_stallman_regression(engine_mod, tmp_path):
     runs, out = tmp_path / "Notebooks", tmp_path / "out"
     runs.mkdir()
-    assert ue.main(["snapshot", "--runs", str(runs), "--out", str(out)]) == 0
+    assert engine_mod.main(["snapshot", "--runs", str(runs), "--out", str(out)]) == 0
     snap = json.loads((out / "snapshot.json").read_text())
     assert set(snap) == {"command", "argv", "errors", "python", "python_version",
                          "runs", "time", "roots", "notebook_mtime"}  # fmt: skip
@@ -785,7 +785,7 @@ def test_t22_t23_stallman_regression(ue, tmp_path):
         name="mfusg_transport_tutorial06_StallmanHeatTransport.ipynb",
     )
     argv = ["report", "--runs", str(runs), "--snapshot", str(out / "snapshot.json")]
-    assert ue.main(argv + ["--out", str(out)]) == 0
+    assert engine_mod.main(argv + ["--out", str(out)]) == 0
     rec = json.loads((out / "report.json").read_text())
     assert set(rec) == {"command", "argv", "errors", "python", "python_version",
                         "expected_version", "snapshot", "attempts",
@@ -799,10 +799,10 @@ def test_t22_t23_stallman_regression(ue, tmp_path):
     ]
 
 
-def test_t22_stallman_selected_run_must_pass(ue, tmp_path):
+def test_t22_stallman_selected_run_must_pass(engine_mod, tmp_path):
     runs, out = tmp_path / "Notebooks", tmp_path / "out"
     runs.mkdir()
-    assert ue.main(["snapshot", "--runs", str(runs), "--out", str(out)]) == 0
+    assert engine_mod.main(["snapshot", "--runs", str(runs), "--out", str(out)]) == 0
     root = make_stallman(runs)
     (root / "solute" / "Ex6_Stallman.list").write_text(" USG-TRANSPORT VERSION 2.7.0\n")
     write_notebook(
@@ -811,7 +811,7 @@ def test_t22_stallman_selected_run_must_pass(ue, tmp_path):
         name="mfusg_transport_tutorial06_StallmanHeatTransport.ipynb",
     )
     argv = ["report", "--runs", str(runs), "--snapshot", str(out / "snapshot.json")]
-    assert ue.main(argv + ["--out", str(out)]) == 1
+    assert engine_mod.main(argv + ["--out", str(out)]) == 1
     rec = json.loads((out / "report.json").read_text())
     assert any("version 2.7.0, expected 2.8.1" in e for e in rec["errors"])
 
@@ -824,7 +824,7 @@ def test_t24_conduit_report_ignores_stallman(case):
     assert [a["root"] for a in case.rec["attempts"]] == [str(root.resolve())]
 
 
-def test_earlier_commands_without_network(ue, tmp_path):
+def test_earlier_commands_without_network(engine_mod, tmp_path):
     dest = tmp_path / "dl"
     dest.mkdir()
     (dest / "mfusgt-v2.8.1-linux.zip").write_bytes(b"not the pinned asset")
@@ -838,11 +838,11 @@ def test_earlier_commands_without_network(ue, tmp_path):
         "--ostag",
         "linux",
     ]
-    assert ue.main(argv + ["--out", str(out)]) == 1
+    assert engine_mod.main(argv + ["--out", str(out)]) == 1
     rec = json.loads((out / "fetch-mfusgt-v2.8.1.json").read_text())
     assert rec["errors"][0].startswith("FileExistsError") and rec["attempts"] == []
     argv = ["install-usgt", "--downloads", str(dest), "--bindir", str(tmp_path / "b")]
-    assert ue.main(argv + ["--ostag", "linux", "--out", str(out)]) == 1
+    assert engine_mod.main(argv + ["--ostag", "linux", "--out", str(out)]) == 1
     rec = json.loads((out / "install-usgt.json").read_text())
     assert rec["errors"] == [
         f"{dest / 'mfusgt-v2.8.1-linux.zip'}: sha256 differs from the pinned value"

@@ -650,7 +650,7 @@ can be built from Python/numpy without first loading an existing model.
   `Raw/text round-trip` to **`Full (authoring)`**, reversing the Stage 3 Card 4
   "keep raw/text" decision. Audited `GWF2TIB1RP` in `glo2basu1.f` and added a
   semantic `stress_period_data` constructor plus a `parse=True` loader covering
-  the full grammar: flow blocks (`NIB0` inactivate / `NIB1` activate / `NIBM1`
+  the full grammar: flow blocks (`NIB0` deactivate / `NIB1` activate / `NIBM1`
   prescribed-head, with `HEAD`/`AVHEAD`/bare) and transport blocks
   (`NICB0`/`NICB1`/`NICBM1`, with multi-component `CONC`/`AVCONC`/bare); `NIB0`/
   `NICB0` node lists via `U1DINT`; 3- vs 6-int header keyed to BCT presence;
@@ -696,7 +696,7 @@ can be built from Python/numpy without first loading an existing model.
   (collapsed into per-cell top/botm) — it fails explicitly rather than inventing
   elevations. `MfUsgGsf.load` still **defaults to the byte-faithful raw `lines`
   round-trip** (what `MfUsg.load` uses), with raw fallback when `parse=True`
-  meets an unparseable file; raw `lines` and semantic data are mutually
+  meets an unparsable file; raw `lines` and semantic data are mutually
   exclusive. Five new tests (semantic load, from-scratch authoring, write/reload,
   invalid-ref + mixed-mode rejection, `from_grid`) join the three existing raw
   tests. Focused suite **114 passed**, exe suite **3 passed**, combined

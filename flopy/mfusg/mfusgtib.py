@@ -7,10 +7,10 @@ Reference: Fortran subroutine ``GWF2TIB1RP`` in ``glo2basu1.f`` of USG-Transport
 Per-stress-period free-format layout:
 
     NIB0 NIB1 NIBM1 [NICB0 NICB1 NICBM1]   <- 3 ints, or 6 with transport (BCT)
-    [NIB0  node ids via U1DINT       -> IBOUND := 0   (inactivate flow)]
+    [NIB0  node ids via U1DINT       -> IBOUND := 0   (deactivate flow)]
     [NIB1  lines: ICELL [HEAD v|AVHEAD]  -> IBOUND := 1   (activate flow)]
     [NIBM1 lines: ICELL [HEAD v|AVHEAD]  -> IBOUND := -1  (prescribed head)]
-    [NICB0 node ids via U1DINT       -> ICBUND := 0   (inactivate transport)]
+    [NICB0 node ids via U1DINT       -> ICBUND := 0   (deactivate transport)]
     [NICB1 lines: ICELL [CONC c..|AVCONC] -> ICBUND := 1   (activate transport)]
     [NICBM1 lines: ICELL [CONC c..|AVCONC] -> ICBUND := -1 (prescribed conc)]
 
@@ -64,8 +64,8 @@ class MfUsgTib(Package):
         that kind this period"). All node numbers are **0-based**; the writer
         converts to 1-based file ids.
 
-        ``"ib0"``  : array-like of node ids to inactivate (``IBOUND := 0``).
-        ``"icb0"`` : array-like of node ids to inactivate transport
+        ``"ib0"``  : array-like of node ids to deactivate (``IBOUND := 0``).
+        ``"icb0"`` : array-like of node ids to deactivate transport
             (``ICBUND := 0``); requires a BCT package on the model.
         ``"ib1"``  : list of ``(node, head)`` to activate (``IBOUND := 1``).
         ``"ibm1"`` : list of ``(node, head)`` for prescribed head

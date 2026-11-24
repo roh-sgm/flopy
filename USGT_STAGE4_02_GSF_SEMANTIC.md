@@ -167,7 +167,7 @@ Implemented:
 - Semantic constructor `MfUsgGsf(model, vertices=[(x,y,z),...], node_data=[{node,
   xc, yc, zc, layer, vertices}], header=..., nlay=..., extra_header=...)`.
 - `parse=True` loader (`_parse_semantic`) recovering the same structure, with
-  raw fallback on any unparseable/inconsistent file.
+  raw fallback on any unparsable/inconsistent file.
 - Semantic writer producing valid GSF with **1-based** node/vertex/layer ids
   from **0-based** Python data.
 - `from_grid(model, grid, zverts)` — builds from an `UnstructuredGrid`; requires
