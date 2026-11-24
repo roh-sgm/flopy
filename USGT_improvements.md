@@ -20,6 +20,122 @@ upstream flopy. They live here while testing continues.
 
 ## What's added
 
+### Stage 5.RCH-F41 — RCH concentration flags, IRCH reuse and INIRCH
+
+- Audited against `GWF2RCH8U1AR`/`RP` (`gwf2rch8u1.f`), the recharge terms of the
+  transport equation (`gwt2bndsu1.f`) and the RTS updates (`glo2basu1.f`, ATS1AJ) of
+  USG-T 2.8.1.
+- `MfUsgRch` takes IRCHCONC as `irchconc` (one 0/1 flag per MCOMPT component, 1 by
+  default) and keeps it through load and write. Before, load read it and dropped it,
+  so a file with `1 0` was rewritten as `1 1` with one concentration array more.
+  Only the arrays of components with flag 1 are written; INCONC only in periods
+  with data.
+- The CONC option needs the component counts of a BCT package, or counts set by
+  hand on a model without BCT; they are checked again before writing.
+- Unstructured grids, NRCHOP=2: a period without `irch` data writes INIRCH -1 and
+  no array (it wrote the node count without the array, which USG-T cannot read);
+  load keeps the reuse. Period 1 must read IRCH.
+- Keywords (CONC, SEEPELEV, RTS, INCONC, INSELEV, INRCHZONES) are read as whole
+  words in any case, as URWORD reads them.
+- Structured grids, NRCHOP=2: USG-T uses INIRCH as the number of recharge cells in
+  the transport terms (`gwt2bndsu1.f` :3508, :3521; the mass budget uses the same
+  count, :3586, :3599) and in the RTS updates (`glo2basu1.f` :3342, :3353). With
+  INIRCH = 1 only the first cell gets the recharge concentration or the RTS
+  record: the other cells take recharge without mass, and nothing in the output
+  shows it. `MfUsgRch` keeps the INIRCH read in each period (`inirch`); with CONC
+  or RTS a new model writes NROW*NCOL, a lower value read from a file is kept and
+  `write_file` warns with the consequence, and `inirch_ncpl=True` writes NROW*NCOL
+  in every period that reads IRCH. Without CONC and RTS nothing changes.
+- Not written, with the equivalent input in the message (`NotImplementedError`,
+  each backed by a run with both engines): a period that reuses IRCH with CONC (no
+  recharge mass in that period) or with RTS (the RTS records after the start of
+  the period are not applied); RTS with an IRCH node above the number of IRCH
+  nodes (unstructured) or below layer 1 (structured), whose zone USG-T looks up in
+  IZNRCH positions it never read.
+- Rejected before the file is opened (`ValueError`): IRCHCONC other than 0 or 1;
+  `irchconc`/`rchconc` without CONC; a flag 1 without concentrations in period 1
+  (USG-T allocates RCHCONC without initial values, `gwf2rch8u1.f` :120); no IRCH in
+  period 1.
+- Limits: with RTS and NRCHOP=2 USG-T takes the zone by node number, not by the
+  position of the entry; a loaded file with RTS, a low INIRCH and a period that
+  reuses RECH is not reproduced on rewrite (RECH is written in every period, as
+  upstream FloPy does); the RTS file contents are not read; fixed format.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_rch_f41.py`): FloPy file =
+  hand-written file for IRCHCONC `1 0`, for IRCH that changes and that is reused,
+  and for INIRCH 1 and NROW*NCOL, with the recharge mass and the RTS rates read
+  from the listing.
+
+### Stage 5.CLN-T1 — CLN transport data per component
+
+- Audited against `SGWT2BCT1CLN` (`glo2btnu1.f` :2034-2165) of USG-T 2.8.1; there
+  is one reader for structured and unstructured grids.
+- `MfUsgCln` builds, writes and loads the transport block for the NTCOMP
+  components: `conc` has NTCOMP entries (species, temperature with IHEAT=1,
+  immobile components); `zodrw`/`fodrw` have MCOMP entries and are written only
+  with IZOD/IFOD 1 or 3; `sptlrct` has, for each component, MCOMP arrays (one per
+  parent position). Before, the block was written for MCOMP components, one
+  SPTLRCT array per component and ZODRW/FODRW with any IZOD/IFOD, which gave files
+  short of, or with more, arrays than USG-T reads.
+- A flat list in `sptlrct[i]` is one array per node, as in upstream FloPy; one
+  array per parent needs a list of exactly MCOMP arrays.
+- `write_file` and `load` work out the layout before the file is opened;
+  `write_file` raises `ValueError` if the BCT package or the model counts changed
+  since the package was built.
+- Guards (`NotImplementedError`, a protection, not support), each backed by a
+  run with both engines: SPATIALREACT without CHAINDECAY (USG-T allocates SPTLRCT
+  only with CHAINDECAY but reads it for the CLN nodes: remove SPATIALREACT) and
+  IZOD/IFOD=3 with IADSORB=0 (ZODRW/FODRW are not allocated: use 1).
+- Limits: with BAS DPIN, USG-T reads the CLN CONC values and does not use them
+  (:2152-2157); a sequence longer than the components is accepted and the extra
+  entries are not written, as before.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_cln_transport.py`).
+
+### Stage 5.BCT-B2 — BCT CHAINDECAY, SPATIALREACT, MULTIFILE and REACTION1
+
+- Audited against `SGWT2BCT1S` and `SGWT2BCT1G` (`glo2btnu1.f`) of USG-T 2.8.1.
+- CHAINDECAY: NPARENT per species, then NPARENT values of JPARENT and of STOTIO.
+  `nparent` is required; JPARENT and STOTIO were built with MCOMP values whatever
+  NPARENT was. With SPATIALREACT, one SPTLRCT array per layer for each parent
+  replaces STOTIO (`sptlrct`); it was not written at all.
+- The chain data are checked when the package is built, before the model is
+  changed, and again by `write_file` before the file is opened.
+- Unstructured grids run with local USG-T 2.8.1 and 2.7.0 builds
+  (`test_usgt_bct_b2.py`): FloPy file = hand-written file, sensitivity to each
+  STOTIO coefficient, uniform SPTLRCT = STOTIO.
+- Structured grids are read and written only. USG-T 2.8.1 reads JPARENT into
+  ITEMP after deallocating it (:912-923, :1165); compiled with gfortran, 2.8.1 and
+  2.7.0 stop with a segmentation fault while reading the file, so `write_file`
+  warns for a structured grid with parents. Line 1176 gives every STOTIO
+  coefficient of a species the last value read; this is read in the source and
+  not observed.
+- MULTIFILE: no code change; a reading/writing test and an engine test (the root
+  name is read in upper case).
+- REACTION1 raises `NotImplementedError` when the package is built and on load:
+  USG-T 2.8.1 reads a reaction block from the BCT file that `MfUsgBct` does not
+  write or read. USG-T 2.7.0 ignores the option.
+- Limits: parents are checked in 1..MCOMP (USG-T accepts up to NTCOMP); IMCOMP with
+  per-species data stays guarded.
+
+### Stage 5.MDT-FIXED — MDT header in fixed format
+
+- Audited against `GWT2MDTU1AR` (`gwt2mdtu1.for` :76-127) of USG-T 2.8.1: with
+  IFREFM=0 the header is `READ(IN,'(I10)') IMDTCB, IMDTCF`, so IMDTCF is the I10
+  field of the next record, comments are not skipped and the options are searched
+  in a line that this branch never reads.
+- `MfUsgMdt` writes and loads the two I10 records without a heading in
+  fixed-format models. A blank field is 0 and blanks inside a field are ignored,
+  as USG-T 2.8.1 and 2.7.0 compiled with gfortran read it; other text raises
+  `ValueError`. Free format is unchanged.
+- The header options (FRAHK, FRADARCY, TSHIFTMD, SEPARATE_AI2, MULTIFILE_MD) raise
+  `ValueError` in a fixed-format model, when the package is built and before the
+  file is opened: USG-T ignores them there without a message.
+- Limits: the format is taken from the model, so `MfUsg.load` must read BAS6
+  before MDT; with IDPF!=0 the fixed format is checked by reading and writing only;
+  the failure of a free-format header in a fixed-format model is a gfortran
+  runtime error, not observed with the official Windows executable.
+- Run with local USG-T 2.8.1 and 2.7.0 builds (`test_usgt_mdt_fixed.py`): FloPy
+  file = hand-written file = free-format run, plus sensitivity.
+
 ### Stage 5.SMOKE — model check with HFB, STR on the base class, free_format_npl on load
 
 - Four items that made the smoke-test job fail. Three of the failing tests are
