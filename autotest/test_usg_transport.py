@@ -16280,9 +16280,17 @@ def test_mfusgbct_load_imcomp_manual_file(function_tmpdir):
         ({"imcomp": 1}, "requires imconc"),
         ({"imcomp": 2, "imconc": [41.0]}, "1 values for imcomp=2"),
         ({"imcomp": 1, "imconc": [41.0, 42.0]}, "2 values for imcomp=1"),
-        ({"imcomp": -1}, "imcomp must be an integer >= 0"),
-        ({"imcomp": 1.5, "imconc": 41.0}, "imcomp must be an integer >= 0"),
-        ({"mcomp": -1}, "mcomp must be an integer >= 0"),
+        pytest.param(
+            {"imcomp": -1}, "imcomp must be an integer >= 0", id="imcomp_negative"
+        ),
+        pytest.param(
+            {"imcomp": 1.5, "imconc": 41.0},
+            "imcomp must be an integer >= 0",
+            id="imcomp_not_integer",
+        ),
+        pytest.param(
+            {"mcomp": -1}, "mcomp must be an integer >= 0", id="mcomp_negative"
+        ),
     ],
 )
 def test_mfusgbct_invalid_counts_rejected(function_tmpdir, kw, match):
@@ -16679,7 +16687,7 @@ def _b2_hand(kind, factors_text, flag=1):
         ("0.5 0.75\n", [0.5, 0.75]),
         ("0.5\n0.75\n", [0.5, 0.75]),
         ("0.5, 0.75\n", [0.5, 0.75]),
-        ("2*0.5\n", [0.5, 0.5]),
+        pytest.param("2*0.5\n", [0.5, 0.5], id="repeat_2x0.5"),
         ("0.5 0.75 9.9\n", [0.5, 0.75]),  # rest of the last record skipped
     ],
 )
