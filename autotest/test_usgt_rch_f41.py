@@ -49,7 +49,7 @@ from flopy.mfusg import (
     MfUsgSms,
 )
 from flopy.modflow import ModflowChd, ModflowDis
-from flopy.utils import Util2d
+from flopy.utils import Transient2d, Util2d
 
 _KEYWORDS = {
     "CONC",
@@ -908,8 +908,19 @@ def test_rch_structured_inirch_ncpl_override(function_tmpdir, source):
     assert _reload(function_tmpdir / "out.rch", ml).inirch == {0: 6, 1: 6}
 
 
+_DISU_INIRCH = (
+    r"on an unstructured grid: INIRCH is the size of the irch array of the "
+    r"period; inirch only takes values < 0 \(reuse irch\)"
+)
 _BAD_INIRCH = {
-    "disu": ("disu", {"inirch": {0: 5}}, "structured"),
+    "disu": ("disu", {"inirch": {0: 5}}, _DISU_INIRCH),
+    "disu_zero": ("disu", {"inirch": {0: 0}}, _DISU_INIRCH),
+    "disu_negative_with_irch": ("disu", {"inirch": {0: -1}}, "does not read it"),
+    "disu_nrchop3_inirch": (
+        "disu",
+        {"nrchop": 3, "inirch": {0: -1}},
+        r"inirch needs nrchop=2 \(structured grid or DISU\)",
+    ),
     "nrchop3": ("dis", {"nrchop": 3, "inirch_ncpl": True}, "structured"),
     "ncpl_not_bool": ("dis", {"inirch_ncpl": "yes"}, "True or False"),
     "not_int": ("dis", {"inirch": {0: 1.5}}, "not an integer"),
@@ -946,7 +957,12 @@ def test_rch_structured_inirch_rejected(function_tmpdir, case):
         }
     base.update(iconc=1, rchconc=1.0)
     args = {**base, **kwargs}
-    if case in ("negative_with_irch", "positive_without_irch", "above_ncpl"):
+    if case in (
+        "negative_with_irch",
+        "positive_without_irch",
+        "above_ncpl",
+        "disu_negative_with_irch",
+    ):
         if case == "positive_without_irch":
             args.update(iconc=0, rchconc=None)
         rch = MfUsgRch(ml, **args)
@@ -1307,7 +1323,7 @@ _REUSE_RTS = (
 )
 _REUSE_FIX = (
     r"Set inirch_ncpl=True to write the current IRCH in those periods, or "
-    r"give irch for every stress period\."
+    r"remove the negative inirch of those periods\."
 )
 _REUSE_CASES = ["s_conc", "s_rts", "disu_conc", "disu_rts"]
 _IRCH5 = _iblk([1, 2, 3, 4, 5])
@@ -1439,11 +1455,11 @@ def test_rch_irch_reuse_kept_on_load_write(function_tmpdir, case):
     assert _no_names(out) == _no_names(_write(full, full_ws))
 
 
-def _reuse_api(ws, case, irch_all):
+def _reuse_api(ws, case, irch_all, **extra):
     """New model of 3 stress periods with irch given for period 1 only or
     for every period (irch_all); s_*: structured 2 x 3, disu_*: DISU 5
     nodes; with CONC (conc in case) and/or RTS 2 (rts in case), or neither
-    (*_flow)."""
+    (*_flow); extra: other MfUsgRch arguments (inirch)."""
     nper = 3
     if case.startswith("s_"):
         ml = _dis(ws, nper=nper, mcomp=1 if "conc" in case else 0)
@@ -1457,40 +1473,62 @@ def _reuse_api(ws, case, irch_all):
         kwargs.update(iconc=1, rchconc=1.0)
     if "rts" in case:
         kwargs.update(mxrtzones=2, iznrch={0: zones}, iniznrch={0: 2})
+    kwargs.update(extra)
     irch = dict.fromkeys(range(nper), irch0) if irch_all else {0: irch0}
     return MfUsgRch(ml, nrchop=2, ipakcb=50, rech=rech, irch=irch, **kwargs)
 
 
-@pytest.mark.parametrize(
-    "case", [*_REUSE_CASES, "s_conc_rts", "disu_conc_rts", "s_flow", "disu_flow"]
-)
-def test_rch_irch_reuse_api(function_tmpdir, case):
+_ALL_CASES = [*_REUSE_CASES, "s_conc_rts", "disu_conc_rts", "s_flow", "disu_flow"]
+
+
+@pytest.mark.parametrize("case", _ALL_CASES)
+def test_rch_irch_default_new_model(function_tmpdir, case):
     """New model with irch for period 1 only: with CONC, RTS or both,
-    periods 2 and 3 reuse IRCH (INIRCH -1) with one warning that names the
-    two periods and the consequence of each option, and
-    inirch_ncpl=True writes the file of the same model with irch for every
-    period, without a warning. Without CONC and RTS there is no warning and
-    the reuse is written, also with inirch_ncpl."""
+    periods 2 and 3 write the current IRCH with its full count (NROW*NCOL,
+    or the node count on DISU), without a warning: the file of the same
+    model with irch for every period. Without CONC and RTS they reuse IRCH
+    (INIRCH -1) without a warning, also with inirch_ncpl."""
     rch = _reuse_api(function_tmpdir, case, irch_all=False)
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    n = "6" if case.startswith("s_") else "5"
+    if "flow" in case:
+        assert _inirch_of(out) == ["1" if n == "6" else n, "-1", "-1"]
+        rch.inirch_ncpl = True
+        out, msgs = _write_warns(rch, function_tmpdir)
+        assert msgs == []
+        assert _inirch_of(out) == [n, "-1", "-1"]
+        return
+    assert _inirch_of(out) == [n, n, n]
+    full_ws = function_tmpdir / "full"
+    full = _reuse_api(full_ws, case, irch_all=True)
+    assert _no_names(out) == _no_names(_write(full, full_ws))
+
+
+@pytest.mark.parametrize("case", _ALL_CASES)
+def test_rch_irch_reuse_explicit_api(function_tmpdir, case):
+    """New model with irch for period 1 only and inirch -1 given for periods
+    2 and 3 (also on DISU, where inirch only takes values < 0): the reuse is
+    written; with CONC, RTS or both one warning names the two periods, the
+    consequence of each option and the way out, and inirch_ncpl=True writes
+    the current IRCH there, the file of the model with irch for every
+    period, without a warning. Without CONC and RTS there is no warning."""
+    rch = _reuse_api(function_tmpdir, case, irch_all=False, inirch={1: -1, 2: -1})
     out, msgs = _write_warns(rch, function_tmpdir)
     assert _inirch_of(out)[1:] == ["-1", "-1"]
     if "flow" in case:
         assert msgs == []
-    else:
-        assert len(msgs) == 1
-        _check_reuse_warning(msgs[0], case, "2 (INIRCH -1), 3 (INIRCH -1)")
+        return
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], case, "2 (INIRCH -1), 3 (INIRCH -1)")
 
     rch.inirch_ncpl = True
     out, msgs = _write_warns(rch, function_tmpdir)
     assert msgs == []
-    if "flow" in case:
-        n = "6" if case.startswith("s_") else "5"
-        assert _inirch_of(out) == [n, "-1", "-1"]
-    else:
-        full_ws = function_tmpdir / "full"
-        full = _reuse_api(full_ws, case, irch_all=True)
-        assert _no_names(out) == _no_names(_write(full, full_ws))
-        assert len(set(_inirch_of(out))) == 1
+    full_ws = function_tmpdir / "full"
+    full = _reuse_api(full_ws, case, irch_all=True)
+    assert _no_names(out) == _no_names(_write(full, full_ws))
+    assert len(set(_inirch_of(out))) == 1
 
 
 @requires_usgt
@@ -1673,3 +1711,374 @@ def test_usgt_exe_rch_structured_irch_reuse_ncpl_current(function_tmpdir, case):
     _, msgs = _write_warns(rch, ws, "t.rch")
     assert msgs == []
     assert _exe_run(ws) == expected
+
+
+# ------------------------------------------- new default (N4) and marker
+@pytest.mark.parametrize("case", ["disu_conc", "disu_rts"])
+def test_rch_disu_inirch_marker_loaded(function_tmpdir, case):
+    """DISU NRCHOP=2: load keeps the INIRCH < 0 read as inirch (the reuse
+    marker); a file that reads IRCH in every period gives no marker."""
+    ml = _reuse_model(function_tmpdir, case)
+    rch = _load(function_tmpdir, _reuse_text(case, True)[0], ml)
+    assert rch.inirch == {1: -1}
+    full = _load(function_tmpdir, _reuse_text(case, False)[0], ml)
+    assert full.inirch is None
+
+
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_rch_irch_reuse_round_trip_twice(function_tmpdir, case):
+    """A file that reuses IRCH with CONC or RTS keeps the reuse, with one
+    warning, through two rounds of load and write (same text)."""
+    ml = _reuse_model(function_tmpdir, case)
+    text, heads = _reuse_text(case, True)
+    rch = _load(function_tmpdir, text, ml)
+    out1, m1 = _write_warns(rch, function_tmpdir, "o1.rch")
+    again = _reload(function_tmpdir / "o1.rch", ml)
+    out2, m2 = _write_warns(again, function_tmpdir, "o2.rch")
+    assert _heads(out1) == _heads(out2) == heads
+    assert len(m1) == len(m2) == 1
+    assert out1 == out2
+
+
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_rch_new_default_file_load_write(function_tmpdir, case):
+    """The file of a new model with CONC or RTS and irch for period 1 only
+    (the current IRCH in every period) loads with IRCH and INIRCH in every
+    period and is written again with the same INIRCH and IRCH, without a
+    warning; a second round gives the same text (after load RECH is data
+    of every period, as upstream FloPy keeps it)."""
+    rch = _reuse_api(function_tmpdir, case, irch_all=False)
+    ml = rch.parent
+    out1, m1 = _write_warns(rch, function_tmpdir, "o1.rch")
+    again = _reload(function_tmpdir / "o1.rch", ml)
+    structured = case.startswith("s_")
+    n = 6 if structured else 5
+    assert again.inirch == (dict.fromkeys(range(3), n) if structured else None)
+    layers = [u2d.array.tolist() for u2d in again.irch.transient_2ds.values()]
+    assert sorted(again.irch.transient_2ds) == [0, 1, 2]
+    assert layers[1] == layers[2] == layers[0]
+    out2, m2 = _write_warns(again, function_tmpdir, "o2.rch")
+    assert m1 == m2 == []
+    assert _inirch_of(out2) == _inirch_of(out1) == [str(n)] * 3
+    third = _reload(function_tmpdir / "o2.rch", ml)
+    out3, m3 = _write_warns(third, function_tmpdir, "o3.rch")
+    assert m3 == []
+    assert out3 == out2
+
+
+def test_rch_disu_inirch_marker_edges(function_tmpdir):
+    """DISU, loaded file with CONC that reuses IRCH in period 2: irch given
+    for period 2 afterwards contradicts the marker, a marker beyond the
+    stress periods and the list form (period 1 reads irch) are rejected
+    (ValueError, no file); inirch=None writes the current IRCH there
+    without a warning."""
+    ml = _reuse_model(function_tmpdir, "disu_conc")
+    rch = _load(function_tmpdir, _reuse_text("disu_conc", True)[0], ml)
+    irch = rch.irch
+    a = irch.transient_2ds[0].array
+    rch.irch = Transient2d(ml, (1, 5), np.int32, {0: a, 1: a}, "irch")
+    with pytest.raises(ValueError, match="period 2 but INIRCH -1 does not read it"):
+        _write(rch, function_tmpdir)
+    rch.irch = irch
+    for inirch, match in (
+        ({2: -1}, r"inirch: stress period 2 not in 0\.\.1"),
+        ([-1, -1], "period 1 but INIRCH -1 does not read it"),
+    ):
+        rch.inirch = inirch
+        with pytest.raises(ValueError, match=match):
+            _write(rch, function_tmpdir)
+    assert not (function_tmpdir / "out.rch").exists()
+    rch.inirch = None
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    assert _inirch_of(out) == ["5", "5"]
+
+
+def _default_exe_model(ws, case):
+    """Engine model of case: s_conc (structured 1 x 5) and disu_conc (DISU
+    5 nodes) with 2 periods and CONC; s_rts (structured 2 x 3) and disu_rts
+    (DISU 5 nodes) with 3 periods, ATSA and rech.rts."""
+    if case == "s_conc":
+        return _dis_exe_model(ws, nper=2)
+    if case == "disu_conc":
+        return _exe_model(ws, nper=2, mcomp=1)
+    return _rts3_model(ws, case)
+
+
+def _default_exe(ws, case, variant):
+    """MfUsgRch of the _default_exe_model of case, built with the API: irch
+    for period 1 only ("default"), for every period ("all"), or for period
+    1 only with inirch -1 in the later periods ("reuse")."""
+    ml = _default_exe_model(ws, case)
+    nper = ml.nrow_ncol_nlay_nper[3]
+    if case.startswith("s_"):
+        irch0, rech, zones = 0, 1.0e-3, _ZN23
+    else:
+        irch0 = np.array([[0, 1, 2, 3, 4]])
+        rech, zones = np.full((1, 5), 1.0e-3), np.array([[1, 2, 1, 2, 1]])
+    kwargs = {}
+    if "conc" in case:
+        kwargs.update(iconc=1, rchconc=1.0)
+    else:
+        kwargs.update(mxrtzones=2, iznrch={0: zones}, iniznrch={0: 2})
+    irch = dict.fromkeys(range(nper), irch0) if variant == "all" else {0: irch0}
+    if variant == "reuse":
+        kwargs["inirch"] = dict.fromkeys(range(1, nper), -1)
+    return MfUsgRch(ml, nrchop=2, ipakcb=50, rech=rech, irch=irch, **kwargs)
+
+
+@requires_usgt
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_usgt_exe_rch_irch_default_new_model(function_tmpdir, case):
+    """With the engine: the new model with CONC or RTS and irch for period 1
+    only runs exactly like the model with irch for every period (heads,
+    budget, recharge and recharge mass), and so does its file loaded and
+    written again (RECH then data of every period). The model with inirch
+    -1 in the later periods (the previous default) differs: with CONC no
+    recharge mass in period 2; with RTS (three periods) the RTS records
+    read during periods 2 and 3 are not applied."""
+    runs = {}
+    for variant in ("default", "all", "reuse"):
+        ws = function_tmpdir / variant
+        rch = _default_exe(ws, case, variant)
+        _, msgs = _write_warns(rch, ws, "t.rch")
+        assert len(msgs) == (1 if variant == "reuse" else 0)
+        runs[variant] = _exe_run(ws)
+    ws = function_tmpdir / "rewritten"
+    text = (function_tmpdir / "default" / "t.rch").read_text()
+    rch = _load(ws, text, _default_exe_model(ws, case), "orig.rch")
+    out, msgs = _write_warns(rch, ws, "t.rch")
+    assert msgs == []
+    assert [h[0] for h in _heads(out)][1:] == ["1"] * (len(_heads(out)) - 1)
+    runs["rewritten"] = _exe_run(ws)
+    assert runs["default"] == runs["all"] == runs["rewritten"]
+    if "conc" in case:
+        # cumulative RCH mass in (IN and OUT lines alternate)
+        mass = [float(m) for m in runs["default"]["rch_mass"][0::2]]
+        kept = [float(m) for m in runs["reuse"]["rch_mass"][0::2]]
+        end1 = len(mass) // 2 - 1
+        assert len(mass) == len(kept) == 4
+        assert mass[-1] > mass[end1] == kept[end1] == kept[-1] > 0.0
+    else:
+        assert runs["default"]["rch"] != runs["reuse"]["rch"]
+        assert runs["default"]["hds"] != runs["reuse"]["hds"]
+
+
+# -------------------------------------- NRCHOP=2 without CONC and RTS
+_FLOW_S_RECH = "CONSTANT 1.0E-3\n"
+_FLOW_S_IRCH = "INTERNAL 1 (FREE) -1\n 1 2 1\n 2 1 2\n"
+_FLOW_U_RECH = "INTERNAL 1.0 (FREE) -1\n 0.001 0.002 0.003 0.004 0.005\n"
+_FLOW_U_IRCH = "INTERNAL 1 (FREE) -1\n 1 2 3 4 5\n"
+_FLOW_HAND = {
+    "s_load_reuse_rech1": "# RCH\n 2 50\n 1 6\n"
+    + _FLOW_S_RECH
+    + _FLOW_S_IRCH
+    + (" 1 -1\n" + _FLOW_S_RECH) * 2,
+    "s_load_reuse_rech_1": "# RCH\n 2 50\n 1 6\n"
+    + _FLOW_S_RECH
+    + _FLOW_S_IRCH
+    + " -1 -1\n" * 2,
+    "disu_load_reuse_rech1": "# RCH\n 2 50\n 5\n 1 5\n"
+    + _FLOW_U_RECH
+    + _FLOW_U_IRCH
+    + (" 1 -1\n" + _FLOW_U_RECH) * 2,
+    "disu_load_reuse_rech_1": "# RCH\n 2 50\n 5\n 1 5\n"
+    + _FLOW_U_RECH
+    + _FLOW_U_IRCH
+    + " -1 -1\n" * 2,
+}
+_FLOW_EXAMPLES = {
+    "ex_nrchop2": "usg_rch_evt_nrchop2.nam",
+    "ex_nrchop2a": "usg_rch_evt_nrchop2a.nam",
+}
+
+# The RCH files 36b287b9 writes for NRCHOP=2 without CONC and RTS, line by
+# line without the heading line (it carries the FloPy version); written
+# again unchanged by the new default (_flow_case).
+_FLOW_FILES = {
+    "s_new_p1": [
+        "         2        50",
+        "         1         1  # Stress period 1",
+        "CONSTANT    1.000000E-03                          "
+        " #rech_1                        ",
+        "INTERNAL               1     (3I10) -1 #irch_1                        ",
+        "         1         2         1",
+        "         2         1         2",
+        "        -1        -1  # Stress period 2",
+        "        -1        -1  # Stress period 3",
+    ],
+    "s_new_all": [
+        "         2        50",
+        "         1         1  # Stress period 1",
+        "CONSTANT    1.000000E-03                          "
+        " #rech_1                        ",
+        "INTERNAL               1     (3I10) -1 #irch_1                        ",
+        "         1         2         1",
+        "         2         1         2",
+        "        -1         1  # Stress period 2",
+        "INTERNAL               1     (3I10) -1 #irch_2                        ",
+        "         1         2         1",
+        "         2         1         2",
+        "        -1         1  # Stress period 3",
+        "INTERNAL               1     (3I10) -1 #irch_3                        ",
+        "         1         2         1",
+        "         2         1         2",
+    ],
+    "disu_new_p1": [
+        "         2        50",
+        "         5",
+        "         1         5  # Stress period 1",
+        "INTERNAL               1   (5E15.6) -1 #rech_1                        ",
+        "   1.000000E-03   2.000000E-03   3.000000E-03   4.000000E-03   5.000000E-03",
+        "INTERNAL               1     (5I10) -1 #irch_1                        ",
+        "         1         2         3         4         5",
+        "        -1        -1  # Stress period 2",
+        "        -1        -1  # Stress period 3",
+    ],
+    "disu_new_all": [
+        "         2        50",
+        "         5",
+        "         1         5  # Stress period 1",
+        "INTERNAL               1   (5E15.6) -1 #rech_1                        ",
+        "   1.000000E-03   2.000000E-03   3.000000E-03   4.000000E-03   5.000000E-03",
+        "INTERNAL               1     (5I10) -1 #irch_1                        ",
+        "         1         2         3         4         5",
+        "        -1         5  # Stress period 2",
+        "INTERNAL               1     (5I10) -1 #irch_2                        ",
+        "         1         2         3         4         5",
+        "        -1         5  # Stress period 3",
+        "INTERNAL               1     (5I10) -1 #irch_3                        ",
+        "         1         2         3         4         5",
+    ],
+    "s_load_reuse_rech1": [
+        "         2        50",
+        "         1         6  # Stress period 1",
+        "CONSTANT    1.000000E-03                          "
+        " #rech_1                        ",
+        "INTERNAL               1     (3I10) -1 #irch_1                        ",
+        "         1         2         1",
+        "         2         1         2",
+        "         1        -1  # Stress period 2",
+        "CONSTANT    1.000000E-03                          "
+        " #rech_2                        ",
+        "         1        -1  # Stress period 3",
+        "CONSTANT    1.000000E-03                          "
+        " #rech_3                        ",
+    ],
+    "disu_load_reuse_rech1": [
+        "         2        50",
+        "         5",
+        "         1         5  # Stress period 1",
+        "INTERNAL               1     (FREE) -1 #rech_1                        ",
+        "   1.000000E-03   2.000000E-03   3.000000E-03   4.000000E-03   5.000000E-03",
+        "INTERNAL               1     (5I10) -1 #irch_1                        ",
+        "         1         2         3         4         5",
+        "         1        -1  # Stress period 2",
+        "INTERNAL               1     (FREE) -1 #rech_2                        ",
+        "   1.000000E-03   2.000000E-03   3.000000E-03   4.000000E-03   5.000000E-03",
+        "         1        -1  # Stress period 3",
+        "INTERNAL               1     (FREE) -1 #rech_3                        ",
+        "   1.000000E-03   2.000000E-03   3.000000E-03   4.000000E-03   5.000000E-03",
+    ],
+    "ex_nrchop2": [
+        "         2        50",
+        "         9",
+        "         1         9  # Stress period 1",
+        "CONSTANT    1.000000E-04                          "
+        " #rech_1                        ",
+        "INTERNAL               1     (9I10) -1 #irch_1                        ",
+        "         1         2         3         4         5"
+        "         6        16        17        18",
+        "         1        -1  # Stress period 2",
+        "CONSTANT    1.000000E-04                          "
+        " #rech_2                        ",
+    ],
+    "ex_nrchop2a": [
+        "         2        50",
+        "         6",
+        "         1         6  # Stress period 1",
+        "CONSTANT    1.000000E-04                          "
+        " #rech_1                        ",
+        "INTERNAL               1     (6I10) -1 #irch_1                        ",
+        "         1         2         3         4         5         6",
+        "         1        -1  # Stress period 2",
+        "CONSTANT    1.000000E-04                          "
+        " #rech_2                        ",
+    ],
+}
+_FLOW_FILES["s_load_reuse_rech_1"] = _FLOW_FILES["s_load_reuse_rech1"]
+_FLOW_FILES["disu_load_reuse_rech_1"] = _FLOW_FILES["disu_load_reuse_rech1"]
+
+
+def _flow_model(ws, structured, mcomp=0):
+    """3 periods: structured 2 layers of 2 x 3, or DISU 5 nodes."""
+    if structured:
+        return _dis(ws, nper=3, mcomp=mcomp, nlay=2)
+    return _ml(ws, nper=3, mcomp=mcomp)
+
+
+def _flow_case(ws, case, example_data_path):
+    """MfUsgRch of a _FLOW_FILES case, NRCHOP=2 without CONC and RTS: new
+    models with irch for period 1 only (*_p1) or for every period (*_all),
+    the _FLOW_HAND files loaded and the upstream example files loaded."""
+    if case in _FLOW_EXAMPLES:
+        ws_ex = example_data_path / "mfusg_test" / "rch_evt_tests"
+        ml = MfUsg.load(
+            _FLOW_EXAMPLES[case],
+            model_ws=str(ws_ex),
+            load_only=["DISU", "RCH"],
+            check=False,
+        )
+        return ml.rch
+    ml = _flow_model(ws, case.startswith("s_"))
+    if case in _FLOW_HAND:
+        return _load(ws, _FLOW_HAND[case], ml)
+    if case.startswith("s_"):
+        irch0, rech = np.array([[0, 1, 0], [1, 0, 1]]), 1.0e-3
+    else:
+        irch0 = np.array([[0, 1, 2, 3, 4]])
+        rech = np.array([_R5])
+    irch = dict.fromkeys(range(3), irch0) if case.endswith("_all") else {0: irch0}
+    return MfUsgRch(ml, nrchop=2, ipakcb=50, rech=rech, irch=irch)
+
+
+@pytest.mark.parametrize("case", list(_FLOW_FILES))
+def test_rch_flow_only_file_unchanged(function_tmpdir, example_data_path, case):
+    """NRCHOP=2 without CONC and RTS: the written file is the one 36b287b9
+    writes (_FLOW_FILES), line by line; the comparison leaves out the lines
+    that start with "#" (the heading carries the FloPy version). New models
+    with irch for period 1 only or for every period, files that reuse IRCH
+    (RECH read or reused) loaded, and the two upstream example files."""
+    rch = _flow_case(function_tmpdir, case, example_data_path)
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    assert out.endswith("\n")
+    assert [ln for ln in out.splitlines() if not ln.startswith("#")] == (
+        _FLOW_FILES[case]
+    )
+
+
+@pytest.mark.parametrize("structured", [True, False])
+def test_rch_flow_file_reuse_kept_with_conc_added(function_tmpdir, structured):
+    """A loaded flow-only file keeps its INIRCH (on DISU the reuse marker),
+    so a package rebuilt from it with CONC keeps the reuse read, with the
+    warning, instead of writing the current IRCH."""
+    ml = _flow_model(function_tmpdir, structured, mcomp=1)
+    grid = "s" if structured else "disu"
+    rch = _load(function_tmpdir, _FLOW_HAND[f"{grid}_load_reuse_rech1"], ml)
+    assert rch.inirch == ({0: 6, 1: -1, 2: -1} if structured else {1: -1, 2: -1})
+    ml.remove_package("RCH")
+    conc = MfUsgRch(
+        ml,
+        nrchop=2,
+        ipakcb=50,
+        rech={k: u2d.array for k, u2d in rch.rech.transient_2ds.items()},
+        irch={k: u2d.array for k, u2d in rch.irch.transient_2ds.items()},
+        inirch=rch.inirch,
+        iconc=1,
+        rchconc=1.0,
+    )
+    out, msgs = _write_warns(conc, function_tmpdir)
+    assert _inirch_of(out) == ["6" if structured else "5", "-1", "-1"]
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], "conc", "2 (INIRCH -1), 3 (INIRCH -1)")

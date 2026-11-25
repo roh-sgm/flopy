@@ -32,9 +32,11 @@ upstream flopy. They live here while testing continues.
   with data.
 - The CONC option needs the component counts of a BCT package, or counts set by
   hand on a model without BCT; they are checked again before writing.
-- Unstructured grids, NRCHOP=2: a period without `irch` data writes INIRCH -1 and
-  no array (it wrote the node count without the array, which USG-T cannot read);
-  load keeps the reuse. Period 1 must read IRCH.
+- Unstructured grids, NRCHOP=2: without CONC and RTS a period without `irch` data
+  writes INIRCH -1 and no array (it wrote the node count without the array, which
+  USG-T cannot read). Load keeps the INIRCH < 0 read as `inirch`, which on DISU only
+  takes values < 0 (the count comes from the `irch` array). Period 1 must read
+  IRCH.
 - Keywords (CONC, SEEPELEV, RTS, INCONC, INSELEV, INRCHZONES) are read as whole
   words in any case, as URWORD reads them.
 - Structured grids, NRCHOP=2: USG-T uses INIRCH as the number of recharge cells in
@@ -43,16 +45,21 @@ upstream flopy. They live here while testing continues.
   INIRCH = 1 only the first cell gets the recharge concentration or the RTS
   record: the other cells take recharge without mass, and nothing in the output
   shows it. `MfUsgRch` keeps the INIRCH read in each period (`inirch`); with CONC
-  or RTS a new model writes NROW*NCOL, a lower value read from a file is kept and
+  or RTS a new model writes NROW*NCOL (also in the periods without `irch` data,
+  below), a lower value read from a file is kept and
   `write_file` warns with the consequence, and `inirch_ncpl=True` writes NROW*NCOL
   in every period that reads IRCH. Without CONC and RTS nothing changes.
-- NRCHOP=2 with CONC or RTS, structured or unstructured: a period that reuses
-  IRCH keeps its INIRCH < 0 as read or given, and `write_file` warns with the
-  consequence (with CONC no recharge mass in that period, `gwt2bndsu1.f` :3508;
-  with RTS the RTS records read after the start of the period are not applied,
-  `glo2basu1.f` :3342, :3353); `inirch_ncpl=True` writes the current IRCH there
-  with its full count (NROW*NCOL, or its nodes on DISU). Backed by runs with both
-  engines.
+- NRCHOP=2 with CONC or RTS, structured or unstructured: a period without `irch`
+  data writes the current IRCH again with its full count (NROW*NCOL, or its nodes
+  on DISU), the file of the same model with `irch` for every period; it was a
+  reuse, so with CONC no recharge mass was added in those periods. The IRCH is an
+  INTERNAL array in each of those periods, so the file grows with the number of
+  periods. A period that reuses IRCH, read from a file or given as `inirch` < 0,
+  keeps it and `write_file` warns with the consequence (with CONC no recharge mass
+  in that period, `gwt2bndsu1.f` :3508; with RTS the RTS records read after the
+  start of the period are not applied, `glo2basu1.f` :3342, :3353);
+  `inirch_ncpl=True` writes the current IRCH there. Without CONC and RTS the
+  written file does not change. Backed by runs with both engines.
 - Not written, with the equivalent input in the message (`NotImplementedError`,
   each backed by a run with both engines): RTS with an IRCH node above the number
   of IRCH nodes (unstructured) or below layer 1 (structured), whose zone USG-T

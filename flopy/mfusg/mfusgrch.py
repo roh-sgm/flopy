@@ -274,20 +274,24 @@ def _irch_reuse_warning(reuse, conc, rts):
         f"{periods}: "
         + " ".join(why)
         + " Set inirch_ncpl=True to write the current IRCH in those periods, "
-        "or give irch for every stress period."
+        "or remove the negative inirch of those periods."
     )
 
 
-def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_ncpl):
+def _disu_irch_plan(
+    model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_ncpl, values
+):
     """[INIRCH, IRCH file entry] of every stress period for DISU NRCHOP=2,
     and the [kper, INIRCH] of the periods that reuse IRCH with CONC or RTS.
 
     USG-T RP: INIRCH >= 0 is the number of IRCH nodes and reads IRCH; < 0
     reuses IRCH and its node count (gwf2rch8u1.f :272, :338-342), which also
-    sizes RECH and the concentrations of the period (:318, :482). A period
-    without irch data reuses IRCH; with CONC or RTS and inirch_ncpl it
-    writes the current IRCH with its node count instead. Period 1 must read
-    IRCH."""
+    sizes RECH and the concentrations of the period (:318, :482). values
+    holds the INIRCH < 0 read or given (inirch). A period without irch data
+    writes, with CONC or RTS, the current IRCH with its node count, unless
+    values has a value for it and inirch_ncpl is off (a reuse); without
+    CONC and RTS it reuses IRCH (the value, or -1). A value in a period
+    with irch data raises ValueError. Period 1 must read IRCH."""
     plan = []
     reuse = []
     nirch = None
@@ -295,6 +299,11 @@ def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_n
         u2d = irch.transient_2ds.get(kper)
         changed = False
         if u2d is not None:
+            if kper in values:
+                raise ValueError(
+                    f"irch is given for stress period {kper + 1} but INIRCH "
+                    f"{values[kper]} does not read it"
+                )
             changed = nirch is not None and u2d.array.size != nirch
             nirch = u2d.array.size
             # RTS takes the zone of node IRCH(NN) from IZNRCH, read only in
@@ -315,12 +324,13 @@ def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_n
                 "irch has no data for stress period 1: USG-T reads IRCH in "
                 "period 1 (NRCHOP=2)"
             )
-        elif (flags is not None or mxrtzones) and inirch_ncpl:
+        elif (flags is not None or mxrtzones) and (inirch_ncpl or kper not in values):
             plan.append([nirch, entry])
         else:
+            n = values.get(kper, -1)
             if flags is not None or mxrtzones:
-                reuse.append([kper, -1])
-            plan.append([-1, ""])
+                reuse.append([kper, n])
+            plan.append([n, ""])
         inrech = rech.get_kper_entry(kper)[0]
         if inrech >= 0 and rech[kper].array.size != nirch:
             raise ValueError(
@@ -345,16 +355,22 @@ def _disu_irch_plan(model, rech, irch, rchconc, flags, nper, mxrtzones, inirch_n
 
 
 def _inirch_options(model, nrchop, nper, inirch, inirch_ncpl):
-    """Check inirch (structured grid with NRCHOP=2 only) and inirch_ncpl
-    (NRCHOP=2 only) and return the INIRCH values as {kper: int}."""
+    """Check inirch (NRCHOP=2 only; values < 0 only on an unstructured grid,
+    where INIRCH is the size of the irch array) and inirch_ncpl (NRCHOP=2
+    only) and return the INIRCH values as {kper: int}."""
     if inirch_ncpl not in (False, True):
         raise ValueError(f"inirch_ncpl = {inirch_ncpl!r} must be True or False")
     values = _period_flags(inirch, nper, "inirch")
-    if inirch is not None and not (model.structured and nrchop == 2):
-        raise ValueError(
-            "inirch needs nrchop=2 on a structured grid (DISU writes the "
-            "number of irch nodes)"
-        )
+    if inirch is not None and nrchop != 2:
+        raise ValueError("inirch needs nrchop=2 (structured grid or DISU)")
+    if not model.structured:
+        given = {k: n for k, n in values.items() if n >= 0}
+        if given:
+            raise ValueError(
+                f"inirch {given} on an unstructured grid: INIRCH is the size "
+                "of the irch array of the period; inirch only takes values < 0 "
+                "(reuse irch)"
+            )
     if inirch_ncpl and nrchop != 2:
         raise ValueError("inirch_ncpl needs nrchop=2 (structured grid or DISU)")
     return values
@@ -374,9 +390,10 @@ def _structured_inirch(irch, values, nper, ncpl, conc, inirch_ncpl, mxrtzones):
     the first INIRCH cells only (glo2basu1.f ATS1AJ :3342, :3353), none for
     INIRCH < 0. A period with irch data writes NROW*NCOL with inirch_ncpl,
     else the INIRCH read (values), else NROW*NCOL with CONC or RTS and 1
-    without; a period without data writes the INIRCH read or -1, or, with
-    CONC or RTS and inirch_ncpl, the current irch with NROW*NCOL; period 1
-    must read IRCH."""
+    without; a period without data writes, with CONC or RTS, the current
+    irch with NROW*NCOL when it has no INIRCH value or with inirch_ncpl,
+    else the INIRCH read or given (< 0, a reuse), or -1 without a value;
+    period 1 must read IRCH."""
     full = conc or bool(mxrtzones)
     plan = []
     low = []
@@ -424,11 +441,12 @@ def _structured_inirch(irch, values, nper, ncpl, conc, inirch_ncpl, mxrtzones):
                 raise ValueError(
                     f"INIRCH {n} in stress period {kper + 1} needs irch data"
                 )
-            n = -1 if n is None else n
-            if full and inirch_ncpl:
+            if full and (inirch_ncpl or n is None):
                 n = ncpl
-            elif full:
-                reuse.append([kper, n])
+            else:
+                n = -1 if n is None else n
+                if full:
+                    reuse.append([kper, n])
         plan.append([n, src])
     return plan, low, reuse
 
@@ -489,13 +507,14 @@ class MfUsgRch(ModflowRch):
         written (NotImplementedError: that zone is never read). On a
         structured grid IZNRCH has NROW*NCOL positions, so with nrchop=2 an
         irch layer above 1 is not written (NotImplementedError: USG-T adds no
-        RTS recharge to that cell). With nrchop=2, a period that reuses irch
-        is written as a reuse with a warning (USG-T applies none of the RTS
-        records read after the start of that period, glo2basu1.f :3342,
-        :3353); inirch_ncpl=True writes the current irch there instead. A
-        loaded file that also reuses RECH (INRECH < 0) in that period does
-        not keep its result when written again (see inirch). See inirch for
-        a structured grid.
+        RTS recharge to that cell). With nrchop=2, a period without irch
+        data writes the current irch again with its full count; a period
+        with a negative inirch (read or given) is written as a reuse with a
+        warning (USG-T applies none of the RTS records read after the start
+        of that period, glo2basu1.f :3342, :3353), and inirch_ncpl=True
+        writes the current irch there instead. A loaded file that also
+        reuses RECH (INRECH < 0) in that period does not keep its result
+        when written again (see inirch).
     iconc : int
         1 writes the CONC option: recharge concentrations of the components
         selected by irchconc (needs the component counts of a BCT package, or
@@ -513,43 +532,59 @@ class MfUsgRch(ModflowRch):
         IRCHCONC, one value 0 or 1 per component (MCOMPT); only with iconc=1.
         Default is 1 for every component.
     inirch : dict {kper: int} or one int per stress period, optional
-        INIRCH of each stress period, structured grid with nrchop=2 only
-        (load keeps the values read): >= 0 reads irch of the period, < 0
-        reuses it. Periods without a value write NROW*NCOL with iconc=1 or
-        RTS (mxrtzones > 0) and 1 otherwise when irch has an array for the
-        period, and -1 otherwise. Without CONC and RTS the USG-T result does
-        not depend on the value. With CONC, transport applies the recharge
-        concentration only to the first INIRCH cells (gwt2bndsu1.f :3521);
-        with RTS, the RTS records read during a period update the recharge
-        of the first INIRCH cells only (glo2basu1.f :3342, :3353), so the
-        flow depends on INIRCH. With CONC or RTS a value below NROW*NCOL
-        gives a warning at write time, and so does a period that reuses IRCH,
-        which is written as a reuse (USG-T adds no recharge mass in it with
-        CONC, :3508, and applies no RTS record read during it with RTS);
-        inirch_ncpl=True writes the current irch with NROW*NCOL there.
-        Period 1 must read irch: without irch data for period 1 (also a
-        loaded file with INIRCH < 0 in period 1) write_file raises
-        ValueError. A loaded file with RTS and a stress period that reuses
-        RECH (INRECH < 0) with an INIRCH below NROW*NCOL, or that reuses
-        IRCH (INIRCH < 0, also on an unstructured grid), does not keep its
-        result when written again: like upstream FloPy, load keeps RECH as
-        data of every period and write_file reads it again in each one
-        (INRECH 1), so USG-T applies the current RTS record to every IRCH
-        cell at the start of that period (gwf2rch8u1.f :429-442) and resets
-        the recharge of the cells the RTS records did not update; the
-        warnings say so (default is None).
+        INIRCH of each stress period, nrchop=2 only: >= 0 reads irch of the
+        period, < 0 reuses it. Load keeps the values read: every period on a
+        structured grid, the values < 0 (reuse) on an unstructured grid, so
+        a loaded flow-only file keeps its reuse when CONC or RTS is added
+        later (with the warning below). On an unstructured grid INIRCH is
+        the size of the irch array, so inirch only takes values < 0 (a value
+        >= 0, also 0, raises ValueError); give it as a dict, as the list
+        form needs a value for period 1, which reads irch. On a structured
+        grid a period with irch data and without a value writes NROW*NCOL
+        with iconc=1 or RTS (mxrtzones > 0) and 1 otherwise. A period
+        without irch data and without a value writes, with CONC or RTS, the
+        current irch again with its full count (NROW*NCOL, or its node count
+        on an unstructured grid), and -1 (a reuse) without them. Without
+        CONC and RTS the USG-T result does not depend on the value. With
+        CONC, transport applies the recharge concentration only to the first
+        INIRCH cells (gwt2bndsu1.f :3521) and to none for INIRCH <= 0
+        (:3508); with RTS, the RTS records read during a period update the
+        recharge of the first INIRCH cells only (glo2basu1.f :3342, :3353),
+        none for INIRCH < 0, so the flow depends on INIRCH. With CONC or RTS
+        a value below NROW*NCOL gives a warning at write time, and so does a
+        negative value (a reuse: USG-T adds no recharge mass in that period
+        with CONC and applies no RTS record read during it with RTS);
+        inirch_ncpl=True writes the current irch with its full count there,
+        and so does inirch=None on a loaded package (on a structured grid
+        it also drops the low INIRCH values read). With CONC or RTS the
+        current irch is written as an INTERNAL array in every period without
+        irch data, so the file grows with the number of stress periods; a
+        negative inirch for those periods writes a reuse instead, with the
+        consequences above. A negative value in a period with irch data, or
+        in period 1, raises ValueError at write time, and so does a period 1
+        without irch data (also a loaded file with INIRCH < 0 in period 1).
+        A loaded file with RTS and a stress period that reuses RECH (INRECH
+        < 0) with an INIRCH below NROW*NCOL, or that reuses IRCH (INIRCH <
+        0, also on an unstructured grid), does not keep its result when
+        written again: like upstream FloPy, load keeps RECH as data of every
+        period and write_file reads it again in each one (INRECH 1), so
+        USG-T applies the current RTS record to every IRCH cell at the start
+        of that period (gwf2rch8u1.f :429-442) and resets the recharge of
+        the cells the RTS records did not update; the warnings say so
+        (default is None).
     inirch_ncpl : bool
         nrchop=2 only. On a structured grid, True writes INIRCH = NROW*NCOL
-        in every stress period that reads irch, whatever inirch holds, and,
-        with CONC or RTS, in every period that reuses irch, with the current
-        irch written again. On an unstructured grid, True writes the current
-        irch with its node count in every period that reuses irch with CONC
-        or RTS. It exists to correct a file whose INIRCH would apply the
-        recharge concentration or the RTS records to part of the cells, or
-        to none in a period that reuses irch; it can be set on a loaded
-        package before write_file (default is False: write inirch and the
-        reuse). With RTS, a loaded file that reused RECH in those periods
-        still does not keep its result (see inirch).
+        in every stress period that reads irch, whatever inirch holds. With
+        CONC or RTS, True also writes the current irch with its full count
+        (NROW*NCOL, or its node count on an unstructured grid) in every
+        period with a negative inirch (read or given); a period without irch
+        data and without a value already does so. It exists to correct a
+        file whose INIRCH would apply the recharge concentration or the RTS
+        records to part of the cells, or to none in a period that reuses
+        irch; it can be set on a loaded package before write_file (default
+        is False: write inirch and the reuse). With RTS, a loaded file that
+        reused RECH in those periods still does not keep its result (see
+        inirch).
 
     Attributes
     ----------
@@ -692,6 +727,9 @@ class MfUsgRch(ModflowRch):
                     f"{mcompt} after this package was built"
                 )
         flags = _conc_flags(self.iconc, mcompt, self.irchconc, self.rchconc)
+        values = _inirch_options(
+            self.parent, self.nrchop, nper, self.inirch, self.inirch_ncpl
+        )
         irch_plan = None
         reuse = []
         if self.nrchop == 2 and not self.parent.structured:
@@ -704,10 +742,8 @@ class MfUsgRch(ModflowRch):
                 nper,
                 self.mxrtzones,
                 self.inirch_ncpl,
+                values,
             )
-        values = _inirch_options(
-            self.parent, self.nrchop, nper, self.inirch, self.inirch_ncpl
-        )
         inirch_plan = None
         if self.nrchop == 2 and self.parent.structured:
             inirch_plan, low, reuse = _structured_inirch(
@@ -966,7 +1002,7 @@ class MfUsgRch(ModflowRch):
         if nrchop == 2:
             irch = {}
         current_irch = []
-        # structured NRCHOP=2: the INIRCH read in every period
+        # NRCHOP=2: the INIRCH read in every period
         inirch_read = {}
 
         # arrays only of the periods that read them (flag > 0); flags as read,
@@ -1105,6 +1141,13 @@ class MfUsgRch(ModflowRch):
         unitnumber, filenames = get_unitnumber_from_ext_unit_dict(
             model, cls, ext_unit_dict, ipakcb
         )
+        # inirch: every period on a structured grid; on DISU only the reuse
+        # (INIRCH < 0), the other counts come from the irch arrays
+        inirch_kept = None
+        if nrchop == 2 and model.structured:
+            inirch_kept = inirch_read
+        elif nrchop == 2:
+            inirch_kept = {k: n for k, n in inirch_read.items() if n < 0} or None
 
         # create recharge package instance
         rch = cls(
@@ -1125,7 +1168,7 @@ class MfUsgRch(ModflowRch):
             inselev=inselev if seepelev else None,
             iniznrch=iniznrch if mxrtzones else None,
             irchconc=irchconc,
-            inirch=inirch_read if model.structured and nrchop == 2 else None,
+            inirch=inirch_kept,
         )
         if check:
             rch.check(
