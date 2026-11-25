@@ -2082,3 +2082,185 @@ def test_rch_flow_file_reuse_kept_with_conc_added(function_tmpdir, structured):
     assert _inirch_of(out) == ["6" if structured else "5", "-1", "-1"]
     assert len(msgs) == 1
     _check_reuse_warning(msgs[0], "conc", "2 (INIRCH -1), 3 (INIRCH -1)")
+
+
+# ----------------------------------------- inirch for some periods only
+@pytest.mark.parametrize("which", ["p2", "p3"])
+@pytest.mark.parametrize("case", _REUSE_CASES)
+def test_rch_irch_reuse_partial_inirch(function_tmpdir, case, which):
+    """New model with CONC or RTS, irch for period 1 only and inirch for one
+    of the two later periods: that period reuses IRCH, with a warning that
+    names it alone, and the other one writes the current IRCH with its full
+    count (structured and DISU)."""
+    inirch = {1: -1} if which == "p2" else {2: -2}
+    rch = _reuse_api(function_tmpdir, case, irch_all=False, inirch=inirch)
+    out, msgs = _write_warns(rch, function_tmpdir)
+    n = "6" if case.startswith("s_") else "5"
+    ((kper, value),) = inirch.items()
+    expected = [n, n, n]
+    expected[kper] = str(value)
+    assert _inirch_of(out) == expected
+    assert len(msgs) == 1
+    _check_reuse_warning(msgs[0], case, f"{kper + 1} (INIRCH {value})")
+
+
+def _partial_model(ws, grid):
+    """Engine model of 3 periods with CONC: structured 1 x 5 or DISU 5
+    nodes, one layer."""
+    if grid == "s":
+        return _dis_exe_model(ws, nper=3)
+    return _exe_model(ws, nper=3, mcomp=1)
+
+
+def _partial_hand(grid, p2, p3):
+    """Hand file of the _partial_model: IRCH of the 5 cells, RECH 1e-3 and
+    concentration 1 read in period 1; periods 2 and 3 read IRCH again
+    ("full") or reuse it ("reuse"), with RECH reused."""
+    rech, conc = _blk([1.0e-3] * 5), _blk([1.0] * 5)
+    if grid == "s":
+        head = "# RCH\n 2 50 CONC\n 1\n 1 5 INCONC\n" + rech + "CONSTANT 1\n"
+        full = " -1 5\nCONSTANT 1\n"
+    else:
+        head = "# RCH\n 2 50 CONC\n 5\n 1\n 1 5 INCONC\n" + rech + _IRCH5
+        full = " -1 5\n" + _IRCH5
+    records = {"full": full, "reuse": " -1 -1\n"}
+    return head + conc + records[p2] + records[p3]
+
+
+@requires_usgt
+@pytest.mark.parametrize("which", ["p2", "p3"])
+@pytest.mark.parametrize("grid", ["s", "disu"])
+def test_usgt_exe_rch_irch_reuse_partial_inirch(function_tmpdir, grid, which):
+    """With the engine: the new CONC model with inirch for period 2 only
+    (or period 3 only) runs like the hand file that reuses IRCH in that
+    period and reads it in the other one; its recharge mass lies between
+    the one of the file that reads IRCH in every period and the one of the
+    file that reuses it in periods 2 and 3."""
+    inirch = {1: -1} if which == "p2" else {2: -2}
+    ws = function_tmpdir / "flopy"
+    rch = MfUsgRch(
+        _partial_model(ws, grid),
+        nrchop=2,
+        ipakcb=50,
+        rech=1.0e-3 if grid == "s" else np.full((1, 5), 1.0e-3),
+        irch={0: 0 if grid == "s" else np.array([[0, 1, 2, 3, 4]])},
+        iconc=1,
+        rchconc=1.0,
+        inirch=inirch,
+    )
+    _, msgs = _write_warns(rch, ws, "t.rch")
+    assert len(msgs) == 1
+    runs = {"flopy": _exe_run(ws)}
+    hand = ("reuse", "full") if which == "p2" else ("full", "reuse")
+    for name, (p2, p3) in (
+        ("hand", hand),
+        ("full", ("full", "full")),
+        ("reuse", ("reuse", "reuse")),
+    ):
+        ws = function_tmpdir / name
+        _partial_model(ws, grid)
+        (ws / "t.rch").write_text(_partial_hand(grid, p2, p3))
+        runs[name] = _exe_run(ws)
+    assert runs["flopy"] == runs["hand"]
+    # cumulative RCH mass in at the end (IN and OUT lines alternate)
+    mass = {k: float(r["rch_mass"][0::2][-1]) for k, r in runs.items()}
+    assert mass["full"] > mass["hand"] > mass["reuse"] > 0.0
+
+
+# --------------------- DISU IRCH that changes its size, then a reuse
+_CHG_HEAD = (
+    "# RCH\n 2 50 CONC\n 5\n 1\n 1 5 INCONC\n"
+    + _blk(_R5)
+    + _IRCH5
+    + _blk(_C5)
+    + " 1 3 INCONC\n"
+    + _blk([2.0e-3, 3.0e-3, 4.0e-3])
+    + _iblk([6, 7, 8])
+    + "CONSTANT 2.0\n"
+)
+# period 3 reuses IRCH, or reads the IRCH of period 2 (nodes 6-8) again
+_CHG_REUSE = _CHG_HEAD + " -1 -1\n"
+_CHG_P3 = _CHG_HEAD + " -1 3\n" + _iblk([6, 7, 8])
+
+
+@pytest.mark.parametrize("how", ["inirch_none", "inirch_ncpl"])
+def test_rch_disu_irch_size_change_then_reuse(function_tmpdir, how):
+    """DISU with CONC, loaded file with IRCH of 5 nodes in period 1, 3
+    nodes (layer 2) in period 2 and a reuse in period 3: with inirch=None
+    (or inirch_ncpl=True) period 3 writes the 3 nodes of period 2, not the
+    5 of period 1."""
+    ml = _ml(function_tmpdir, nper=3, mcomp=1, nlay=2)
+    rch = _load(function_tmpdir, _CHG_REUSE, ml)
+    assert rch.inirch == {2: -1}
+    if how == "inirch_none":
+        rch.inirch = None
+    else:
+        rch.inirch_ncpl = True
+    out, msgs = _write_warns(rch, function_tmpdir)
+    assert msgs == []
+    assert _inirch_of(out) == ["5", "3", "3"]
+    again = _reload(function_tmpdir / "out.rch", ml)
+    nodes = {
+        k: u2d.array.ravel().tolist() for k, u2d in again.irch.transient_2ds.items()
+    }
+    assert nodes == {0: [0, 1, 2, 3, 4], 1: [5, 6, 7], 2: [5, 6, 7]}
+
+
+@requires_usgt
+def test_usgt_exe_rch_disu_irch_size_change_then_reuse(function_tmpdir):
+    """With the engine: the loaded file of test_rch_disu_irch_size_change_
+    then_reuse written with inirch=None runs like the hand file that reads
+    the IRCH of period 2 in period 3, which differs in recharge mass from
+    the reuse."""
+    runs = {}
+    for name, text in (("hand_p3", _CHG_P3), ("hand_reuse", _CHG_REUSE)):
+        ws = function_tmpdir / name
+        _exe_model(ws, nper=3, mcomp=1, nlay=2)
+        (ws / "t.rch").write_text(text)
+        runs[name] = _exe_run(ws)
+    assert runs["hand_p3"]["rch_mass"] != runs["hand_reuse"]["rch_mass"]
+    ws = function_tmpdir / "flopy"
+    rch = _load(ws, _CHG_REUSE, _exe_model(ws, nper=3, mcomp=1, nlay=2), "src.rch")
+    rch.inirch = None
+    _, msgs = _write_warns(rch, ws, "t.rch")
+    assert msgs == []
+    assert _exe_run(ws) == runs["hand_p3"]
+
+
+# ------------------------------------------------ DISU INIRCH below -1
+@pytest.mark.parametrize("conc", [True, False])
+def test_rch_disu_inirch_below_minus1_kept(function_tmpdir, conc):
+    """DISU: an INIRCH below -1 read from a file (-3) or given (inirch={1:
+    -3}) is written as -3, not -1, with and without CONC; with CONC the
+    warning names INIRCH -3."""
+    ws = function_tmpdir / "read"
+    if conc:
+        ml = _reuse_model(ws, "disu_conc")
+        text = _reuse_text("disu_conc", True)[0]
+        assert text.count(" 1 -1\n") == 1
+        expected = ["5", "-3"]
+    else:
+        ml = _flow_model(ws, False)
+        text = _FLOW_HAND["disu_load_reuse_rech1"]
+        assert text.count(" 1 -1\n") == 2
+        expected = ["5", "-3", "-3"]
+    rch = _load(ws, text.replace(" 1 -1\n", " 1 -3\n"), ml)
+    out, msgs = _write_warns(rch, ws)
+    assert _inirch_of(out) == expected
+    assert _reload(ws / "out.rch", ml).inirch == rch.inirch
+    if conc:
+        assert len(msgs) == 1
+        _check_reuse_warning(msgs[0], "disu_conc", "2 (INIRCH -3)")
+    else:
+        assert msgs == []
+
+    ws = function_tmpdir / "given"
+    case = "disu_conc" if conc else "disu_flow"
+    rch = _reuse_api(ws, case, irch_all=False, inirch={1: -3})
+    out, msgs = _write_warns(rch, ws)
+    assert _inirch_of(out) == ["5", "-3", "5" if conc else "-1"]
+    if conc:
+        assert len(msgs) == 1
+        _check_reuse_warning(msgs[0], case, "2 (INIRCH -3)")
+    else:
+        assert msgs == []

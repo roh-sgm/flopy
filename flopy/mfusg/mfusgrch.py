@@ -556,7 +556,12 @@ class MfUsgRch(ModflowRch):
         with CONC and applies no RTS record read during it with RTS);
         inirch_ncpl=True writes the current irch with its full count there,
         and so does inirch=None on a loaded package (on a structured grid
-        it also drops the low INIRCH values read). With CONC or RTS the
+        it also drops the low INIRCH values read). Rebuilding a loaded
+        package with MfUsgRch(...) without passing inirch treats it as a new
+        model. A key of inirch at or above the number of stress periods (for
+        example after nper is reduced on a loaded package) raises ValueError
+        at write time; a stress period added later, without irch data and
+        without a value, is written as in a new model. With CONC or RTS the
         current irch is written as an INTERNAL array in every period without
         irch data, so the file grows with the number of stress periods; a
         negative inirch for those periods writes a reuse instead, with the

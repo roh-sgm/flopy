@@ -59,7 +59,8 @@ upstream flopy. They live here while testing continues.
   in that period, `gwt2bndsu1.f` :3508; with RTS the RTS records read after the
   start of the period are not applied, `glo2basu1.f` :3342, :3353);
   `inirch_ncpl=True` writes the current IRCH there. Without CONC and RTS the
-  written file does not change. Backed by runs with both engines.
+  written file does not change, except that a DISU file read with INIRCH < -1
+  keeps that value (it was written as -1). Backed by runs with both engines.
 - Not written, with the equivalent input in the message (`NotImplementedError`,
   each backed by a run with both engines): RTS with an IRCH node above the number
   of IRCH nodes (unstructured) or below layer 1 (structured), whose zone USG-T
